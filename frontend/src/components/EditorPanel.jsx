@@ -177,19 +177,19 @@ function EditorPanel() {
   };
 
   return (
-    <div className="nle-container" style={{display: 'flex', flexDirection: 'column', height: '100%', gap: '1rem'}}>
+    <div className="nle-container">
       
       {/* Top Half: Bin and Player */}
-      <div style={{display: 'flex', height: '50%', gap: '1rem'}}>
+      <div className="nle-top-section">
         {/* Media Bin */}
-        <div style={{flex: 1, backgroundColor: 'rgba(0,0,0,0.3)', borderRadius: '12px', padding: '1rem', overflowY: 'auto'}}>
+        <div className="nle-panel nle-media-bin">
             <h3>Media Bin</h3>
             <button onClick={() => fileInputRef.current.click()} className="submit-btn" style={{marginTop: '1rem'}}>Import Media</button>
             <input type="file" ref={fileInputRef} onChange={handleVideoUpload} style={{display:'none'}} accept="video/*" />
             
-            <div style={{marginTop: '1rem', display: 'flex', flexDirection: 'column', gap: '0.5rem'}}>
+            <div className="nle-media-list">
                 {timeline.map((clip, i) => (
-                    <div key={clip.id} style={{padding: '0.5rem', background: 'rgba(255,255,255,0.1)', borderRadius: '6px', fontSize: '0.9rem'}}>
+                    <div key={clip.id} className="nle-media-item">
                         Clip {i + 1}: {(clip.trimmedEnd - clip.trimmedStart).toFixed(2)}s
                     </div>
                 ))}
@@ -197,30 +197,30 @@ function EditorPanel() {
         </div>
 
         {/* Canvas Player */}
-        <div style={{flex: 2, backgroundColor: '#000', borderRadius: '12px', position: 'relative', display: 'flex', justifyContent: 'center', alignItems: 'center'}}>
+        <div className="nle-panel nle-player">
            {timeline.length > 0 ? (
-               <video ref={videoRef} style={{maxHeight: '100%', maxWidth: '100%'}} />
+               <video ref={videoRef} />
            ) : (
                <p style={{color: '#666'}}>Load media to begin editing</p>
            )}
            
-           <div style={{position: 'absolute', bottom: '10px', left: '50%', transform: 'translateX(-50%)', display: 'flex', gap: '10px'}}>
-                <button onClick={togglePlayback} className="submit-btn" style={{padding: '0.5rem 1rem'}} disabled={timeline.length === 0}>
-                    {isPlaying ? '⏸ Pause' : '▶ Play'}
+           <div className="nle-player-controls">
+                <button onClick={togglePlayback} className="submit-btn nle-control-btn" disabled={timeline.length === 0}>
+                    {isPlaying ? 'Pause' : 'Play'}
                 </button>
-                <button onClick={handleSplit} className="submit-btn" style={{padding: '0.5rem 1rem', backgroundColor: '#e11d48'}} disabled={timeline.length === 0 || isPlaying}>
-                    ✂ Split at Playhead
+                <button onClick={handleSplit} className="submit-btn nle-control-btn split-btn" disabled={timeline.length === 0 || isPlaying}>
+                    Split at Playhead
                 </button>
            </div>
         </div>
       </div>
 
       {/* Bottom Half: Timeline */}
-      <div style={{flex: 1, backgroundColor: '#111827', borderRadius: '12px', padding: '1rem', position: 'relative', overflowX: 'auto'}}>
+      <div className="nle-timeline">
           <h3 style={{marginBottom: '1rem'}}>Timeline ({totalDuration.toFixed(2)}s)</h3>
           
-          <div style={{position: 'relative', height: '100px', backgroundColor: '#1f2937', borderRadius: '6px', display: 'flex'}}>
-             {timeline.length === 0 && <span style={{position:'absolute', left:'50%', top:'50%', transform:'translate(-50%, -50%)', color:'#4b5563'}}>No clips in sequence</span>}
+          <div className="nle-track">
+             {timeline.length === 0 && <span className="nle-empty-track">No clips in sequence</span>}
              
              {/* Render each clip as a block */}
              {timeline.map((clip, i) => {
@@ -230,18 +230,11 @@ function EditorPanel() {
                  const blockColor = `hsl(${(i * 50) % 360}, 70%, 50%)`;
                  
                  return (
-                     <div key={clip.id} style={{
-                         width: `${widthPct}%`, 
-                         height: '100%', 
-                         backgroundColor: blockColor,
-                         borderRight: '2px solid #000',
-                         display: 'flex',
-                         alignItems: 'center',
-                         justifyContent: 'center',
-                         color: '#fff',
-                         fontSize: '0.8rem',
-                         overflow: 'hidden'
-                     }}>
+                     <div
+                        key={clip.id}
+                        className="nle-track-clip"
+                        style={{ width: `${widthPct}%`, backgroundColor: blockColor }}
+                     >
                          Clip {i + 1}
                      </div>
                  )
@@ -250,16 +243,8 @@ function EditorPanel() {
              {/* Playhead Scrubber Line */}
              {timeline.length > 0 && (
                  <div 
-                    style={{
-                        position: 'absolute',
-                        top: 0,
-                        bottom: 0,
-                        width: '2px',
-                        backgroundColor: '#ef4444',
-                        left: `${(playhead / totalDuration) * 100}%`,
-                        zIndex: 10,
-                        cursor: 'ew-resize'
-                    }}
+                    className="nle-playhead"
+                    style={{ left: `${(playhead / totalDuration) * 100}%`, cursor: 'ew-resize' }}
                  >
                     <div style={{
                         position: 'absolute',

@@ -33,18 +33,17 @@ function PreviewPanel({ processing, handleConvert, resultUrl, shortsResults, han
 
         {shortsResults && shortsResults.length > 0 ? (
           <div className="shorts-gallery">
-             <h3 className="success-text" style={{marginBottom: '1rem'}}>Shorts Pack Ready 🎉</h3>
+             <h3 className="success-text shorts-gallery-title">Shorts Pack Ready</h3>
              {shortsResults.map((clip, index) => (
-                <div key={clip.id} className="short-clip-card" style={{ background: 'rgba(0,0,0,0.4)', padding: '1rem', borderRadius: '12px', marginBottom: '1rem' }}>
-                   <h4 style={{margin: '0 0 0.5rem 0', color: '#818cf8'}}>Clip {index + 1}</h4>
-                   <video controls src={clip.url} className="result-video" style={{marginBottom: '0.8rem'}}></video>
-                   <div className="clip-actions" style={{display: 'flex', flexDirection: 'column', gap: '0.5rem'}}>
+                <div key={clip.id} className="short-clip-card">
+                   <h4 className="short-clip-title">Clip {index + 1}</h4>
+                   <video controls src={clip.url} className="result-video short-clip-video"></video>
+                   <div className="clip-actions">
                        <button
                           type="button"
                           onClick={() => executeDownload(clip, index)}
                           disabled={downloadingId === clip.id}
                           className="download-btn"
-                          style={{padding: '0.6rem'}}
                         >
                            {downloadingId === clip.id ? 'Downloading...' : 'Download Clip'}
                        </button>
@@ -52,15 +51,14 @@ function PreviewPanel({ processing, handleConvert, resultUrl, shortsResults, han
                           type="button"
                           onClick={() => executeReformat(clip)} 
                           disabled={reformattingId === clip.id || downloadingId === clip.id}
-                          className="reset-btn" 
-                          style={{padding: '0.6rem', fontSize: '0.9rem'}}
+                          className="reset-btn clip-secondary-btn"
                         >
                            {reformattingId === clip.id ? 'Reformatting...' : `Change to ${clip.formatStrategy === 'crop' ? 'Letterbox' : 'Center Crop'}`}
                        </button>
                    </div>
                 </div>
              ))}
-             <button onClick={handleReset} className="reset-btn" style={{marginTop: '1rem', width: '100%'}}>Start Over</button>
+             <button onClick={handleReset} className="reset-btn gallery-reset-btn">Start Over</button>
           </div>
         ) : resultUrl ? (
           <div className="result-display">

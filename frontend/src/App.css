@@ -4,13 +4,13 @@
 
 body {
   margin: 0;
-  overflow: hidden;
+  overflow-x: hidden;
 }
 
 .dashboard-container {
   display: flex;
-  height: 100vh;
-  width: 100vw;
+  min-height: 100vh;
+  width: 100%;
   background: #0f172a;
   color: #f8fafc;
   position: relative;
@@ -43,6 +43,7 @@ body {
 /* SIDEBAR */
 .sidebar {
   width: 260px;
+  min-width: 260px;
   background: rgba(15, 23, 42, 0.85);
   backdrop-filter: blur(12px);
   border-right: 1px solid rgba(255, 255, 255, 0.05);
@@ -106,6 +107,7 @@ body {
 /* WORKSPACE (Middle) */
 .workspace {
   flex: 1;
+  min-width: 0;
   display: flex;
   flex-direction: column;
   z-index: 10;
@@ -132,6 +134,7 @@ body {
 
 .workspace-content {
   padding: 3rem;
+  min-width: 0;
 }
 
 .panel-grid {
@@ -169,6 +172,8 @@ body {
 .custom-file-upload {
   display: flex;
   align-items: center;
+  flex-wrap: wrap;
+  gap: 0.75rem;
   overflow: hidden;
 }
 
@@ -179,10 +184,10 @@ body {
   border-radius: 8px;
   color: white;
   cursor: pointer;
-  margin-right: 1rem;
   transition: background 0.2s ease;
   font-family: inherit;
   font-weight: 500;
+  flex-shrink: 0;
 }
 
 .choose-file-btn:hover {
@@ -195,6 +200,13 @@ body {
   white-space: nowrap;
   overflow: hidden;
   text-overflow: ellipsis;
+  min-width: 0;
+  flex: 1 1 220px;
+}
+
+.file-meta-info {
+  margin-top: 0.75rem;
+  color: #94a3b8;
 }
 
 .info-box {
@@ -210,6 +222,7 @@ body {
 /* PREVIEW SIDEBAR (Right) */
 .preview-sidebar {
   width: 380px;
+  min-width: 320px;
   background: rgba(15, 23, 42, 0.85);
   backdrop-filter: blur(12px);
   border-left: 1px solid rgba(255, 255, 255, 0.05);
@@ -297,6 +310,46 @@ body {
   gap: 1rem;
 }
 
+.shorts-gallery {
+  display: flex;
+  flex-direction: column;
+  gap: 1rem;
+}
+
+.shorts-gallery-title {
+  margin: 0 0 0.25rem;
+}
+
+.short-clip-card {
+  background: rgba(0, 0, 0, 0.4);
+  padding: 1rem;
+  border-radius: 12px;
+}
+
+.short-clip-title {
+  margin: 0 0 0.5rem;
+  color: #818cf8;
+}
+
+.short-clip-video {
+  margin-bottom: 0.8rem;
+}
+
+.clip-actions {
+  display: flex;
+  flex-direction: column;
+  gap: 0.5rem;
+}
+
+.clip-secondary-btn {
+  font-size: 0.9rem;
+}
+
+.gallery-reset-btn {
+  margin-top: 0.25rem;
+  width: 100%;
+}
+
 .success-text {
   margin: 0;
   color: #a7f3d0;
@@ -365,6 +418,7 @@ body {
   gap: 1rem;
   animation: slideDown 0.4s cubic-bezier(0.16, 1, 0.3, 1);
   border: 1px solid rgba(255, 100, 100, 0.3);
+  width: min(92vw, 640px);
 }
 
 .close-popup {
@@ -416,6 +470,129 @@ body {
   overflow: hidden;
 }
 
+.nle-container {
+  display: flex;
+  flex-direction: column;
+  height: 100%;
+  gap: 1rem;
+  min-height: 0;
+}
+
+.nle-top-section {
+  display: flex;
+  height: 50%;
+  gap: 1rem;
+  min-height: 0;
+}
+
+.nle-panel {
+  background-color: rgba(0, 0, 0, 0.3);
+  border-radius: 12px;
+  padding: 1rem;
+  min-width: 0;
+}
+
+.nle-media-bin {
+  flex: 1;
+  overflow-y: auto;
+}
+
+.nle-media-list {
+  margin-top: 1rem;
+  display: flex;
+  flex-direction: column;
+  gap: 0.5rem;
+}
+
+.nle-media-item {
+  padding: 0.5rem;
+  background: rgba(255, 255, 255, 0.1);
+  border-radius: 6px;
+  font-size: 0.9rem;
+}
+
+.nle-player {
+  flex: 2;
+  background-color: #000;
+  position: relative;
+  display: flex;
+  justify-content: center;
+  align-items: center;
+  min-height: 260px;
+}
+
+.nle-player video {
+  max-height: 100%;
+  max-width: 100%;
+}
+
+.nle-player-controls {
+  position: absolute;
+  bottom: 10px;
+  left: 50%;
+  transform: translateX(-50%);
+  display: flex;
+  gap: 10px;
+  width: calc(100% - 1.5rem);
+  max-width: 420px;
+}
+
+.nle-control-btn {
+  padding: 0.5rem 1rem;
+}
+
+.nle-control-btn.split-btn {
+  background: #e11d48;
+}
+
+.nle-timeline {
+  flex: 1;
+  background-color: #111827;
+  border-radius: 12px;
+  padding: 1rem;
+  position: relative;
+  overflow-x: auto;
+  min-height: 0;
+}
+
+.nle-track {
+  position: relative;
+  height: 100px;
+  min-width: 480px;
+  background-color: #1f2937;
+  border-radius: 6px;
+  display: flex;
+}
+
+.nle-empty-track {
+  position: absolute;
+  left: 50%;
+  top: 50%;
+  transform: translate(-50%, -50%);
+  color: #4b5563;
+}
+
+.nle-track-clip {
+  height: 100%;
+  border-right: 2px solid #000;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  color: #fff;
+  font-size: 0.8rem;
+  overflow: hidden;
+  min-width: 72px;
+}
+
+.nle-playhead {
+  position: absolute;
+  top: 0;
+  bottom: 0;
+  width: 2px;
+  background-color: #ef4444;
+  z-index: 10;
+}
+
 /* Custom Webkit scrollbar for NLE */
 .nle-container ::-webkit-scrollbar {
   width: 6px;
@@ -430,4 +607,180 @@ body {
 }
 .nle-container ::-webkit-scrollbar-thumb:hover {
   background: rgba(255,255,255,0.4); 
+}
+
+@media (max-width: 1180px) {
+  .dashboard-container {
+    flex-wrap: wrap;
+  }
+
+  .sidebar {
+    width: 100%;
+    min-width: 0;
+    border-right: none;
+    border-bottom: 1px solid rgba(255, 255, 255, 0.05);
+    padding: 1.25rem;
+  }
+
+  .sidebar-logo {
+    margin-bottom: 1.5rem;
+  }
+
+  .nav-menu {
+    flex-direction: row;
+    flex-wrap: wrap;
+  }
+
+  .nav-menu li {
+    flex: 1 1 180px;
+    min-width: 0;
+  }
+
+  .nav-menu li.active {
+    border-left: none;
+    border-bottom: 3px solid #818cf8;
+  }
+
+  .workspace {
+    width: calc(100% - 380px);
+    min-height: 0;
+  }
+
+  .preview-sidebar {
+    width: 380px;
+    min-width: 300px;
+  }
+}
+
+@media (max-width: 960px) {
+  .dashboard-container {
+    flex-direction: column;
+  }
+
+  .workspace,
+  .preview-sidebar {
+    width: 100%;
+    min-width: 0;
+  }
+
+  .preview-sidebar {
+    border-left: none;
+    border-top: 1px solid rgba(255, 255, 255, 0.05);
+  }
+
+  .workspace-header {
+    padding: 2rem 1.5rem 1.25rem;
+  }
+
+  .workspace-header h1 {
+    font-size: 2rem;
+  }
+
+  .workspace-subtitle {
+    font-size: 1rem;
+  }
+
+  .workspace-content,
+  .preview-content {
+    padding: 1.5rem;
+  }
+
+  .panel-grid {
+    grid-template-columns: repeat(auto-fill, minmax(240px, 1fr));
+  }
+
+  .nle-top-section {
+    flex-direction: column;
+    height: auto;
+  }
+
+  .nle-player {
+    min-height: 320px;
+  }
+}
+
+@media (max-width: 640px) {
+  .sidebar {
+    padding: 1rem;
+  }
+
+  .sidebar-logo {
+    gap: 0.75rem;
+    margin-bottom: 1rem;
+  }
+
+  .sidebar-logo h2 {
+    font-size: 1.25rem;
+  }
+
+  .nav-menu li {
+    padding: 0.9rem 1rem;
+    flex-basis: 100%;
+  }
+
+  .workspace-header {
+    padding: 1.5rem 1rem 1rem;
+  }
+
+  .workspace-header h1 {
+    font-size: 1.65rem;
+  }
+
+  .workspace-content,
+  .preview-header,
+  .preview-content {
+    padding: 1rem;
+  }
+
+  .panel-grid {
+    grid-template-columns: 1fr;
+  }
+
+  .file-input-group {
+    padding: 1.1rem;
+  }
+
+  .custom-file-upload {
+    align-items: stretch;
+  }
+
+  .choose-file-btn,
+  .file-name {
+    width: 100%;
+  }
+
+  .submit-btn,
+  .download-btn,
+  .reset-btn {
+    padding: 1rem;
+  }
+
+  .preview-placeholder .placeholder-box {
+    padding: 1.25rem;
+    min-height: 220px;
+  }
+
+  .error-popup {
+    top: 12px;
+    padding: 0.9rem 1rem;
+  }
+
+  .nle-player {
+    min-height: 240px;
+  }
+
+  .nle-player-controls {
+    position: static;
+    transform: none;
+    width: 100%;
+    max-width: none;
+    padding: 0.75rem;
+    justify-content: center;
+    flex-wrap: wrap;
+    background: linear-gradient(to top, rgba(0, 0, 0, 0.65), transparent);
+  }
+
+  .nle-control-btn {
+    flex: 1 1 160px;
+  }
 }

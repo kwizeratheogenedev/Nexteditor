@@ -34,7 +34,7 @@ function ShortsPanel({
 
       <div className="file-input-group format-group" style={{marginTop: '1.5rem'}}>
         <label>Platform Orientation</label>
-        <div style={{ display: 'flex', gap: '10px', marginTop: '0.5rem' }}>
+        <div className="selection-row">
           <button 
             type="button" 
             onClick={() => setFormat('9:16')} 
@@ -54,7 +54,7 @@ function ShortsPanel({
 
       <div className="file-input-group format-group" style={{marginTop: '1.5rem'}}>
         <label>Target Duration (Per Clip)</label>
-        <div style={{ display: 'flex', gap: '10px', marginTop: '0.5rem' }}>
+        <div className="selection-row">
           <button 
             type="button" 
             onClick={() => setDuration('60')} 
@@ -84,8 +84,15 @@ function ShortsPanel({
       </div>
 
       <style>{`
+        .selection-row {
+          display: flex;
+          gap: 10px;
+          margin-top: 0.5rem;
+          flex-wrap: wrap;
+        }
         .selection-btn {
           flex: 1;
+          min-width: 140px;
           padding: 0.8rem;
           background: rgba(255, 255, 255, 0.05);
           border: 1px solid rgba(255, 255, 255, 0.1);
