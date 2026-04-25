@@ -1,14 +1,40 @@
 import { useState, useRef, useEffect } from 'react';
+import { io } from 'socket.io-client';
 import { API_ENDPOINTS } from './config';
-import { usePersistedState, clearPersistedState } from './hooks/usePersistedState';
+import { usePersistedState } from './hooks/usePersistedState';
+import {
+  KEY_ACTIVE_TAB,
+  KEY_AUDIO_META,
+  KEY_CAPTION_FILE_META,
+  KEY_CAPTION_VIDEO_META,
+  KEY_SHORTS_DURATION,
+  KEY_SHORTS_FORMAT,
+  KEY_SHORTS_VIDEO_META,
+  KEY_VIDEO1_META,
+  KEY_VIDEO2_META,
+  KEY_VIDEO3_META,
+} from './constants/storageKeys';
 import Sidebar from './components/Sidebar';
 import Workspace from './components/Workspace';
 import PreviewPanel from './components/PreviewPanel';
 import ErrorPopup from './components/ErrorPopup';
 import './App.css';
 
+const VALID_TABS = ['media', 'captions', 'shorts', 'editor'];
+
+async function readErrorMessage(response) {
+  const contentType = response.headers.get('content-type') || '';
+
+  if (contentType.includes('application/json')) {
+    const data = await response.json();
+    return data?.error || 'Request failed';
+  }
+
+  return response.text();
+}
+
 function App() {
-  const [activeTab, setActiveTab] = usePersistedState('nexeditor_activeTab', 'media');
+  const [activeTab, setActiveTab] = usePersistedState(KEY_ACTIVE_TAB, 'media');
   
   // Montage State - Store file metadata for persistence
   // Note: Actual file objects cannot be persisted, only metadata
@@ -18,27 +44,29 @@ function App() {
   const [audio, setAudio] = useState(null);
   
   // File metadata for persistence (shows what was uploaded)
-  const [video1Meta, setVideo1Meta] = usePersistedState('nexeditor_video1_meta', null);
-  const [video2Meta, setVideo2Meta] = usePersistedState('nexeditor_video2_meta', null);
-  const [video3Meta, setVideo3Meta] = usePersistedState('nexeditor_video3_meta', null);
-  const [audioMeta, setAudioMeta] = usePersistedState('nexeditor_audio_meta', null);
+  const [video1Meta, setVideo1Meta] = usePersistedState(KEY_VIDEO1_META, null);
+  const [video2Meta, setVideo2Meta] = usePersistedState(KEY_VIDEO2_META, null);
+  const [video3Meta, setVideo3Meta] = usePersistedState(KEY_VIDEO3_META, null);
+  const [audioMeta, setAudioMeta] = usePersistedState(KEY_AUDIO_META, null);
 
   // Caption State
   const [captionVideo, setCaptionVideo] = useState(null);
   const [captionFile, setCaptionFile] = useState(null);
-  const [captionVideoMeta, setCaptionVideoMeta] = usePersistedState('nexeditor_captionVideo_meta', null);
-  const [captionFileMeta, setCaptionFileMeta] = usePersistedState('nexeditor_captionFile_meta', null);
+  const [captionVideoMeta, setCaptionVideoMeta] = usePersistedState(KEY_CAPTION_VIDEO_META, null);
+  const [captionFileMeta, setCaptionFileMeta] = usePersistedState(KEY_CAPTION_FILE_META, null);
   
   // Shorts State
   const [shortsVideo, setShortsVideo] = useState(null);
-  const [shortsVideoMeta, setShortsVideoMeta] = usePersistedState('nexeditor_shortsVideo_meta', null);
-  const [shortsDuration, setShortsDuration] = usePersistedState('nexeditor_shortsDuration', '60');
-  const [shortsFormat, setShortsFormat] = usePersistedState('nexeditor_shortsFormat', '9:16');
+  const [shortsVideoMeta, setShortsVideoMeta] = usePersistedState(KEY_SHORTS_VIDEO_META, null);
+  const [shortsDuration, setShortsDuration] = usePersistedState(KEY_SHORTS_DURATION, '60');
+  const [shortsFormat, setShortsFormat] = usePersistedState(KEY_SHORTS_FORMAT, '9:16');
   const [shortsResults, setShortsResults] = useState(null);
   
   const [processing, setProcessing] = useState(false);
   const [resultUrl, setResultUrl] = useState(null);
   const [errorText, setErrorText] = useState(null);
+  const [progress, setProgress] = useState({ percent: 0, currentTime: '' });
+  const [socketId, setSocketId] = useState('');
 
   // Check for previous session on mount
   useEffect(() => {
@@ -56,6 +84,35 @@ function App() {
       return () => clearTimeout(timer);
     }
   }, [errorText]);
+
+  useEffect(() => {
+    if (!VALID_TABS.includes(activeTab)) {
+      setActiveTab('media');
+    }
+  }, [activeTab, setActiveTab]);
+
+  useEffect(() => {
+    const socket = io(import.meta.env.VITE_SOCKET_URL || import.meta.env.VITE_API_URL || 'http://localhost:3000');
+
+    socket.on('connect', () => {
+      setSocketId(socket.id);
+    });
+
+    socket.on('ffmpeg-progress', (payload) => {
+      setProgress({
+        percent: payload?.percent || 0,
+        currentTime: payload?.currentTime || '',
+      });
+    });
+
+    socket.on('disconnect', () => {
+      setSocketId('');
+    });
+
+    return () => {
+      socket.disconnect();
+    };
+  }, []);
 
   const video1Ref = useRef();
   const video2Ref = useRef();
@@ -144,6 +201,7 @@ function App() {
     setProcessing(true);
     setErrorText(null);
     setResultUrl(null);
+    setProgress({ percent: 0, currentTime: '' });
 
     const formData = new FormData();
     formData.append('video1', video1);
@@ -154,11 +212,12 @@ function App() {
     try {
       const response = await fetch(API_ENDPOINTS.convert, {
         method: 'POST',
+        headers: socketId ? { 'X-Socket-Id': socketId } : {},
         body: formData,
       });
 
       if (!response.ok) {
-        throw new Error(await response.text());
+        throw new Error(await readErrorMessage(response));
       }
 
       const blob = await response.blob();
@@ -181,6 +240,7 @@ function App() {
     setProcessing(true);
     setErrorText(null);
     setResultUrl(null);
+    setProgress({ percent: 0, currentTime: '' });
 
     const formData = new FormData();
     formData.append('video', captionVideo);
@@ -189,11 +249,12 @@ function App() {
     try {
       const response = await fetch(API_ENDPOINTS.burnSubtitles, {
         method: 'POST',
+        headers: socketId ? { 'X-Socket-Id': socketId } : {},
         body: formData,
       });
 
       if (!response.ok) {
-        throw new Error(await response.text());
+        throw new Error(await readErrorMessage(response));
       }
 
       const blob = await response.blob();
@@ -216,6 +277,7 @@ function App() {
     setErrorText(null);
     setShortsResults(null);
     setResultUrl(null);
+    setProgress({ percent: 0, currentTime: '' });
 
     const formData = new FormData();
     formData.append('video', shortsVideo);
@@ -225,9 +287,10 @@ function App() {
     try {
       const response = await fetch(API_ENDPOINTS.extractShorts, {
         method: 'POST',
+        headers: socketId ? { 'X-Socket-Id': socketId } : {},
         body: formData,
       });
-      if (!response.ok) throw new Error(await response.text());
+      if (!response.ok) throw new Error(await readErrorMessage(response));
       const data = await response.json();
       setShortsResults(data.shorts);
     } catch (err) {
@@ -240,11 +303,16 @@ function App() {
 
   const handleReformat = async (clipData, formatStrategy) => {
     try {
+        setProcessing(true);
+        setProgress({ percent: 0, currentTime: '' });
         const res = await fetch(API_ENDPOINTS.reformatShort, {
             method: 'POST',
-            headers: { 'Content-Type': 'application/json' },
+            headers: {
+              'Content-Type': 'application/json',
+              ...(socketId ? { 'X-Socket-Id': socketId } : {})
+            },
             body: JSON.stringify({
-                originalVideo: clipData.originalVideo,
+                jobId: clipData.jobId,
                 startTime: clipData.startTime,
                 duration: clipData.duration,
                 formatStrategy: formatStrategy,
@@ -252,12 +320,14 @@ function App() {
                 id: clipData.id
             })
         });
-        if (!res.ok) throw new Error(await res.text());
+        if (!res.ok) throw new Error(await readErrorMessage(res));
         const data = await res.json();
         
         setShortsResults(prev => prev.map(clip => clip.id === clipData.id ? data : clip));
     } catch(err) {
         setErrorText(err.message || "Failed to reformat clip");
+    } finally {
+        setProcessing(false);
     }
   };
 
@@ -329,6 +399,7 @@ function App() {
     }
     
     setResultUrl(null);
+    setProgress({ percent: 0, currentTime: '' });
     if (clearStorage) {
         setErrorText(null);
     }
@@ -348,10 +419,13 @@ function App() {
   };
 
   const captionsProps = {
-    captionVideo, captionVideoRef, handleVideoSelect, setCaptionVideo,
-    captionFile, captionRef, handleCaptionSelect,
-    captionVideoMeta, setCaptionVideoMeta,
-    captionFileMeta, setCaptionFileMeta
+    captionVideo,
+    captionVideoRef,
+    captionFile,
+    captionRef,
+    handleCaptionSelect,
+    captionVideoMeta,
+    captionFileMeta
   };
 
   const shortsProps = {
@@ -386,6 +460,7 @@ function App() {
           handleReset={() => handleReset(true)} 
           handleReformat={handleReformat}
           handleShortDownload={handleShortDownload}
+          progress={progress}
         />
       )}
 

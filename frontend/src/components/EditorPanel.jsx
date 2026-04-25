@@ -1,6 +1,7 @@
 import React, { useState, useRef, useEffect } from 'react';
 
 function EditorPanel() {
+  const [showPreviewBanner, setShowPreviewBanner] = useState(true);
   const [timeline, setTimeline] = useState([]);
   const [playhead, setPlayhead] = useState(0); // in seconds
   const [isPlaying, setIsPlaying] = useState(false);
@@ -178,6 +179,14 @@ function EditorPanel() {
 
   return (
     <div className="nle-container">
+      {showPreviewBanner && (
+        <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', gap: 12, marginBottom: '1rem', padding: '0.75rem 1rem', borderRadius: 8, background: 'rgba(245, 158, 11, 0.16)', color: '#fef3c7', border: '1px solid rgba(245, 158, 11, 0.35)' }}>
+          <span>This editor is a preview. Export and cloud save are not yet available.</span>
+          <button type="button" onClick={() => setShowPreviewBanner(false)} className="reset-btn" style={{ width: 'auto', padding: '0.4rem 0.75rem' }}>
+            Dismiss
+          </button>
+        </div>
+      )}
       
       {/* Top Half: Bin and Player */}
       <div className="nle-top-section">

@@ -1,6 +1,6 @@
 import React, { useState } from 'react';
 
-function PreviewPanel({ processing, handleConvert, resultUrl, shortsResults, handleReset, handleReformat, handleShortDownload }) {
+function PreviewPanel({ processing, handleConvert, resultUrl, shortsResults, handleReset, handleReformat, handleShortDownload, progress }) {
   const [reformattingId, setReformattingId] = useState(null);
   const [downloadingId, setDownloadingId] = useState(null);
 
@@ -30,6 +30,19 @@ function PreviewPanel({ processing, handleConvert, resultUrl, shortsResults, han
             {(processing || reformattingId) && <div className="spinner"></div>}
           </button>
         </form>
+
+        {(processing || reformattingId) && (
+          <div className="info-box" style={{ marginTop: 0 }}>
+            <div style={{ display: 'flex', justifyContent: 'space-between', gap: 12, marginBottom: 8 }}>
+              <span>Render Progress</span>
+              <span>{Math.round(progress?.percent || 0)}%</span>
+            </div>
+            <progress value={progress?.percent || 0} max="100" style={{ width: '100%' }} />
+            <div style={{ marginTop: 8, color: '#cbd5e1', fontSize: '0.85rem' }}>
+              {progress?.currentTime || 'Preparing FFmpeg job...'}
+            </div>
+          </div>
+        )}
 
         {shortsResults && shortsResults.length > 0 ? (
           <div className="shorts-gallery">

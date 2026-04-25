@@ -1,4 +1,16 @@
 import { useState, useEffect } from 'react';
+import {
+  KEY_ACTIVE_TAB,
+  KEY_AUDIO_META,
+  KEY_CAPTION_FILE_META,
+  KEY_CAPTION_VIDEO_META,
+  KEY_SHORTS_DURATION,
+  KEY_SHORTS_FORMAT,
+  KEY_SHORTS_VIDEO_META,
+  KEY_VIDEO1_META,
+  KEY_VIDEO2_META,
+  KEY_VIDEO3_META,
+} from '../constants/storageKeys';
 
 /**
  * Custom hook for persisting state to localStorage
@@ -38,16 +50,16 @@ export function clearPersistedState(key) {
 
 export function clearAllAppState() {
   const keys = [
-    'nexeditor_video1',
-    'nexeditor_video2', 
-    'nexeditor_video3',
-    'nexeditor_audio',
-    'nexeditor_captionVideo',
-    'nexeditor_captionFile',
-    'nexeditor_shortsVideo',
-    'nexeditor_shortsDuration',
-    'nexeditor_shortsFormat',
-    'nexeditor_activeTab'
+    KEY_VIDEO1_META,
+    KEY_VIDEO2_META,
+    KEY_VIDEO3_META,
+    KEY_AUDIO_META,
+    KEY_CAPTION_VIDEO_META,
+    KEY_CAPTION_FILE_META,
+    KEY_SHORTS_VIDEO_META,
+    KEY_SHORTS_DURATION,
+    KEY_SHORTS_FORMAT,
+    KEY_ACTIVE_TAB,
   ];
   keys.forEach(clearPersistedState);
 }

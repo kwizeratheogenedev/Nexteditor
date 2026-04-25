@@ -20,6 +20,9 @@ function Sidebar({ activeTab, setActiveTab }) {
         </li>
         <li className={activeTab === 'editor' ? 'active' : ''} onClick={() => setActiveTab('editor')}>
            Advanced Editor
+           <span style={{ fontSize: 10, background: '#f59e0b', color: '#fff', borderRadius: 4, padding: '1px 5px', marginLeft: 6 }}>
+             Beta
+           </span>
         </li>
       </ul>
     </nav>

@@ -1,10 +1,13 @@
 import React from 'react';
 
 function CaptionsPanel({
-  captionVideo, captionVideoRef, handleVideoSelect, setCaptionVideo,
-  captionFile, captionRef, handleCaptionSelect,
-  captionVideoMeta, setCaptionVideoMeta,
-  captionFileMeta, setCaptionFileMeta
+  captionVideo,
+  captionVideoRef,
+  captionFile,
+  captionRef,
+  handleCaptionSelect,
+  captionVideoMeta,
+  captionFileMeta
 }) {
   
   const formatFileSize = (bytes) => {
@@ -29,7 +32,7 @@ function CaptionsPanel({
             <small>Previous: {formatFileSize(captionVideoMeta.size)}</small>
           </div>
         )}
-        <input type="file" accept="video/*" ref={captionVideoRef} onChange={(e) => handleVideoSelect(e, true)} style={{ display: 'none' }} />
+        <input type="file" accept="video/*" ref={captionVideoRef} onChange={(e) => handleCaptionSelect(e, true)} style={{ display: 'none' }} />
       </div>
 
       <div className="file-input-group subtitle-group" style={{marginTop: '1.5rem'}}>

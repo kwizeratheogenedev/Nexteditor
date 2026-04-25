@@ -1,0 +1,10 @@
+export const KEY_ACTIVE_TAB = 'nexeditor_activeTab';
+export const KEY_VIDEO1_META = 'nexeditor_video1_meta';
+export const KEY_VIDEO2_META = 'nexeditor_video2_meta';
+export const KEY_VIDEO3_META = 'nexeditor_video3_meta';
+export const KEY_AUDIO_META = 'nexeditor_audio_meta';
+export const KEY_CAPTION_VIDEO_META = 'nexeditor_captionVideo_meta';
+export const KEY_CAPTION_FILE_META = 'nexeditor_captionFile_meta';
+export const KEY_SHORTS_VIDEO_META = 'nexeditor_shortsVideo_meta';
+export const KEY_SHORTS_DURATION = 'nexeditor_shortsDuration';
+export const KEY_SHORTS_FORMAT = 'nexeditor_shortsFormat';

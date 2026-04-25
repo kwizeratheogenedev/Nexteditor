@@ -10,7 +10,7 @@ function MediaPanel({
   video1Meta, setVideo1Meta,
   video2Meta, setVideo2Meta,
   video3Meta, setVideo3Meta,
-  audioMeta, setAudioMeta
+  audioMeta
 }) {
   
   // Helper to format file size
