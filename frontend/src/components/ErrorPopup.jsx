@@ -1,12 +1,12 @@
-import React from 'react';
-
 function ErrorPopup({ errorText, setErrorText }) {
-  if (!errorText) return null;
+  if (!errorText) {
+    return null;
+  }
 
   return (
-    <div className="error-popup">
+    <div className="error-toast">
       <span>{errorText}</span>
-      <button type="button" className="close-popup" onClick={() => setErrorText(null)}>×</button>
+      <button type="button" className="error-toast-close" onClick={() => setErrorText(null)}>×</button>
     </div>
   );
 }
