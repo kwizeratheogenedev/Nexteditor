@@ -47,7 +47,7 @@ function ClipBlock({ clip }) {
   );
 }
 
-function TrackRow({ clips, type, placeholder }) {
+function TrackRow({ clips, placeholder }) {
   return (
     <div className="timeline-track-row">
       {clips.length ? clips.map((clip) => <ClipBlock key={clip.id} clip={clip} />) : <div className="timeline-placeholder">{placeholder}</div>}

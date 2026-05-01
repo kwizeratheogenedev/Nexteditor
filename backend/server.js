@@ -8,13 +8,14 @@ import convertRouter from './routes/convert.js';
 import burnSubtitlesRouter from './routes/burnSubtitles.js';
 import extractShortsRouter from './routes/extractShorts.js';
 import reformatShortRouter from './routes/reformatShort.js';
+import createMontageRouter from './routes/createMontage.js';
+import fetchUrlVideoRouter from './routes/fetchUrlVideo.js';
 import { jobStore, deleteJob } from './services/jobStore.js';
 import { initSocket } from './socket.js';
 
 const __filename = fileURLToPath(import.meta.url);
 const __dirname = path.dirname(__filename);
 const app = express();
-const server = http.createServer(app);
 const port = 3000;
 const ALLOWED_ORIGIN = process.env.CORS_ORIGIN || 'http://localhost:5173';
 
@@ -29,16 +30,21 @@ if (!fs.existsSync(clipsDir)) {
   fs.mkdirSync(clipsDir, { recursive: true });
 }
 
+const server = http.createServer(app);
+const io = initSocket(server, ALLOWED_ORIGIN);
+app.set('io', io);
+
 app.use(cors({ origin: ALLOWED_ORIGIN, credentials: true }));
 app.use(express.json());
 app.use('/clips', express.static(clipsDir));
-
-initSocket(server, ALLOWED_ORIGIN);
 
 app.use('/api/convert', convertRouter);
 app.use('/api/burn-subtitles', burnSubtitlesRouter);
 app.use('/api/extract-shorts', extractShortsRouter);
 app.use('/api/reformat-short', reformatShortRouter);
+app.use('/api/fetch-url-video', fetchUrlVideoRouter);
+app.use('/api/fetch-url', fetchUrlVideoRouter);
+app.use('/api/create-montage', createMontageRouter);
 
 app.use((err, req, res, next) => {
   if (err.code === 'LIMIT_FILE_SIZE') {

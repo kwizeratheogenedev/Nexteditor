@@ -7,6 +7,8 @@ export const API_ENDPOINTS = {
   burnSubtitles: `${API_BASE_URL}/api/burn-subtitles`,
   extractShorts: `${API_BASE_URL}/api/extract-shorts`,
   reformatShort: `${API_BASE_URL}/api/reformat-short`,
+  fetchUrlVideo: `${API_BASE_URL}/api/fetch-url-video`,
+  createMontage: `${API_BASE_URL}/api/create-montage`,
 };
 
 export default API_BASE_URL;

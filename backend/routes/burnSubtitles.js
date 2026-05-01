@@ -43,7 +43,11 @@ router.post(
       outputFiles.push(outputPath);
       const taskId = `burn-subtitles-${Date.now()}`;
       const videoDuration = await probeDuration(videoPath);
-      const subtitleFilter = `subtitles='${subPath.replace(/\\/g, '/').replace(/:/g, '\\:')}'`;
+      
+      // Properly escape subtitle path for ffmpeg filter
+      // FFmpeg requires escaping of special characters in filter strings
+      const escapedSubPath = subPath.replace(/\\/g, '/').replace(/'/g, "\\'").replace(/:/g, '\\:');
+      const subtitleFilter = `subtitles='${escapedSubPath}'`;
 
       await runFFmpeg(
         [

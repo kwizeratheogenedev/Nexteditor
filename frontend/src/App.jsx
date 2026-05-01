@@ -1,27 +1,23 @@
-import { useEffect, useMemo, useRef, useState } from 'react';
-import { io } from 'socket.io-client';
-import { API_ENDPOINTS } from './config';
-import { usePersistedState } from './hooks/usePersistedState';
-import {
-  KEY_ACTIVE_TAB,
-  KEY_AUDIO_META,
-  KEY_CAPTION_FILE_META,
-  KEY_CAPTION_VIDEO_META,
-  KEY_SHORTS_DURATION,
-  KEY_SHORTS_FORMAT,
-  KEY_SHORTS_VIDEO_META,
-  KEY_VIDEO1_META,
-  KEY_VIDEO2_META,
-  KEY_VIDEO3_META,
-} from './constants/storageKeys';
+import { useEffect, useMemo, useRef } from 'react';
+import API_BASE_URL, { API_ENDPOINTS } from './config';
+import { useSocket } from './context/SocketContext';
+import { useMediaState } from './hooks/useMediaState';
 import TopBar from './components/TopBar';
 import LeftSidebar from './components/LeftSidebar';
 import CenterPanel from './components/CenterPanel';
 import RightPanel from './components/RightPanel';
-import BottomTimeline from './components/BottomTimeline';
 import ErrorPopup from './components/ErrorPopup';
+import MediaPanel from './components/MediaPanel';
+import MontageTab from './components/MontageTab';
+import BottomTimeline from './components/BottomTimeline';
 
 const VALID_TABS = ['media', 'captions', 'shorts', 'editor'];
+
+function revokeObjectUrlIfNeeded(url) {
+  if (typeof url === 'string' && url.startsWith('blob:')) {
+    URL.revokeObjectURL(url);
+  }
+}
 
 async function readErrorMessage(response) {
   const contentType = response.headers.get('content-type') || '';
@@ -35,46 +31,79 @@ async function readErrorMessage(response) {
 }
 
 function App() {
-  const [activeTab, setActiveTab] = usePersistedState(KEY_ACTIVE_TAB, 'editor');
+  // Use the unified media state hook
+  const mediaState = useMediaState();
+  const { socket, socketId } = useSocket();
 
-  const [video1, setVideo1] = useState(null);
-  const [video2, setVideo2] = useState(null);
-  const [video3, setVideo3] = useState(null);
-  const [audio, setAudio] = useState(null);
-
-  const [video1Meta, setVideo1Meta] = usePersistedState(KEY_VIDEO1_META, null);
-  const [video2Meta, setVideo2Meta] = usePersistedState(KEY_VIDEO2_META, null);
-  const [video3Meta, setVideo3Meta] = usePersistedState(KEY_VIDEO3_META, null);
-  const [audioMeta, setAudioMeta] = usePersistedState(KEY_AUDIO_META, null);
-
-  const [captionVideo, setCaptionVideo] = useState(null);
-  const [captionFile, setCaptionFile] = useState(null);
-  const [captionVideoMeta, setCaptionVideoMeta] = usePersistedState(KEY_CAPTION_VIDEO_META, null);
-  const [captionFileMeta, setCaptionFileMeta] = usePersistedState(KEY_CAPTION_FILE_META, null);
-
-  const [shortsVideo, setShortsVideo] = useState(null);
-  const [shortsVideoMeta, setShortsVideoMeta] = usePersistedState(KEY_SHORTS_VIDEO_META, null);
-  const [shortsDuration, setShortsDuration] = usePersistedState(KEY_SHORTS_DURATION, '60');
-  const [shortsFormat, setShortsFormat] = usePersistedState(KEY_SHORTS_FORMAT, '9:16');
-  const [shortsResults, setShortsResults] = useState(null);
-
-  const [processing, setProcessing] = useState(false);
-  const [resultUrl, setResultUrl] = useState(null);
-  const [errorText, setErrorText] = useState(null);
-  const [progress, setProgress] = useState({ percent: 0, currentTime: '' });
-  const [socketId, setSocketId] = useState('');
-  const [selectedShortId, setSelectedShortId] = useState(null);
-
-  const [editorBannerVisible, setEditorBannerVisible] = useState(true);
-  const [editorTimeline, setEditorTimeline] = useState([]);
-  const [editorPlayhead, setEditorPlayhead] = useState(0);
-  const [editorIsPlaying, setEditorIsPlaying] = useState(false);
-  const [editorActiveClipIndex, setEditorActiveClipIndex] = useState(0);
-  const [timelineZoom, setTimelineZoom] = useState(100);
-
-  const [previewCurrentTime, setPreviewCurrentTime] = useState(0);
-  const [previewDuration, setPreviewDuration] = useState(0);
-  const [previewIsPlaying, setPreviewIsPlaying] = useState(false);
+  // Destructure commonly used state for cleaner code
+  const {
+    activeTab,
+    setActiveTab,
+    video1State,
+    setVideo1State,
+    video1Meta,
+    setVideo1Meta,
+    video2State,
+    setVideo2State,
+    video2Meta,
+    setVideo2Meta,
+    video3State,
+    setVideo3State,
+    video3Meta,
+    setVideo3Meta,
+    audioState,
+    setAudioState,
+    audioMeta,
+    setAudioMeta,
+    captionVideoState,
+    setCaptionVideoState,
+    captionVideoMeta,
+    setCaptionVideoMeta,
+    captionFileState,
+    setCaptionFileState,
+    captionFileMeta,
+    setCaptionFileMeta,
+    shortsVideoState,
+    setShortsVideoState,
+    shortsVideoMeta,
+    setShortsVideoMeta,
+    shortsDuration,
+    setShortsDuration,
+    shortsFormat,
+    setShortsFormat,
+    shortsResults,
+    setShortsResults,
+    selectedShortId,
+    setSelectedShortId,
+    processing,
+    setProcessing,
+    resultUrl,
+    setResultUrl,
+    errorText,
+    setErrorText,
+    progress,
+    setProgress,
+    editorBannerVisible,
+    setEditorBannerVisible,
+    editorTimeline,
+    setEditorTimeline,
+    editorPlayhead,
+    setEditorPlayhead,
+    editorIsPlaying,
+    setEditorIsPlaying,
+    editorActiveClipIndex,
+    setEditorActiveClipIndex,
+    timelineZoom,
+    setTimelineZoom,
+    editorVideo,
+    loadVideoInEditor,
+    previewCurrentTime,
+    setPreviewCurrentTime,
+    previewDuration,
+    setPreviewDuration,
+    previewIsPlaying,
+    setPreviewIsPlaying,
+  } = mediaState;
 
   const video1Ref = useRef(null);
   const video2Ref = useRef(null);
@@ -117,12 +146,9 @@ function App() {
     }
   }, [activeTab, setActiveTab]);
 
+  // Listen for ffmpeg progress updates
   useEffect(() => {
-    const socket = io(import.meta.env.VITE_SOCKET_URL || import.meta.env.VITE_API_URL || 'http://localhost:3000');
-
-    socket.on('connect', () => {
-      setSocketId(socket.id);
-    });
+    if (!socket) return;
 
     socket.on('ffmpeg-progress', (payload) => {
       setProgress({
@@ -131,14 +157,10 @@ function App() {
       });
     });
 
-    socket.on('disconnect', () => {
-      setSocketId('');
-    });
-
     return () => {
-      socket.disconnect();
+      socket.off('ffmpeg-progress');
     };
-  }, []);
+  }, [socket, setProgress]);
 
   useEffect(() => {
     if (!shortsResults?.length) {
@@ -158,11 +180,55 @@ function App() {
 
   useEffect(() => () => {
     editorTimelineRef.current.forEach((clip) => {
-      if (clip.url) {
-        URL.revokeObjectURL(clip.url);
-      }
+      revokeObjectUrlIfNeeded(clip.url);
     });
   }, []);
+
+  useEffect(() => {
+    if (!editorVideo?.fileName) {
+      return undefined;
+    }
+
+    const remoteUrl = `${API_BASE_URL}/clips/${editorVideo.fileName}`;
+    const tempVideo = document.createElement('video');
+
+    const handleLoadedMetadata = () => {
+      setEditorTimeline((previous) => {
+        previous.forEach((clip) => revokeObjectUrlIfNeeded(clip.url));
+        return [
+          {
+            id: `montage-${Date.now()}`,
+            file: { name: editorVideo.fileName },
+            url: remoteUrl,
+            duration: tempVideo.duration,
+            trimmedStart: 0,
+            trimmedEnd: tempVideo.duration,
+          },
+        ];
+      });
+      setEditorPlayhead(0);
+      setEditorActiveClipIndex(0);
+      setEditorIsPlaying(false);
+      if (editorVideoRef.current) {
+        editorVideoRef.current.pause();
+        editorVideoRef.current.src = remoteUrl;
+        editorVideoRef.current.currentTime = 0;
+      }
+    };
+
+    const handleError = () => {
+      setErrorText('Unable to load the generated montage into the editor.');
+    };
+
+    tempVideo.addEventListener('loadedmetadata', handleLoadedMetadata);
+    tempVideo.addEventListener('error', handleError);
+    tempVideo.src = remoteUrl;
+
+    return () => {
+      tempVideo.removeEventListener('loadedmetadata', handleLoadedMetadata);
+      tempVideo.removeEventListener('error', handleError);
+    };
+  }, [editorVideo, setEditorActiveClipIndex, setEditorIsPlaying, setEditorPlayhead, setEditorTimeline, setErrorText]);
 
   useEffect(() => {
     if (!editorVideoRef.current || editorTimeline.length === 0) {
@@ -236,12 +302,12 @@ function App() {
     if (!file.type.startsWith('audio/')) {
       setErrorText('Oops! Please upload a valid AUDIO file for the Soundtrack.');
       event.target.value = '';
-      setAudio(null);
+      setAudioState(null);
       setAudioMeta(null);
       return;
     }
 
-    storeFileMeta(file, setAudio, setAudioMeta);
+    storeFileMeta(file, setAudioState, setAudioMeta);
     setErrorText(null);
   };
 
@@ -255,43 +321,120 @@ function App() {
       if (!file.type.startsWith('video/')) {
         setErrorText('Please upload a valid video file.');
         event.target.value = '';
-        setCaptionVideo(null);
+        setCaptionVideoState(null);
         setCaptionVideoMeta(null);
         return;
       }
-      storeFileMeta(file, setCaptionVideo, setCaptionVideoMeta);
+      storeFileMeta(file, setCaptionVideoState, setCaptionVideoMeta);
     } else {
       if (!file.name.endsWith('.srt') && !file.name.endsWith('.vtt')) {
         setErrorText('Oops! Please upload a valid .srt or .vtt subtitle file.');
         event.target.value = '';
-        setCaptionFile(null);
+        setCaptionFileState(null);
         setCaptionFileMeta(null);
         return;
       }
-      storeFileMeta(file, setCaptionFile, setCaptionFileMeta);
+      storeFileMeta(file, setCaptionFileState, setCaptionFileMeta);
     }
 
     setErrorText(null);
   };
 
+  /**
+   * Handle successful URL video fetch
+   * Stores the fetched file metadata in the appropriate video/audio state
+   */
+  const handleUrlVideoFetched = (data, setter, metaSetter, fieldName) => {
+    if (!data.filePath || !data.fileName) {
+      setErrorText(`Failed to fetch ${fieldName}: Missing file information`);
+      return;
+    }
+
+    // Create a virtual File-like object with metadata
+    const fetchedFileMeta = {
+      name: data.fileName || `fetched-video-${Date.now()}`,
+      size: 0, // Size unknown from remote fetch, will be calculated later if needed
+      type: 'video/mp4', // Assume mp4 from yt-dlp or inferred
+      lastModified: Date.now(),
+      filePath: data.filePath, // Backend file path for reference
+      source: 'url-fetch',
+      sourcePath: data.type, // 'youtube', 'gdrive', 'dropbox', 'direct'
+    };
+
+    setter(null); // Clear file object (we don't need it for backend fetched files)
+    metaSetter(fetchedFileMeta);
+    setErrorText(null);
+  };
+
+  /**
+   * Create URL fetch handlers for each video track
+   */
+  const handleVideo1UrlFetch = (data) => {
+    handleUrlVideoFetched(data, setVideo1State, setVideo1Meta, 'Video 1');
+  };
+
+  const handleVideo2UrlFetch = (data) => {
+    handleUrlVideoFetched(data, setVideo2State, setVideo2Meta, 'Video 2');
+  };
+
+  const handleVideo3UrlFetch = (data) => {
+    handleUrlVideoFetched(data, setVideo3State, setVideo3Meta, 'Video 3');
+  };
+
+  const handleAudioUrlFetch = (data) => {
+    handleUrlVideoFetched(data, setAudioState, setAudioMeta, 'Audio');
+  };
+
+  const handleCaptionVideoUrlFetch = (data) => {
+    handleUrlVideoFetched(data, setCaptionVideoState, setCaptionVideoMeta, 'Caption Video');
+  };
+
+  const handleShortsVideoUrlFetch = (data) => {
+    handleUrlVideoFetched(data, setShortsVideoState, setShortsVideoMeta, 'Shorts Video');
+  };
+
+
   const handleMontageConvert = async () => {
-    if (!video1 || !video2 || !video3 || !audio) {
-      setErrorText('Please attach 3 Videos and 1 Audio track before exporting a Montage.');
+    // Check if all 3 videos have files or filePaths (from URL fetch)
+    const hasVideo1 = video1State.status === 'ready' && (video1State.file || video1State.filePath);
+    const hasVideo2 = video2State.status === 'ready' && (video2State.file || video2State.filePath);
+    const hasVideo3 = video3State.status === 'ready' && (video3State.file || video3State.filePath);
+    const hasAudio = audioState.status === 'ready' && (audioState.file || audioState.filePath);
+
+    if (!hasVideo1 || !hasVideo2 || !hasVideo3 || !hasAudio) {
+      setErrorText('Please provide all 3 video tracks and 1 audio track before exporting a Montage.');
       return;
     }
 
     setProcessing(true);
     setErrorText(null);
     setResultUrl(null);
-    setProgress({ percent: 0, currentTime: '' });
+    setProgress({ percent: 0, currentTime: 'Preparing files...' });
 
     const formData = new FormData();
-    formData.append('video1', video1);
-    formData.append('video2', video2);
-    formData.append('video3', video3);
-    formData.append('audio', audio);
+    
+    // Determine source mode based on whether files are from URL fetch (filePath) or local upload (file)
+    const isUrlMode = Boolean(video1State.filePath && video2State.filePath && video3State.filePath && audioState.filePath);
+    
+    if (isUrlMode) {
+      // Use file paths from URL fetch
+      formData.append('videoSourceMode', 'path');
+      formData.append('video1Path', video1State.filePath);
+      formData.append('video2Path', video2State.filePath);
+      formData.append('video3Path', video3State.filePath);
+      formData.append('audioPath', audioState.filePath);
+    } else {
+      // Use file objects from local uploads
+      formData.append('videoSourceMode', 'upload');
+      if (video1State.file) formData.append('video1', video1State.file);
+      if (video2State.file) formData.append('video2', video2State.file);
+      if (video3State.file) formData.append('video3', video3State.file);
+      if (audioState.file) formData.append('audio', audioState.file);
+    }
 
     try {
+      setProgress({ percent: 0, currentTime: 'Starting merge...' });
+      
       const response = await fetch(API_ENDPOINTS.convert, {
         method: 'POST',
         headers: socketId ? { 'X-Socket-Id': socketId } : {},
@@ -299,22 +442,33 @@ function App() {
       });
 
       if (!response.ok) {
-        throw new Error(await readErrorMessage(response));
+        const errorData = await response.json().catch(() => ({}));
+        throw new Error(errorData.error || await readErrorMessage(response));
+      }
+
+      // Get the blob - could be video or error JSON
+      const contentType = response.headers.get('content-type') || '';
+      
+      if (contentType.includes('application/json')) {
+        const errorData = await response.json();
+        throw new Error(errorData.error || 'Merge failed - unknown error');
       }
 
       const blob = await response.blob();
       const url = URL.createObjectURL(blob);
       setResultUrl(url);
+      setProgress({ percent: 100, currentTime: 'Complete!' });
     } catch (error) {
-      console.error(error);
+      console.error('Montage error:', error);
       setErrorText(error.message || 'Error generating montage');
+      setProgress({ percent: 0, currentTime: '' });
     } finally {
       setProcessing(false);
     }
   };
 
   const handleCaptionConvert = async () => {
-    if (!captionVideo || !captionFile) {
+    if (!captionVideoState.file || !captionFileState.file) {
       setErrorText('Please upload exactly 1 Video and 1 Subtitle file.');
       return;
     }
@@ -325,8 +479,8 @@ function App() {
     setProgress({ percent: 0, currentTime: '' });
 
     const formData = new FormData();
-    formData.append('video', captionVideo);
-    formData.append('subtitle', captionFile);
+    formData.append("video", captionVideoState.file);
+    formData.append("subtitle", captionFileState.file);
 
     try {
       const response = await fetch(API_ENDPOINTS.burnSubtitles, {
@@ -351,7 +505,7 @@ function App() {
   };
 
   const handleShortsConvert = async () => {
-    if (!shortsVideo) {
+    if (!shortsVideoState.file) {
       setErrorText('Please upload a long-form video to extract shorts.');
       return;
     }
@@ -363,7 +517,7 @@ function App() {
     setProgress({ percent: 0, currentTime: '' });
 
     const formData = new FormData();
-    formData.append('video', shortsVideo);
+    formData.append("video", shortsVideoState.file);
     formData.append('duration', shortsDuration);
     formData.append('aspectRatio', shortsFormat);
 
@@ -447,10 +601,14 @@ function App() {
 
   const handleReset = (clearStorage = true) => {
     if (activeTab === 'media') {
-      setVideo1(null);
-      setVideo2(null);
-      setVideo3(null);
-      setAudio(null);
+      setVideo1State(null);
+      setVideo2State(null);
+      setVideo3State(null);
+      setAudioState(null);
+      // setVideoSourceMode - not available in new state
+
+
+
       if (clearStorage) {
         setVideo1Meta(null);
         setVideo2Meta(null);
@@ -462,8 +620,8 @@ function App() {
       if (video3Ref.current) video3Ref.current.value = '';
       if (audioRef.current) audioRef.current.value = '';
     } else if (activeTab === 'captions') {
-      setCaptionVideo(null);
-      setCaptionFile(null);
+      setCaptionVideoState(null);
+      setCaptionFileState(null);
       if (clearStorage) {
         setCaptionVideoMeta(null);
         setCaptionFileMeta(null);
@@ -471,7 +629,7 @@ function App() {
       if (captionVideoRef.current) captionVideoRef.current.value = '';
       if (captionRef.current) captionRef.current.value = '';
     } else if (activeTab === 'shorts') {
-      setShortsVideo(null);
+      setShortsVideoState(null);
       if (clearStorage) {
         setShortsVideoMeta(null);
       }
@@ -481,7 +639,7 @@ function App() {
     } else if (activeTab === 'editor') {
       editorTimeline.forEach((clip) => {
         if (clip.url) {
-          URL.revokeObjectURL(clip.url);
+          revokeObjectUrlIfNeeded(clip.url);
         }
       });
       setEditorTimeline([]);
@@ -568,9 +726,7 @@ function App() {
     }
 
     const removedClip = editorTimeline[editorActiveClipIndex];
-    if (removedClip?.url) {
-      URL.revokeObjectURL(removedClip.url);
-    }
+    revokeObjectUrlIfNeeded(removedClip?.url);
 
     const nextTimeline = editorTimeline.filter((_clip, index) => index !== editorActiveClipIndex);
     setEditorTimeline(nextTimeline);
@@ -833,43 +989,47 @@ function App() {
       );
 
   const mediaProps = {
-    video1,
-    video1Ref,
-    setVideo1,
-    video2,
-    video2Ref,
-    setVideo2,
-    video3,
-    video3Ref,
-    setVideo3,
-    handleVideoSelect,
-    audio,
-    audioRef,
-    handleAudioSelect,
-    video1Meta,
-    setVideo1Meta,
-    video2Meta,
-    setVideo2Meta,
-    video3Meta,
-    setVideo3Meta,
-    audioMeta,
+    video1State,
+    setVideo1State,
+    video2State,
+    setVideo2State,
+    video3State,
+    setVideo3State,
+    audioState,
+    setAudioState,
+    socketId,
+    processing,
+    onError: setErrorText,
+    onMerge: handleMontageConvert,
+    loadVideoInEditor,
+    resultUrl,
+    outputFileName: 'montage_video.mp4',
+    progress,
+    onReset: handleReset,
+    onAudioSelect: handleAudioSelect,
+    onVideo1UrlFetch: handleVideo1UrlFetch,
+    onVideo2UrlFetch: handleVideo2UrlFetch,
+    onVideo3UrlFetch: handleVideo3UrlFetch,
+    onAudioUrlFetch: handleAudioUrlFetch,
   };
 
   const captionsProps = {
-    captionVideo,
+    captionVideo: captionVideoState.file,
     captionVideoRef,
-    captionFile,
+    captionFile: captionFileState.file,
     captionRef,
     handleCaptionSelect,
+    onCaptionVideoUrlFetch: handleCaptionVideoUrlFetch,
     captionVideoMeta,
     captionFileMeta,
   };
 
   const shortsProps = {
-    shortsVideo,
+    shortsVideo: shortsVideoState.file,
     shortsVideoRef,
     handleVideoSelect,
-    setShortsVideo,
+    setShortsVideoState,
+    onShortsVideoUrlFetch: handleShortsVideoUrlFetch,
     shortsVideoMeta,
     setShortsVideoMeta,
     duration: shortsDuration,
@@ -882,7 +1042,7 @@ function App() {
     <div id="app-shell">
       <TopBar activeTab={activeTab} onTabChange={setActiveTab} onExport={triggerExport} />
       <div id="main-area">
-        <LeftSidebar activeTab={activeTab} onSelect={setActiveTab} />
+        {activeTab === 'editor' && <LeftSidebar activeTab={activeTab} onSelect={setActiveTab} />}
         <CenterPanel
           activeTab={activeTab}
           mediaProps={mediaProps}
@@ -920,12 +1080,14 @@ function App() {
             fileInputRef: editorFileInputRef,
             videoRef: editorVideoRef,
             currentClip: editorTimeline[editorActiveClipIndex],
+            editorVideo,
           }}
-        />
-        <RightPanel />
+      />
+        {activeTab === 'editor' && <RightPanel />}
       </div>
-      <BottomTimeline
+      {activeTab === 'editor' && <BottomTimeline
         activeTab={activeTab}
+        style={{ display: activeTab === 'editor' ? 'flex' : 'none' }}
         tracks={timelineTracks}
         currentTime={currentTime}
         totalDuration={effectiveTimelineDuration}
@@ -934,7 +1096,7 @@ function App() {
         onSeek={handlePreviewSeek}
         onSplit={activeTab === 'editor' ? handleEditorSplit : undefined}
         onDelete={activeTab === 'editor' ? handleEditorDelete : undefined}
-      />
+      />}
       <ErrorPopup errorText={errorText} setErrorText={setErrorText} />
     </div>
   );

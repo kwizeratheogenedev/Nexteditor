@@ -53,9 +53,18 @@ export function probeDuration(filePath) {
 }
 
 export function runFFmpeg(args, { duration, onProgress } = {}) {
+  const FFMPEG_TIMEOUT = parseInt(process.env.FFMPEG_TIMEOUT || '3600000', 10); // Default 1 hour
+  
   return new Promise((resolve, reject) => {
     const child = spawn('ffmpeg', args);
     let stderr = '';
+    let timeoutId;
+
+    // Set timeout to kill ffmpeg if it takes too long
+    timeoutId = setTimeout(() => {
+      child.kill('SIGTERM');
+      reject(new Error(`FFmpeg timeout exceeded (${FFMPEG_TIMEOUT}ms)`));
+    }, FFMPEG_TIMEOUT);
 
     child.stderr.on('data', (chunk) => {
       const text = chunk.toString();
@@ -79,9 +88,13 @@ export function runFFmpeg(args, { duration, onProgress } = {}) {
       }
     });
 
-    child.on('error', reject);
+    child.on('error', (error) => {
+      clearTimeout(timeoutId);
+      reject(error);
+    });
 
     child.on('close', (code) => {
+      clearTimeout(timeoutId);
       if (code !== 0) {
         reject(new Error(stderr.trim() || 'ffmpeg failed'));
         return;

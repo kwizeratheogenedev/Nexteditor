@@ -9,6 +9,16 @@ const router = express.Router();
 const clipsDir = path.resolve(process.cwd(), 'clips');
 const BACKEND_URL = process.env.BACKEND_URL || 'http://localhost:3000';
 
+// Validate that a file path is within allowed directories
+function validateFilePath(filePath, allowedBasePath = clipsDir) {
+  if (!filePath || typeof filePath !== 'string') {
+    return false;
+  }
+  const resolvedPath = path.resolve(filePath);
+  const resolvedBase = path.resolve(allowedBasePath);
+  return resolvedPath.startsWith(resolvedBase) && resolvedPath !== resolvedBase;
+}
+
 function emitToClient(req, eventName, payload) {
   const io = getIo();
   const socketId = req.headers['x-socket-id'];
@@ -33,6 +43,12 @@ router.post('/', async (req, res) => {
     const originalVideo = resolveJob(jobId);
     if (!originalVideo) {
       res.status(400).json({ error: 'Unknown or expired job' });
+      return;
+    }
+
+    // Validate the resolved path is safe
+    if (!validateFilePath(originalVideo, clipsDir) && !validateFilePath(originalVideo, path.resolve(process.cwd(), 'uploads'))) {
+      res.status(400).json({ error: 'Invalid file path' });
       return;
     }
 
