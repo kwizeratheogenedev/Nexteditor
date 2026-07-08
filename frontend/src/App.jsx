@@ -7,7 +7,6 @@ import LeftSidebar from './components/LeftSidebar';
 import CenterPanel from './components/CenterPanel';
 import RightPanel from './components/RightPanel';
 import ErrorPopup from './components/ErrorPopup';
-import MediaPanel from './components/MediaPanel';
 import MontageTab from './components/MontageTab';
 import BottomTimeline from './components/BottomTimeline';
 
@@ -1011,6 +1010,7 @@ function App() {
     onVideo2UrlFetch: handleVideo2UrlFetch,
     onVideo3UrlFetch: handleVideo3UrlFetch,
     onAudioUrlFetch: handleAudioUrlFetch,
+    onShurfer: () => setActiveTab('shorts'),
   };
 
   const captionsProps = {
@@ -1042,7 +1042,7 @@ function App() {
     <div id="app-shell">
       <TopBar activeTab={activeTab} onTabChange={setActiveTab} onExport={triggerExport} />
       <div id="main-area">
-        {activeTab === 'editor' && <LeftSidebar activeTab={activeTab} onSelect={setActiveTab} />}
+        <LeftSidebar activeTab={activeTab} onSelect={setActiveTab} />
         <CenterPanel
           activeTab={activeTab}
           mediaProps={mediaProps}

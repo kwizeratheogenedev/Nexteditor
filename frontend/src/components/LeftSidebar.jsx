@@ -73,20 +73,17 @@ function GearIcon() {
 }
 
 const tools = [
-  { id: 'media', label: 'Media', icon: GridIcon, tab: 'media' },
-  { id: 'audio', label: 'Audio', icon: MusicIcon, tab: null },
-  { id: 'text', label: 'Text', icon: TextIcon, tab: null },
-  { id: 'stickers', label: 'Stickers', icon: StarIcon, tab: null },
-  { id: 'effects', label: 'Effects', icon: WandIcon, tab: 'shorts' },
+  { id: 'editor', label: 'Editor', icon: GearIcon, tab: 'editor' },
+  { id: 'media', label: 'Montage', icon: GridIcon, tab: 'media' },
+  { id: 'shorts', label: 'Shorts', icon: WandIcon, tab: 'shorts' },
   { id: 'captions', label: 'Captions', icon: BubbleIcon, tab: 'captions' },
-  { id: 'filters', label: 'Filters', icon: SlidersIcon, tab: null },
 ];
 
 function getActiveTool(activeTab) {
   if (activeTab === 'media') return 'media';
-  if (activeTab === 'shorts') return 'effects';
+  if (activeTab === 'shorts') return 'shorts';
   if (activeTab === 'captions') return 'captions';
-  if (activeTab === 'editor') return 'settings';
+  if (activeTab === 'editor') return 'editor';
   return '';
 }
 
@@ -102,28 +99,13 @@ function LeftSidebar({ activeTab, onSelect }) {
             key={tool.id}
             type="button"
             className={`tool-button ${activeTool === tool.id ? 'is-active' : ''}`}
-            onClick={() => {
-              if (tool.tab) {
-                onSelect(tool.tab);
-              }
-            }}
+            onClick={() => onSelect(tool.tab)}
           >
             <Icon />
             <span>{tool.label}</span>
           </button>
         );
       })}
-
-      <div className="tool-spacer" />
-
-      <button
-        type="button"
-        className={`tool-button ${activeTool === 'settings' ? 'is-active' : ''}`}
-        onClick={() => onSelect('editor')}
-      >
-        <GearIcon />
-        <span>Settings</span>
-      </button>
     </aside>
   );
 }

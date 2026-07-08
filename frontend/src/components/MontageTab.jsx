@@ -516,7 +516,7 @@ function ProcessingPreview({ progress, status }) {
   );
 }
 
-function SuccessPreview({ outputFile, loadVideoInEditor, onReset }) {
+function SuccessPreview({ outputFile, loadVideoInEditor, onShurfer, onReset }) {
   const videoRef = useRef(null);
   const [playing, setPlaying] = useState(false);
   const [currentTime, setCurrentTime] = useState(0);
@@ -615,6 +615,10 @@ function SuccessPreview({ outputFile, loadVideoInEditor, onReset }) {
           <button onClick={() => loadVideoInEditor(outputFile.filePath, outputFile.fileName)}
             style={{ display:'flex', alignItems:'center', gap:6, padding:'7px 14px', background:'transparent', border:'1px solid rgba(124,58,237,.4)', borderRadius:9, color:'#a78bfa', fontSize:11, fontWeight:600, cursor:'pointer', whiteSpace:'nowrap' }}>
             <div style={{ width:13, height:13 }}><Icon.Edit /></div> Edit
+          </button>
+          <button onClick={onShurfer}
+            style={{ display:'flex', alignItems:'center', gap:6, padding:'7px 14px', background:'rgba(34,197,94,.18)', border:'1px solid rgba(34,197,94,.32)', borderRadius:9, color:'#bef264', fontSize:11, fontWeight:600, cursor:'pointer', whiteSpace:'nowrap' }}>
+            <div style={{ width:13, height:13 }}><Icon.Star /></div> Shurfer
           </button>
           <button onClick={onReset}
             style={{ display:'flex', alignItems:'center', justifyContent:'center', padding:'7px 14px', background:'transparent', border:'1px solid #1e1e2a', borderRadius:9, color:'#44445a', fontSize:11, cursor:'pointer' }}>
@@ -794,7 +798,7 @@ export default function MontageTab({ loadVideoInEditor, onError }) {
         <div style={{ flex:1, display:'flex', alignItems:'center', justifyContent:'center', padding:32, borderRight:'1px solid #10101a', background:'#080810' }}>
           {mergeStatus === 'idle'       && <IdlePreview readyCount={readyCount} />}
           {mergeStatus === 'processing' && <ProcessingPreview progress={mergeProgress} status={mergeStageText} />}
-          {mergeStatus === 'success'    && <SuccessPreview outputFile={outputFile} loadVideoInEditor={loadVideoInEditor} onReset={handleReset} />}
+          {mergeStatus === 'success'    && <SuccessPreview outputFile={outputFile} loadVideoInEditor={loadVideoInEditor} onShurfer={onShurfer} onReset={handleReset} />}
           {mergeStatus === 'error'      && <ErrorPreview error={mergeError} onRetry={() => { setMergeStatus('idle'); setMergeError(''); setMergeProgress(0); setMergeStageText(''); }} />}
         </div>
 

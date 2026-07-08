@@ -1,4 +1,3 @@
-import MediaPanel from './MediaPanel';
 import CaptionsPanel from './CaptionsPanel';
 import ShortsPanel from './ShortsPanel';
 import EditorPanel from './EditorPanel';
@@ -103,7 +102,9 @@ function CenterPanel({
 
   return (
     <section className="center-panel">
-      {modePanel}
+      <div className="mode-panel-host">
+        {modePanel}
+      </div>
     </section>
   );
 }
