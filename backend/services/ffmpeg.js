@@ -1,4 +1,20 @@
 import { spawn } from 'child_process';
+import ffmpegPath from 'ffmpeg-static';
+import ffprobePath from 'ffprobe-static';
+
+function resolveBinaryPath(pkgExport) {
+  if (typeof pkgExport === 'string') return pkgExport;
+  if (pkgExport && typeof pkgExport === 'object') {
+    // some packages export an object like { path: '/...'} or default export
+    if (typeof pkgExport.path === 'string') return pkgExport.path;
+    if (typeof pkgExport.default === 'string') return pkgExport.default;
+    if (typeof pkgExport.default === 'object' && typeof pkgExport.default.path === 'string') return pkgExport.default.path;
+  }
+  return null;
+}
+
+const FFMPEG_BINARY = process.env.FFMPEG_PATH || resolveBinaryPath(ffmpegPath) || ffmpegPath;
+const FFPROBE_BINARY = process.env.FFPROBE_PATH || resolveBinaryPath(ffprobePath) || ffprobePath;
 
 function parseProgressLine(line) {
   const timeMatch = line.match(/time=(\d{2}:\d{2}:\d{2}(?:\.\d+)?)/);
@@ -12,7 +28,7 @@ function timecodeToSeconds(timecode) {
 
 export function probeDuration(filePath) {
   return new Promise((resolve, reject) => {
-    const child = spawn('ffprobe', [
+    const child = spawn(FFPROBE_BINARY, [
       '-v',
       'error',
       '-show_entries',
@@ -56,7 +72,7 @@ export function runFFmpeg(args, { duration, onProgress } = {}) {
   const FFMPEG_TIMEOUT = parseInt(process.env.FFMPEG_TIMEOUT || '3600000', 10); // Default 1 hour
   
   return new Promise((resolve, reject) => {
-    const child = spawn('ffmpeg', args);
+    const child = spawn(FFMPEG_BINARY, args);
     let stderr = '';
     let timeoutId;
 

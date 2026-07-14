@@ -999,3 +999,17 @@ input[type="range"] {
   white-space: nowrap;
   border: 0;
 }
+
+.caption-result-card { display: flex; align-items: center; gap: 10px; width: 100%; padding: 11px; border: 1px solid rgba(105, 213, 163, .22); border-radius: 10px; background: rgba(105, 213, 163, .07); }
+.caption-result-card > div { display: flex; min-width: 0; flex: 1; flex-direction: column; gap: 3px; }
+.caption-result-card strong { font-size: 11px; }
+.caption-result-card small { color: #7f8d87; font-size: 9px; }
+.caption-result-card a { padding: 6px 9px; border-radius: 7px; background: #2b473b; color: #8be0b7; font-size: 10px; text-decoration: none; }
+.caption-preview-actions { display: flex; align-items: center; gap: 10px; }
+.caption-preview-toggle { display: flex; padding: 3px; border: 1px solid #302e39; border-radius: 8px; background: #111116; }
+.caption-preview-toggle button { padding: 5px 8px; border-radius: 5px; background: transparent; color: #777681; font-size: 9px; cursor: pointer; }
+.caption-preview-toggle button.is-active { background: #302b45; color: #c9c3ff; }
+.editor-project-title { display: flex; align-items: center; gap: 7px; margin-left: 14px; padding-left: 14px; border-left: 1px solid #2d2b33; color: #696771; font-size: 9px; }
+.editor-project-title i { color: #414048; font-style: normal; }
+.editor-project-title strong { color: #d8d5dd; font-size: 10px; }
+.editor-project-title small { margin-left: 4px; padding: 3px 6px; border-radius: 4px; background: #202027; color: #6f6c77; font-size: 7px; }

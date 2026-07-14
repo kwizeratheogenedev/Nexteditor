@@ -3,7 +3,6 @@ import fs from 'fs';
 import path from 'path';
 import upload from '../middleware/upload.js';
 import { probeDuration, runFFmpeg } from '../services/ffmpeg.js';
-import { deleteJob, registerJob, resolveJob } from '../services/jobStore.js';
 import { getIo } from '../socket.js';
 
 const router = express.Router();
@@ -16,6 +15,19 @@ function emitToClient(req, eventName, payload) {
   if (clientSocket) {
     clientSocket.emit(eventName, payload);
   }
+}
+
+function captionStyle(position) {
+  // Keep this mapping identical to automatic caption rendering.
+  const alignments = { top: 5, center: 8, bottom: 2, 'bottom-left': 1, 'bottom-right': 3 };
+  const alignment = alignments[position] || 2;
+  const marginV = position === 'top' ? 42 : position === 'center' ? 0 : 42;
+  return `Alignment=${alignment},MarginV=${marginV},MarginL=36,MarginR=36`;
+}
+
+function captionedFileName(originalName) {
+  const base = path.parse(originalName || 'video').name.replace(/[^a-zA-Z0-9 _.-]/g, '').trim() || 'video';
+  return `${base}-captioned.mp4`;
 }
 
 router.post(
@@ -47,16 +59,26 @@ router.post(
       // Properly escape subtitle path for ffmpeg filter
       // FFmpeg requires escaping of special characters in filter strings
       const escapedSubPath = subPath.replace(/\\/g, '/').replace(/'/g, "\\'").replace(/:/g, '\\:');
-      const subtitleFilter = `subtitles='${escapedSubPath}'`;
+      const subtitleFilter = `subtitles='${escapedSubPath}':force_style='${captionStyle(req.body.captionPosition)}'`;
 
       await runFFmpeg(
         [
+          '-hide_banner',
+          '-y',
           '-i',
           videoPath,
           '-vf',
           subtitleFilter,
+          '-c:v',
+          'libx264',
+          '-preset',
+          process.env.CAPTION_ENCODE_PRESET || 'veryfast',
+          '-crf',
+          process.env.CAPTION_CRF || '20',
           '-c:a',
           'copy',
+          '-movflags',
+          '+faststart',
           outputPath,
         ],
         {
@@ -68,7 +90,7 @@ router.post(
       );
 
       emitToClient(req, 'ffmpeg-complete', { taskId, status: 'success', outputPath: path.basename(outputPath) });
-      res.download(outputPath, 'subtitled_video.mp4', () => {
+      res.download(outputPath, captionedFileName(files.video[0].originalname), () => {
         for (const filePath of outputFiles) {
           fs.rm(filePath, { force: true }, () => {});
         }

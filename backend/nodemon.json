@@ -1,0 +1,23 @@
+{
+  "watch": [
+    "server.js",
+    "socket.js",
+    "loadEnv.js",
+    "routes",
+    "services",
+    "middleware"
+  ],
+  "ext": "js,mjs,cjs,json",
+  "ignore": [
+    "clips/**",
+    "uploads/**",
+    "whisper/**",
+    "node_modules/**",
+    "*.mp4",
+    "*.mp3",
+    "*.wav",
+    "*.srt"
+  ],
+  "delay": "300",
+  "signal": "SIGTERM"
+}

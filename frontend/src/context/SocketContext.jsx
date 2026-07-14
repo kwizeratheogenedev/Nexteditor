@@ -1,38 +1,111 @@
-import { createContext, useContext, useEffect, useState, useMemo } from 'react';
+import { createContext, useContext, useEffect, useState } from 'react';
 import { io } from 'socket.io-client';
 
 const SocketContext = createContext(null);
 
+function getSocketUrlCandidates() {
+  const configuredUrls = [import.meta.env.VITE_SOCKET_URL, import.meta.env.VITE_API_URL]
+    .filter(Boolean)
+    .map((value) => value.trim());
+
+  if (typeof window === 'undefined') {
+    return configuredUrls;
+  }
+
+  const protocol = window.location.protocol;
+  const host = window.location.hostname;
+  const fallbackUrls = [
+    `${protocol}//${host}:3000`,
+    `${protocol}//localhost:3000`,
+    `${protocol}//127.0.0.1:3000`,
+    `${protocol}//${host}:3001`,
+    `${protocol}//localhost:3001`,
+    `${protocol}//127.0.0.1:3001`,
+  ];
+
+  return Array.from(new Set([...configuredUrls, ...fallbackUrls]));
+}
+
 export function SocketProvider({ children }) {
+  const [socket, setSocket] = useState(null);
   const [socketId, setSocketId] = useState('');
-  
-  // Create socket outside of state to avoid setState in effect
-  const socket = useMemo(() => {
-    const newSocket = io(
-      import.meta.env.VITE_SOCKET_URL || 
-      import.meta.env.VITE_API_URL || 
-      'http://localhost:3000'
-    );
-
-    newSocket.on('connect', () => {
-      setSocketId(newSocket.id);
-    });
-
-    newSocket.on('disconnect', () => {
-      setSocketId('');
-    });
-
-    return newSocket;
-  }, []);
+  const [socketError, setSocketError] = useState('');
 
   useEffect(() => {
-    return () => {
-      socket.disconnect();
+    const urls = getSocketUrlCandidates();
+    let cancelled = false;
+    let attemptIndex = 0;
+    let currentSocket = null;
+
+    const connectNextUrl = () => {
+      if (cancelled) {
+        return;
+      }
+
+      const url = urls[attemptIndex];
+      if (!url) {
+        setSocketError('Could not connect to montage progress service');
+        return;
+      }
+
+      const socketInstance = io(url, {
+        transports: ['websocket', 'polling'],
+        reconnection: true,
+        reconnectionAttempts: 3,
+        reconnectionDelay: 600,
+        timeout: 4000,
+      });
+
+      currentSocket = socketInstance;
+      setSocket(socketInstance);
+
+      const handleConnect = () => {
+        setSocketId(socketInstance.id || '');
+        setSocketError('');
+      };
+
+      const handleDisconnect = () => {
+        setSocketId('');
+      };
+
+      const handleConnectError = (error) => {
+        if (cancelled) {
+          return;
+        }
+
+        if (attemptIndex < urls.length - 1) {
+          attemptIndex += 1;
+          socketInstance.disconnect();
+          connectNextUrl();
+          return;
+        }
+
+        setSocketError(error?.message || 'Could not connect to montage progress service');
+        setSocketId('');
+      };
+
+      socketInstance.on('connect', handleConnect);
+      socketInstance.on('disconnect', handleDisconnect);
+      socketInstance.on('connect_error', handleConnectError);
+      socketInstance.on('connect_failed', handleConnectError);
+
+      if (socketInstance.connected) {
+        handleConnect();
+      }
     };
-  }, [socket]);
+
+    connectNextUrl();
+
+    return () => {
+      cancelled = true;
+      if (currentSocket) {
+        currentSocket.disconnect();
+      }
+    };
+  }, []);
 
   return (
-    <SocketContext.Provider value={{ socket, socketId }}>
+    <SocketContext.Provider value={{ socket, socketId, socketError }}>
       {children}
     </SocketContext.Provider>
   );

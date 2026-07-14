@@ -265,7 +265,15 @@ function App() {
       return;
     }
 
-    setter(file);
+    setter((current) => ({
+      ...(current && !(current instanceof File) ? current : {}),
+      sourceMode: 'device',
+      file,
+      fileName: file.name,
+      status: 'ready',
+      progress: 100,
+      error: '',
+    }));
     metaSetter({
       name: file.name,
       size: file.size,
@@ -466,9 +474,10 @@ function App() {
     }
   };
 
-  const handleCaptionConvert = async () => {
-    if (!captionVideoState.file || !captionFileState.file) {
-      setErrorText('Please upload exactly 1 Video and 1 Subtitle file.');
+  const handleCaptionConvert = async (mode = 'local', options = {}) => {
+    const isAutomatic = mode === 'auto' || mode === 'lyrics';
+    if (!captionVideoState.file || (!isAutomatic && !captionFileState.file)) {
+      setErrorText(isAutomatic ? 'Please upload a video to generate captions.' : 'Please upload exactly 1 Video and 1 Subtitle file.');
       return;
     }
 
@@ -479,22 +488,61 @@ function App() {
 
     const formData = new FormData();
     formData.append("video", captionVideoState.file);
-    formData.append("subtitle", captionFileState.file);
+    if (!isAutomatic) formData.append("subtitle", captionFileState.file);
+    if (isAutomatic) {
+      formData.append('mode', mode);
+      formData.append('language', options.language || 'English (US)');
+      formData.append('source', options.source || 'All audio');
+      formData.append('removeFillers', String(Boolean(options.removeFillers)));
+    }
+    formData.append('captionPosition', options.captionPosition || 'bottom');
 
     try {
-      const response = await fetch(API_ENDPOINTS.burnSubtitles, {
-        method: 'POST',
-        headers: socketId ? { 'X-Socket-Id': socketId } : {},
-        body: formData,
+      const blob = await new Promise((resolve, reject) => {
+        const request = new XMLHttpRequest();
+        const jobId = globalThis.crypto?.randomUUID?.() || `${Date.now()}-${Math.random().toString(16).slice(2)}`;
+        let progressTimer;
+        request.open('POST', isAutomatic ? API_ENDPOINTS.generateCaptions : API_ENDPOINTS.burnSubtitles);
+        request.responseType = 'blob';
+        if (socketId) request.setRequestHeader('X-Socket-Id', socketId);
+        if (isAutomatic) request.setRequestHeader('X-Job-Id', jobId);
+        request.upload.onprogress = (event) => {
+          if (!event.lengthComputable) return;
+          const uploadPercent = Math.max(1, Math.min(10, (event.loaded / event.total) * 10));
+          setProgress({ percent: uploadPercent, currentTime: `Uploading video ${Math.round((event.loaded / event.total) * 100)}%...` });
+        };
+        if (isAutomatic) {
+          progressTimer = setInterval(async () => {
+            try {
+              const response = await fetch(`${API_ENDPOINTS.generateCaptions}/progress/${jobId}`, { cache: 'no-store' });
+              if (!response.ok) return;
+              const status = await response.json();
+              if (status.percent > 10 || status.currentTime !== 'Waiting for upload...') setProgress(status);
+            } catch { /* socket progress remains available */ }
+          }, 750);
+        }
+        request.onerror = () => {
+          clearInterval(progressTimer);
+          reject(new Error('Unable to reach the caption server.'));
+        };
+        request.onload = async () => {
+          clearInterval(progressTimer);
+          if (request.status >= 200 && request.status < 300) {
+            resolve(request.response);
+            return;
+          }
+          let message = `Caption generation failed (${request.status})`;
+          try {
+            const payload = JSON.parse(await request.response.text());
+            message = payload.error || message;
+          } catch { /* response was not JSON */ }
+          reject(new Error(message));
+        };
+        request.send(formData);
       });
-
-      if (!response.ok) {
-        throw new Error(await readErrorMessage(response));
-      }
-
-      const blob = await response.blob();
       const url = URL.createObjectURL(blob);
       setResultUrl(url);
+      setProgress({ percent: 100, currentTime: 'Captioned video ready' });
     } catch (error) {
       console.error(error);
       setErrorText(error.message || 'Error burning subtitles');
@@ -521,18 +569,40 @@ function App() {
     formData.append('aspectRatio', shortsFormat);
 
     try {
-      const response = await fetch(API_ENDPOINTS.extractShorts, {
-        method: 'POST',
-        headers: socketId ? { 'X-Socket-Id': socketId } : {},
-        body: formData,
+      const data = await new Promise((resolve, reject) => {
+        const request = new XMLHttpRequest();
+        const jobId = globalThis.crypto?.randomUUID?.() || `${Date.now()}-${Math.random().toString(16).slice(2)}`;
+        let progressTimer;
+        request.open('POST', API_ENDPOINTS.extractShorts);
+        request.responseType = 'json';
+        request.setRequestHeader('X-Job-Id', jobId);
+        if (socketId) request.setRequestHeader('X-Socket-Id', socketId);
+        request.upload.onprogress = (event) => {
+          if (!event.lengthComputable) return;
+          const percent = event.loaded / event.total;
+          setProgress({ percent: Math.max(1, percent * 10), currentTime: `Uploading source video ${Math.round(percent * 100)}%...` });
+        };
+        progressTimer = setInterval(async () => {
+          try {
+            const response = await fetch(`${API_ENDPOINTS.extractShorts}/progress/${jobId}`, { cache: 'no-store' });
+            if (!response.ok) return;
+            const status = await response.json();
+            if (status.percent > 10 || status.currentTime !== 'Waiting for upload...') setProgress(status);
+          } catch { /* socket updates remain available */ }
+        }, 750);
+        request.onerror = () => {
+          clearInterval(progressTimer);
+          reject(new Error('Unable to reach the shorts server.'));
+        };
+        request.onload = () => {
+          clearInterval(progressTimer);
+          if (request.status >= 200 && request.status < 300) resolve(request.response);
+          else reject(new Error(request.response?.error || `Shorts generation failed (${request.status})`));
+        };
+        request.send(formData);
       });
-
-      if (!response.ok) {
-        throw new Error(await readErrorMessage(response));
-      }
-
-      const data = await response.json();
       setShortsResults(data.shorts);
+      setProgress({ percent: 100, currentTime: `${data.shorts.length} shorts ready` });
     } catch (error) {
       console.error(error);
       setErrorText(error.message || 'Error extracting shorts');
@@ -1022,13 +1092,18 @@ function App() {
     onCaptionVideoUrlFetch: handleCaptionVideoUrlFetch,
     captionVideoMeta,
     captionFileMeta,
+    onGenerate: handleCaptionConvert,
+    processing,
+    progress: progress?.percent || 0,
+    progressText: progress?.currentTime || '',
+    resultUrl,
   };
 
   const shortsProps = {
     shortsVideo: shortsVideoState.file,
     shortsVideoRef,
     handleVideoSelect,
-    setShortsVideoState,
+    setShortsVideo: setShortsVideoState,
     onShortsVideoUrlFetch: handleShortsVideoUrlFetch,
     shortsVideoMeta,
     setShortsVideoMeta,
@@ -1036,6 +1111,14 @@ function App() {
     setDuration: setShortsDuration,
     format: shortsFormat,
     setFormat: setShortsFormat,
+    onGenerate: handleShortsConvert,
+    processing,
+    progress: progress?.percent || 0,
+    progressText: progress?.currentTime || '',
+    results: shortsResults || [],
+    selectedShortId,
+    onSelectShort: setSelectedShortId,
+    onDownload: handleShortDownload,
   };
 
   return (
@@ -1075,6 +1158,7 @@ function App() {
             onDismissBanner: () => setEditorBannerVisible(false),
             timeline: editorTimeline,
             activeClipIndex: editorActiveClipIndex,
+            onSelectClip: setEditorActiveClipIndex,
             onImportClick: () => editorFileInputRef.current?.click(),
             onUpload: handleEditorUpload,
             fileInputRef: editorFileInputRef,

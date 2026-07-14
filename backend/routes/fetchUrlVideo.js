@@ -84,7 +84,7 @@ function getEventNames(mediaType) {
  * Download video from YouTube using yt-dlp
  * Requires: yt-dlp CLI tool installed on the system
  */
-async function downloadYouTubeVideo(url, outputPath, socketId, progressEvent) {
+async function downloadYouTubeVideo(url, outputPath, socketId, progressEvent, slotId) {
   return new Promise((resolve, reject) => {
     // yt-dlp command: download best video format as mp4
     const args = [
@@ -102,7 +102,7 @@ async function downloadYouTubeVideo(url, outputPath, socketId, progressEvent) {
       const progressMatch = chunk.toString().match(/(\d+\.\d+)%/);
       if (progressMatch) {
         const percent = parseFloat(progressMatch[1]);
-        emitProgress(socketId, progressEvent, { percent });
+        emitProgress(socketId, progressEvent, { percent, slotId });
       }
     });
 
@@ -123,7 +123,7 @@ async function downloadYouTubeVideo(url, outputPath, socketId, progressEvent) {
 /**
  * Download video from HTTP/HTTPS URL using native fetch with progress tracking
  */
-async function downloadHttpVideo(url, outputPath, socketId, progressEvent) {
+async function downloadHttpVideo(url, outputPath, socketId, progressEvent, slotId) {
   try {
     const response = await fetch(url, {
       method: 'GET',
@@ -163,7 +163,7 @@ async function downloadHttpVideo(url, outputPath, socketId, progressEvent) {
       
       if (totalLength) {
         const percent = (downloadedLength / parseInt(totalLength)) * 100;
-        emitProgress(socketId, progressEvent, { percent: Math.round(percent) });
+        emitProgress(socketId, progressEvent, { percent: Math.round(percent), slotId });
       }
     }
 
@@ -183,7 +183,7 @@ async function downloadHttpVideo(url, outputPath, socketId, progressEvent) {
  * Main POST route handler
  */
 router.post('/', async (req, res) => {
-  const { url, socketId, type } = req.body;
+  const { url, socketId, type, slotId } = req.body;
   const mediaType = type === 'audio' ? 'audio' : 'video';
   const events = getEventNames(mediaType);
 
@@ -196,7 +196,7 @@ router.post('/', async (req, res) => {
   const outputPath = path.join(uploadsDir, filename);
 
   try {
-    emitProgress(socketId, events.progress, { percent: 0 });
+    emitProgress(socketId, events.progress, { percent: 0, slotId });
 
     const { type: sourceType, originalUrl } = detectUrlType(url_trimmed);
     let downloadUrl = originalUrl;
@@ -204,20 +204,20 @@ router.post('/', async (req, res) => {
     // Convert platform-specific URLs to direct download URLs
     if (sourceType === 'gdrive') {
       downloadUrl = convertGdriveUrl(originalUrl);
-      emitProgress(socketId, events.progress, { percent: 5, status: 'Converting Google Drive link...' });
+      emitProgress(socketId, events.progress, { percent: 5, status: 'Converting Google Drive link...', slotId });
     } else if (sourceType === 'dropbox') {
       downloadUrl = convertDropboxUrl(originalUrl);
-      emitProgress(socketId, events.progress, { percent: 5, status: 'Converting Dropbox link...' });
+      emitProgress(socketId, events.progress, { percent: 5, status: 'Converting Dropbox link...', slotId });
     } else if (sourceType === 'youtube') {
-      emitProgress(socketId, events.progress, { percent: 5, status: `Downloading YouTube ${mediaType}...` });
+      emitProgress(socketId, events.progress, { percent: 5, status: `Downloading YouTube ${mediaType}...`, slotId });
     }
 
     // Execute appropriate download method
     if (sourceType === 'youtube') {
-      await downloadYouTubeVideo(downloadUrl, outputPath, socketId, events.progress);
+      await downloadYouTubeVideo(downloadUrl, outputPath, socketId, events.progress, slotId);
     } else {
       // Google Drive, Dropbox, or direct URLs
-      await downloadHttpVideo(downloadUrl, outputPath, socketId, events.progress);
+      await downloadHttpVideo(downloadUrl, outputPath, socketId, events.progress, slotId);
     }
 
     // Verify file exists and get duration
@@ -225,10 +225,10 @@ router.post('/', async (req, res) => {
       throw new Error('Download completed but file not found');
     }
 
-    emitProgress(socketId, events.progress, { percent: 90, status: `Probing ${mediaType} duration...` });
+    emitProgress(socketId, events.progress, { percent: 90, status: `Probing ${mediaType} duration...`, slotId });
     const duration = await probeDuration(outputPath);
 
-    emitProgress(socketId, events.progress, { percent: 100, status: 'Complete' });
+    emitProgress(socketId, events.progress, { percent: 100, status: 'Complete', slotId });
 
     // Return file info
     res.json({
@@ -244,7 +244,7 @@ router.post('/', async (req, res) => {
     }
 
     const errorMessage = err.message || 'Unknown error occurred';
-    emitProgress(socketId, events.error, { error: errorMessage });
+    emitProgress(socketId, events.error, { error: errorMessage, slotId });
 
     res.status(400).json({ error: errorMessage });
   }

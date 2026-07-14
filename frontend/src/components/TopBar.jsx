@@ -1,4 +1,4 @@
-function TopBar({ activeTab, onExport }) {
+function TopBar({ activeTab }) {
   return (
     <header className="topbar">
       <div className="topbar-left">
@@ -6,6 +6,7 @@ function TopBar({ activeTab, onExport }) {
           <span className="brand-mark-primary">Nex</span>
           <span className="brand-mark-accent">Editor</span>
         </div>
+        {activeTab === 'editor' && <div className="editor-project-title"><span>Projects</span><i>/</i><strong>Untitled project</strong><small>Saved locally</small></div>}
       </div>
 
       <div className="topbar-right">
@@ -16,7 +17,7 @@ function TopBar({ activeTab, onExport }) {
             <span className="topbar-pill">16:9</span>
           </>
         )}
-        <button type="button" className="topbar-export" onClick={onExport}>Export</button>
+        {/* Global export removed per request */}
       </div>
     </header>
   );
