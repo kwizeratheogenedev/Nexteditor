@@ -1,5 +1,6 @@
-import { useEffect, useRef, useState } from 'react';
+import { useEffect, useRef, useState, useCallback } from 'react';
 import { useSocket } from '../context/SocketContext';
+import { usePersistedMontageState } from '../hooks/usePersistedMontageState';
 import API_BASE, { API_ENDPOINTS } from '../config';
 
 // ─── Utilities ────────────────────────────────────────────────────────────────
@@ -95,6 +96,36 @@ const Icon = {
   Maximize: () => (
     <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
       <path d="M8 3H5a2 2 0 0 0-2 2v3m18 0V5a2 2 0 0 0-2-2h-3m0 18h3a2 2 0 0 0 2-2v-3M3 16v3a2 2 0 0 0 2 2h3"/>
+    </svg>
+  ),
+  Minimize: () => (
+    <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
+      <path d="M8 3v3a2 2 0 0 1-2 2H3m18 0h-3a2 2 0 0 1-2-2V3m0 18v-3a2 2 0 0 1 2-2h3M3 16h3a2 2 0 0 1 2 2v3"/>
+    </svg>
+  ),
+  VolumeUp: () => (
+    <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
+      <polygon points="11 5 6 9 2 9 2 15 6 15 11 19 11 5"/><path d="M19.07 4.93a10 10 0 0 1 0 14.14M15.54 8.46a5 5 0 0 1 0 7.07"/>
+    </svg>
+  ),
+  VolumeMute: () => (
+    <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
+      <polygon points="11 5 6 9 2 9 2 15 6 15 11 19 11 5"/><line x1="23" y1="9" x2="17" y2="15"/><line x1="17" y1="9" x2="23" y2="15"/>
+    </svg>
+  ),
+  SkipForward: () => (
+    <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
+      <polygon points="5 4 15 12 5 20 5 4"/><line x1="19" y1="5" x2="19" y2="19"/>
+    </svg>
+  ),
+  SkipBack: () => (
+    <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
+      <polygon points="19 4 9 12 19 20 19 4"/><line x1="5" y1="5" x2="5" y2="19"/>
+    </svg>
+  ),
+  Settings: () => (
+    <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
+      <circle cx="12" cy="12" r="3"/><path d="M19.4 15a1.65 1.65 0 0 0 .33 1.82l.06.06a2 2 0 0 1 0 2.83 2 2 0 0 1-2.83 0l-.06-.06a1.65 1.65 0 0 0-1.82-.33 1.65 1.65 0 0 0-1 1.51V21a2 2 0 0 1-2 2 2 2 0 0 1-2-2v-.09A1.65 1.65 0 0 0 9 19.4a1.65 1.65 0 0 0-1.82.33l-.06.06a2 2 0 0 1-2.83 0 2 2 0 0 1 0-2.83l.06-.06A1.65 1.65 0 0 0 4.6 15a1.65 1.65 0 0 0-1.51-1H2a2 2 0 0 1-2-2 2 2 0 0 1 2-2h.09A1.65 1.65 0 0 0 4.6 9a1.65 1.65 0 0 0-.33-1.82l-.06-.06a2 2 0 0 1 0-2.83 2 2 0 0 1 2.83 0l.06.06A1.65 1.65 0 0 0 9 4.6a1.65 1.65 0 0 0 1-1.51V2a2 2 0 0 1 2-2 2 2 0 0 1 2 2v.09a1.65 1.65 0 0 0 1 1.51 1.65 1.65 0 0 0 1.82-.33l.06-.06a2 2 0 0 1 2.83 0 2 2 0 0 1 0 2.83l-.06.06a1.65 1.65 0 0 0-.33 1.82V9a1.65 1.65 0 0 0 1.51 1H21a2 2 0 0 1 2 2 2 2 0 0 1-2 2h-.09a1.65 1.65 0 0 0-1.51 1z"/>
     </svg>
   ),
   Plus: () => (
@@ -622,7 +653,7 @@ function IdlePreview({ readyCount }) {
   );
 }
 
-function ProcessingPreview({ progress, status }) {
+function ProcessingPreview({ progress, status, totalEstimatedTime, timeSpent, timeLeft }) {
   const fallbackStatus =
     progress < 15 ? 'Preparing montage...' :
     progress < 60 ? 'Creating random clips...' :
@@ -631,6 +662,13 @@ function ProcessingPreview({ progress, status }) {
   const r = 44;
   const circ = 2 * Math.PI * r;
   const offset = circ - (progress / 100) * circ;
+
+  const formatTime = (seconds) => {
+    if (!seconds || seconds <= 0) return '';
+    const m = Math.floor(seconds / 60);
+    const s = seconds % 60;
+    return m > 0 ? `${m}m ${s}s` : `${s}s`;
+  };
 
   return (
     <div className="mt-fade-up" style={{ display:'flex', flexDirection:'column', alignItems:'center', gap:20, textAlign:'center' }}>
@@ -649,6 +687,13 @@ function ProcessingPreview({ progress, status }) {
       <div>
         <div style={{ fontSize:15, fontWeight:600, color:'#c0c0d8', marginBottom:6 }}>Creating Your Montage</div>
         <div style={{ fontSize:12, color:'#44445a' }}>{status || fallbackStatus}</div>
+        {(totalEstimatedTime > 0 || timeSpent > 0 || timeLeft > 0) && (
+          <div style={{ fontSize:11, color:'#6f6f8f', marginTop:6, display:'flex', gap:12, justifyContent:'center', flexWrap:'wrap' }}>
+            {totalEstimatedTime > 0 && <span>Total: {formatTime(totalEstimatedTime)}</span>}
+            {timeSpent > 0 && <span>Spent: {formatTime(timeSpent)}</span>}
+            {timeLeft > 0 && <span>Left: {formatTime(timeLeft)}</span>}
+          </div>
+        )}
       </div>
     </div>
   );
@@ -656,16 +701,86 @@ function ProcessingPreview({ progress, status }) {
 
 function SuccessPreview({ outputFile, loadVideoInEditor, onShurfer, onReset }) {
   const videoRef = useRef(null);
+  const containerRef = useRef(null);
   const [playing, setPlaying] = useState(false);
   const [currentTime, setCurrentTime] = useState(0);
   const [dur, setDur] = useState(0);
+  const [volume, setVolume] = useState(1);
+  const [prevVolume, setPrevVolume] = useState(1);
+  const [isMuted, setIsMuted] = useState(false);
+  const [playbackRate, setPlaybackRate] = useState(1);
+  const [showControls, setShowControls] = useState(true);
   const [isDownloading, setIsDownloading] = useState(false);
+  const [showVolumeSlider, setShowVolumeSlider] = useState(false);
+  const [showSpeedMenu, setShowSpeedMenu] = useState(false);
+  const hideTimerRef = useRef(null);
   const src = outputFile.fileName ? `${API_BASE}/clips/${outputFile.fileName}` : '';
 
-  const toggle = () => {
+  const resetHideTimer = useCallback(() => {
+    if (hideTimerRef.current) clearTimeout(hideTimerRef.current);
+    setShowControls(true);
+    if (playing) {
+      hideTimerRef.current = setTimeout(() => setShowControls(false), 2500);
+    }
+  }, [playing]);
+
+  const toggle = useCallback(() => {
     if (!videoRef.current) return;
-    playing ? videoRef.current.pause() : videoRef.current.play();
-    setPlaying(!playing);
+    if (videoRef.current.paused) {
+      videoRef.current.play();
+    } else {
+      videoRef.current.pause();
+    }
+  }, []);
+
+  const seek = useCallback((delta) => {
+    if (!videoRef.current) return;
+    videoRef.current.currentTime = Math.max(0, Math.min(dur, videoRef.current.currentTime + delta));
+  }, [dur]);
+
+  const toggleMute = useCallback(() => {
+    if (!videoRef.current) return;
+    if (videoRef.current.muted || volume === 0) {
+      videoRef.current.muted = false;
+      const restore = prevVolume || 1;
+      videoRef.current.volume = restore;
+      setVolume(restore);
+      setIsMuted(false);
+    } else {
+      setPrevVolume(volume);
+      videoRef.current.muted = true;
+      setIsMuted(true);
+    }
+  }, [volume, prevVolume]);
+
+  const changeVolume = (e) => {
+    if (!videoRef.current) return;
+    const newVolume = parseFloat(e.target.value);
+    videoRef.current.volume = newVolume;
+    setVolume(newVolume);
+    setIsMuted(newVolume === 0);
+  };
+
+  const changeSpeed = (rate) => {
+    if (!videoRef.current) return;
+    videoRef.current.playbackRate = rate;
+    setPlaybackRate(rate);
+    setShowSpeedMenu(false);
+  };
+
+  const toggleFullscreen = useCallback(() => {
+    if (!containerRef.current) return;
+    if (document.fullscreenElement) {
+      document.exitFullscreen?.();
+    } else {
+      containerRef.current.requestFullscreen?.();
+    }
+  }, []);
+
+  const handleProgressClick = (e) => {
+    if (!videoRef.current || !dur) return;
+    const r = e.currentTarget.getBoundingClientRect();
+    videoRef.current.currentTime = ((e.clientX - r.left) / r.width) * dur;
   };
 
   const handleDownload = async () => {
@@ -690,74 +805,192 @@ function SuccessPreview({ outputFile, loadVideoInEditor, onShurfer, onReset }) {
     }
   };
 
+  useEffect(() => {
+    const handleKeyDown = (e) => {
+      if (!videoRef.current) return;
+      const tag = document.activeElement?.tagName?.toLowerCase();
+      if (tag === 'input' || tag === 'textarea' || tag === 'select') return;
+
+      switch (e.key.toLowerCase()) {
+        case ' ':
+          e.preventDefault();
+          toggle();
+          break;
+        case 'arrowleft':
+          e.preventDefault();
+          seek(-5);
+          break;
+        case 'arrowright':
+          e.preventDefault();
+          seek(5);
+          break;
+        case 'arrowup':
+          e.preventDefault();
+          if (videoRef.current) {
+            const newVol = Math.min(1, volume + 0.1);
+            videoRef.current.volume = newVol;
+            setVolume(newVol);
+            setIsMuted(false);
+          }
+          break;
+        case 'arrowdown':
+          e.preventDefault();
+          if (videoRef.current) {
+            const newVol = Math.max(0, volume - 0.1);
+            videoRef.current.volume = newVol;
+            setVolume(newVol);
+            setIsMuted(newVol === 0);
+          }
+          break;
+        case 'm':
+          toggleMute();
+          break;
+        case 'f':
+          toggleFullscreen();
+          break;
+        default:
+          break;
+      }
+    };
+
+    window.addEventListener('keydown', handleKeyDown);
+    return () => window.removeEventListener('keydown', handleKeyDown);
+  }, [volume, dur, playing, toggle, seek, toggleMute, toggleFullscreen]);
+
+  useEffect(() => {
+    if (playing) {
+      resetHideTimer();
+    } else {
+      if (hideTimerRef.current) clearTimeout(hideTimerRef.current);
+      setShowControls(true);
+    }
+    return () => {
+      if (hideTimerRef.current) clearTimeout(hideTimerRef.current);
+    };
+  }, [playing, resetHideTimer]);
+
   const pct = dur ? (currentTime / dur) * 100 : 0;
 
   return (
-    <div className="mt-fade-up" style={{ width:'100%', maxWidth:560, display:'flex', flexDirection:'column', gap:16 }}>
+    <div className="mt-fade-up" style={{ width:'100%', maxWidth:560, display:'flex', flexDirection:'column', gap:12 }}>
       {/* video player */}
-      <div className="mt-video-container" style={{ position:'relative', borderRadius:14, overflow:'hidden', background:'#000', aspectRatio:'16/9', border:'1px solid #1c1c28', cursor:'pointer' }} onClick={toggle}>
-        <video ref={videoRef} src={src} style={{ width:'100%', height:'100%', objectFit:'contain' }}
+      <div
+        ref={containerRef}
+        className="mt-video-container"
+        style={{ position:'relative', borderRadius:14, overflow:'hidden', background:'#000', aspectRatio:'16/9', border:'1px solid #1c1c28', cursor:'pointer' }}
+        onMouseMove={resetHideTimer}
+        onMouseLeave={() => playing && setShowControls(false)}
+        onClick={toggle}
+        onDoubleClick={(e) => { e.stopPropagation(); toggleFullscreen(); }}
+      >
+        <video
+          ref={videoRef}
+          src={src}
+          style={{ width:'100%', height:'100%', objectFit:'contain' }}
           onTimeUpdate={() => setCurrentTime(videoRef.current?.currentTime || 0)}
-          onLoadedMetadata={() => setDur(videoRef.current?.duration || 0)}
+          onLoadedMetadata={() => { setDur(videoRef.current?.duration || 0); setVolume(videoRef.current?.volume || 1); }}
           onEnded={() => { setPlaying(false); setCurrentTime(0); }}
-          onPlay={() => setPlaying(true)} onPause={() => setPlaying(false)}
+          onPlay={() => setPlaying(true)}
+          onPause={() => setPlaying(false)}
         />
-        <div className="mt-video-overlay">
-          <div style={{ width:52, height:52, borderRadius:15, background:'rgba(124,58,237,.85)', display:'flex', alignItems:'center', justifyContent:'center', color:'#fff', backdropFilter:'blur(4px)' }}>
-            <div style={{ width:22, height:22, marginLeft: playing ? 0 : 2 }}>{playing ? <Icon.Pause /> : <Icon.Play />}</div>
-          </div>
-        </div>
-        {/* fullscreen */}
-        <button onClick={e => { e.stopPropagation(); videoRef.current?.requestFullscreen?.(); }}
-          style={{ position:'absolute', top:10, right:10, width:30, height:30, borderRadius:8, background:'rgba(0,0,0,.55)', border:'none', color:'rgba(255,255,255,.7)', cursor:'pointer', display:'flex', alignItems:'center', justifyContent:'center', backdropFilter:'blur(4px)' }}>
-          <div style={{ width:14, height:14 }}><Icon.Maximize /></div>
-        </button>
-        {/* progress bar */}
-        <div style={{ position:'absolute', bottom:0, left:0, right:0, height:2, background:'rgba(255,255,255,.08)' }}>
-          <div style={{ height:'100%', background:'#7c3aed', width:`${pct}%`, transition:'width .1s linear' }} />
-        </div>
-      </div>
 
-      {/* time + controls row */}
-      <div style={{ display:'flex', alignItems:'center', gap:12 }}>
-        <button onClick={toggle} style={{ width:36, height:36, borderRadius:10, background:'#7c3aed', border:'none', color:'#fff', cursor:'pointer', display:'flex', alignItems:'center', justifyContent:'center', flexShrink:0 }}>
-          <div style={{ width:16, height:16, marginLeft: playing ? 0 : 1 }}>{playing ? <Icon.Pause /> : <Icon.Play />}</div>
-        </button>
-        <div style={{ flex:1 }}>
-          <div style={{ height:3, background:'#1a1a24', borderRadius:99, overflow:'hidden', cursor:'pointer' }}
-            onClick={e => { if (!videoRef.current || !dur) return; const r = e.currentTarget.getBoundingClientRect(); videoRef.current.currentTime = ((e.clientX - r.left) / r.width) * dur; }}>
-            <div style={{ height:'100%', background:'#7c3aed', width:`${pct}%`, transition:'width .1s linear', borderRadius:99 }} />
+        {/* center play/pause overlay */}
+        {!playing && (
+          <div className="mt-video-overlay" style={{ opacity: 1, transition:'opacity .2s' }}>
+            <div style={{ width:52, height:52, borderRadius:15, background:'rgba(124,58,237,.85)', display:'flex', alignItems:'center', justifyContent:'center', color:'#fff', backdropFilter:'blur(4px)' }}>
+              <div style={{ width:22, height:22, marginLeft:2 }}><Icon.Play /></div>
+            </div>
           </div>
-          <div style={{ display:'flex', justifyContent:'space-between', marginTop:4 }}>
-            <span style={{ fontSize:10, color:'#33334a' }}>{formatDuration(currentTime)}</span>
-            <span style={{ fontSize:10, color:'#33334a' }}>{formatDuration(dur)}</span>
+        )}
+
+        {/* top controls */}
+        <div style={{ position:'absolute', top:0, left:0, right:0, padding:'10px 12px', display:'flex', justifyContent:'space-between', opacity: showControls ? 1 : 0, transition:'opacity .25s', pointerEvents: showControls ? 'auto' : 'none' }}>
+          <div style={{ display:'flex', gap:6 }}>
+            <button onClick={(e) => { e.stopPropagation(); seek(-10); }} style={{ width:32, height:32, borderRadius:8, background:'rgba(0,0,0,.5)', border:'none', color:'rgba(255,255,255,.85)', cursor:'pointer', display:'flex', alignItems:'center', justifyContent:'center', backdropFilter:'blur(4px)' }} title="Back 10s">
+              <div style={{ width:14, height:14 }}><Icon.SkipBack /></div>
+            </button>
+            <button onClick={(e) => { e.stopPropagation(); seek(10); }} style={{ width:32, height:32, borderRadius:8, background:'rgba(0,0,0,.5)', border:'none', color:'rgba(255,255,255,.85)', cursor:'pointer', display:'flex', alignItems:'center', justifyContent:'center', backdropFilter:'blur(4px)' }} title="Forward 10s">
+              <div style={{ width:14, height:14 }}><Icon.SkipForward /></div>
+            </button>
+          </div>
+          <button onClick={(e) => { e.stopPropagation(); toggleFullscreen(); }} style={{ width:32, height:32, borderRadius:8, background:'rgba(0,0,0,.5)', border:'none', color:'rgba(255,255,255,.85)', cursor:'pointer', display:'flex', alignItems:'center', justifyContent:'center', backdropFilter:'blur(4px)' }} title="Fullscreen">
+            <div style={{ width:14, height:14 }}>{document.fullscreenElement ? <Icon.Minimize /> : <Icon.Maximize />}</div>
+          </button>
+        </div>
+
+        {/* bottom controls */}
+        <div style={{ position:'absolute', bottom:0, left:0, right:0, padding:'10px 12px', opacity: showControls ? 1 : 0, transition:'opacity .25s', pointerEvents: showControls ? 'auto' : 'none' }}>
+          {/* progress bar */}
+          <div style={{ position:'relative', height:14, display:'flex', alignItems:'center', cursor:'pointer', marginBottom:4 }} onClick={handleProgressClick}>
+            <div style={{ position:'absolute', left:0, right:0, height:3, background:'rgba(255,255,255,.15)', borderRadius:99, overflow:'hidden' }}>
+              <div style={{ height:'100%', background:'#7c3aed', width:`${pct}%`, transition:'width .1s linear', borderRadius:99 }} />
+            </div>
+            <div style={{ position:'absolute', left:`${pct}%`, width:10, height:10, borderRadius:'50%', background:'#fff', transform:'translate(-50%, 0)', boxShadow:'0 0 4px rgba(0,0,0,.4)', transition:'left .1s linear' }} />
+          </div>
+
+          {/* controls row */}
+          <div style={{ display:'flex', alignItems:'center', gap:8 }}>
+            <button onClick={(e) => { e.stopPropagation(); toggle(); }} style={{ width:32, height:32, borderRadius:8, background:'transparent', border:'none', color:'#fff', cursor:'pointer', display:'flex', alignItems:'center', justifyContent:'center', flexShrink:0 }}>
+              <div style={{ width:14, height:14 }}>{playing ? <Icon.Pause /> : <Icon.Play />}</div>
+            </button>
+
+            <button onClick={(e) => { e.stopPropagation(); seek(-5); }} style={{ width:28, height:28, borderRadius:6, background:'transparent', border:'none', color:'rgba(255,255,255,.7)', cursor:'pointer', display:'flex', alignItems:'center', justifyContent:'center' }} title="Back 5s">
+              <div style={{ width:12, height:12 }}><Icon.SkipBack /></div>
+            </button>
+            <button onClick={(e) => { e.stopPropagation(); seek(5); }} style={{ width:28, height:28, borderRadius:6, background:'transparent', border:'none', color:'rgba(255,255,255,.7)', cursor:'pointer', display:'flex', alignItems:'center', justifyContent:'center' }} title="Forward 5s">
+              <div style={{ width:12, height:12 }}><Icon.SkipForward /></div>
+            </button>
+
+            <span style={{ fontSize:10, color:'rgba(255,255,255,.7)', minWidth:72, textAlign:'center', fontVariantNumeric:'tabular-nums' }}>
+              {formatDuration(currentTime)} / {formatDuration(dur)}
+            </span>
+
+            <div style={{ flex:1 }} />
+
+            {/* volume */}
+            <div style={{ display:'flex', alignItems:'center', gap:4 }} onMouseEnter={() => setShowVolumeSlider(true)} onMouseLeave={() => setShowVolumeSlider(false)}>
+              <button onClick={(e) => { e.stopPropagation(); toggleMute(); }} style={{ width:28, height:28, borderRadius:6, background:'transparent', border:'none', color:'rgba(255,255,255,.7)', cursor:'pointer', display:'flex', alignItems:'center', justifyContent:'center' }}>
+                <div style={{ width:14, height:14 }}>{isMuted || volume === 0 ? <Icon.VolumeMute /> : <Icon.VolumeUp />}</div>
+              </button>
+              <div style={{ width: showVolumeSlider ? 60 : 0, overflow:'hidden', transition:'width .2s' }}>
+                <input type="range" min="0" max="1" step="0.05" value={isMuted ? 0 : volume} onChange={changeVolume} style={{ width:60, accentColor:'#7c3aed', cursor:'pointer' }} />
+              </div>
+            </div>
+
+            {/* speed */}
+            <div style={{ position:'relative' }}>
+              <button onClick={(e) => { e.stopPropagation(); setShowSpeedMenu(!showSpeedMenu); }} style={{ height:28, padding:'0 8px', borderRadius:6, background:'transparent', border:'1px solid rgba(255,255,255,.15)', color:'rgba(255,255,255,.85)', cursor:'pointer', fontSize:10, fontWeight:600, display:'flex', alignItems:'center', gap:4 }}>
+                {playbackRate}x <Icon.Settings />
+              </button>
+              {showSpeedMenu && (
+                <div style={{ position:'absolute', bottom:36, right:0, background:'#141420', border:'1px solid #2a2a38', borderRadius:8, padding:4, display:'flex', flexDirection:'column', gap:2, zIndex:20, minWidth:72 }} onClick={(e) => e.stopPropagation()}>
+                  {[0.5, 0.75, 1, 1.25, 1.5, 2].map(rate => (
+                    <button key={rate} onClick={() => changeSpeed(rate)} style={{ padding:'4px 10px', border:'none', borderRadius:4, background: rate === playbackRate ? 'rgba(124,58,237,.25)' : 'transparent', color: rate === playbackRate ? '#fff' : '#b0b0c8', cursor:'pointer', fontSize:10, textAlign:'left' }}>{rate}x</button>
+                  ))}
+                </div>
+              )}
+            </div>
           </div>
         </div>
       </div>
 
       {/* info + actions */}
       <div style={{ display:'flex', gap:10 }}>
-        {/* file info */}
         <div style={{ flex:1, padding:'10px 12px', background:'#0a0a12', borderRadius:10, border:'1px solid #1a1a24' }}>
           <div style={{ fontSize:11, fontWeight:600, color:'#b0b0c8', whiteSpace:'nowrap', overflow:'hidden', textOverflow:'ellipsis', marginBottom:4 }}>{outputFile.downloadName || outputFile.fileName}</div>
           <div style={{ fontSize:10, color:'#33334a' }}>{formatDuration(outputFile.duration)} · {formatFileSize(outputFile.size)}</div>
         </div>
-        {/* action buttons: Export removed per request; keep Edit/Shurfer/New */}
         <div style={{ display:'flex', flexDirection:'column', gap:6 }}>
-          <button onClick={handleDownload}
-            style={{ display:'flex', alignItems:'center', gap:6, padding:'7px 14px', background:'#7c3aed', border:'none', borderRadius:9, color:'#fff', fontSize:11, fontWeight:600, cursor:'pointer', whiteSpace:'nowrap' }}>
+          <button onClick={handleDownload} style={{ display:'flex', alignItems:'center', gap:6, padding:'7px 14px', background:'#7c3aed', border:'none', borderRadius:9, color:'#fff', fontSize:11, fontWeight:600, cursor:'pointer', whiteSpace:'nowrap' }}>
             <div style={{ width:13, height:13 }}><Icon.Download /></div> {isDownloading ? 'Downloading...' : 'Download'}
           </button>
-          <button onClick={() => loadVideoInEditor(outputFile.filePath, outputFile.fileName)}
-            style={{ display:'flex', alignItems:'center', gap:6, padding:'7px 14px', background:'transparent', border:'1px solid rgba(124,58,237,.4)', borderRadius:9, color:'#a78bfa', fontSize:11, fontWeight:600, cursor:'pointer', whiteSpace:'nowrap' }}>
+          <button onClick={() => loadVideoInEditor(outputFile.filePath, outputFile.fileName)} style={{ display:'flex', alignItems:'center', gap:6, padding:'7px 14px', background:'transparent', border:'1px solid rgba(124,58,237,.4)', borderRadius:9, color:'#a78bfa', fontSize:11, fontWeight:600, cursor:'pointer', whiteSpace:'nowrap' }}>
             <div style={{ width:13, height:13 }}><Icon.Edit /></div> Edit
           </button>
-          <button onClick={onShurfer}
-            style={{ display:'flex', alignItems:'center', gap:6, padding:'7px 14px', background:'rgba(34,197,94,.18)', border:'1px solid rgba(34,197,94,.32)', borderRadius:9, color:'#bef264', fontSize:11, fontWeight:600, cursor:'pointer', whiteSpace:'nowrap' }}>
+          <button onClick={onShurfer} style={{ display:'flex', alignItems:'center', gap:6, padding:'7px 14px', background:'rgba(34,197,94,.18)', border:'1px solid rgba(34,197,94,.32)', borderRadius:9, color:'#bef264', fontSize:11, fontWeight:600, cursor:'pointer', whiteSpace:'nowrap' }}>
             <div style={{ width:13, height:13 }}><Icon.Star /></div> Shurfer
           </button>
-          <button onClick={onReset}
-            style={{ display:'flex', alignItems:'center', justifyContent:'center', padding:'7px 14px', background:'transparent', border:'1px solid #1e1e2a', borderRadius:9, color:'#44445a', fontSize:11, cursor:'pointer' }}>
+          <button onClick={onReset} style={{ display:'flex', alignItems:'center', justifyContent:'center', padding:'7px 14px', background:'transparent', border:'1px solid #1e1e2a', borderRadius:9, color:'#44445a', fontSize:11, cursor:'pointer' }}>
             New
           </button>
         </div>
@@ -786,27 +1019,58 @@ function ErrorPreview({ error, onRetry }) {
 
 // ─── MontageTab ───────────────────────────────────────────────────────────────
 
-export default function MontageTab({ loadVideoInEditor, onError, onShurfer }) {
+export default function MontageTab({ loadVideoInEditor, onError, onShurfer, onReset }) {
   injectStyles();
   const { socket, socketId, socketError } = useSocket();
 
-  const [videos, setVideos]         = useState([createVideoSlot(1), createVideoSlot(2), createVideoSlot(3)]);
-  const [audio, setAudio]           = useState(createAudioSlot());
-  const [mergeStatus, setMergeStatus] = useState('idle');
-  const [mergeProgress, setMergeProgress] = useState(0);
-  const [mergeStageText, setMergeStageText] = useState('');
-  const [mergeError, setMergeError] = useState('');
-  const [outputFile, setOutputFile] = useState({ filePath:'', fileName:'', downloadName:'', duration:'', size:'' });
-  const [hasRealProgress, setHasRealProgress] = useState(false);
-  const [lastProgressUpdate, setLastProgressUpdate] = useState(Date.now());
-  const [syncMode, setSyncMode] = useState('beat');
-  const [tempoSensitivity, setTempoSensitivity] = useState('medium');
-  const [videoQuality, setVideoQuality] = useState('high');
-  const [beautyStyle, setBeautyStyle] = useState('cinematic');
-  const [enhanceMotion, setEnhanceMotion] = useState(true);
-  const [colorBoost, setColorBoost] = useState(false);
-  const [smoothTransitions, setSmoothTransitions] = useState(true);
-  const [contrastPolish, setContrastPolish] = useState(true);
+  const montage = usePersistedMontageState();
+  const {
+    videos,
+    updateVideo,
+    audio,
+    setAudio,
+    mergeStatus,
+    setMergeStatus,
+    mergeProgress,
+    setMergeProgress,
+    mergeStageText,
+    setMergeStageText,
+    mergeTotalEstimatedTime,
+    setMergeTotalEstimatedTime,
+    mergeTimeSpent,
+    setMergeTimeSpent,
+    mergeTimeLeft,
+    setMergeTimeLeft,
+    mergeError,
+    setMergeError,
+    outputFile,
+    hasRealProgress,
+    setHasRealProgress,
+    lastProgressUpdate,
+    setLastProgressUpdate,
+    syncMode,
+    setSyncMode,
+    tempoSensitivity,
+    setTempoSensitivity,
+    videoQuality,
+    setVideoQuality,
+    beautyStyle,
+    setBeautyStyle,
+    enhanceMotion,
+    setEnhanceMotion,
+    colorBoost,
+    setColorBoost,
+    smoothTransitions,
+    setSmoothTransitions,
+    contrastPolish,
+    setContrastPolish,
+    clearAll,
+  } = montage;
+
+  const handleReset = useCallback(() => {
+    clearAll();
+    onReset?.();
+  }, [clearAll, onReset]);
 
   useEffect(() => {
     if (!socket) return;
@@ -815,6 +1079,9 @@ export default function MontageTab({ loadVideoInEditor, onError, onShurfer }) {
       setMergeProgress(p?.percent || 0);
       setLastProgressUpdate(Date.now());
       setMergeStageText(p?.currentTime || '');
+      setMergeTotalEstimatedTime(typeof p?.totalEstimatedTime === 'number' ? p.totalEstimatedTime : 0);
+      setMergeTimeSpent(typeof p?.timeSpent === 'number' ? p.timeSpent : 0);
+      setMergeTimeLeft(typeof p?.timeLeft === 'number' ? p.timeLeft : 0);
     };
     const onErr = (p) => {
       const message = p?.error || 'Failed to create montage';
@@ -828,7 +1095,7 @@ export default function MontageTab({ loadVideoInEditor, onError, onShurfer }) {
       socket.off('montage-progress', onProg);
       socket.off('montage-error', onErr);
     };
-  }, [onError, socket]);
+  }, [onError, socket, setHasRealProgress, setMergeProgress, setMergeStageText, setMergeStatus, setMergeError, setLastProgressUpdate, setMergeTimeLeft, setMergeTimeSpent, setMergeTotalEstimatedTime]);
 
   useEffect(() => {
     if (mergeStatus !== 'processing') {
@@ -864,21 +1131,26 @@ export default function MontageTab({ loadVideoInEditor, onError, onShurfer }) {
     }, 700);
 
     return () => window.clearInterval(timer);
-  }, [hasRealProgress, mergeStatus, lastProgressUpdate]);
+  }, [hasRealProgress, mergeStatus, lastProgressUpdate, setMergeProgress, setMergeStageText]);
 
-  const updateVideo = (i, upd) => setVideos(prev => prev.map((v, ci) => ci === i ? (typeof upd === 'function' ? upd(v) : upd) : v));
-
-  const readyCount = videos.filter(v => v.status === 'ready').length;
+  const isProcessing = mergeStatus === 'processing';
+  const isSocketUnavailable = !socket && Boolean(socketError);
+  const readyCount = videos.filter((v) => v.status === 'ready').length;
   const hasAudio = audio.status === 'ready';
-  const canMerge = readyCount >= 2 && hasAudio;
+  const canMerge = readyCount >= 2 && hasAudio && !isProcessing;
 
-  const handleMerge = async () => {
-    if (!canMerge || mergeStatus === 'processing') return;
-    setMergeStatus('processing'); setMergeProgress(0); setMergeStageText('Preparing upload...'); setMergeError(''); setHasRealProgress(false);
+  const handleMerge = () => {
+    if (!canMerge || isProcessing) return;
+    setMergeStatus('processing');
+    setMergeProgress(0);
+    setMergeStageText('Preparing upload...');
+    setMergeError('');
+    setHasRealProgress(false);
+
     const fd = new FormData();
     videos.forEach((v, i) => {
-      if (v.file) fd.append(`video${i+1}`, v.file);
-      else if (v.filePath) fd.append(`video${i+1}Path`, v.filePath);
+      if (v.file) fd.append(`video${i + 1}`, v.file);
+      else if (v.filePath) fd.append(`videoPath${i + 1}`, v.filePath);
     });
     if (audio.file) fd.append('audio', audio.file);
     else if (audio.filePath) fd.append('audioPath', audio.filePath);
@@ -887,36 +1159,39 @@ export default function MontageTab({ loadVideoInEditor, onError, onShurfer }) {
     fd.append('tempoSensitivity', tempoSensitivity);
     fd.append('videoQuality', videoQuality);
     fd.append('beautyStyle', beautyStyle);
-    fd.append('enhanceMotion', enhanceMotion ? 'true' : 'false');
-    fd.append('colorBoost', colorBoost ? 'true' : 'false');
-    fd.append('smoothTransitions', smoothTransitions ? 'true' : 'false');
-    fd.append('contrastPolish', contrastPolish ? 'true' : 'false');
-    try {
-      const res = await fetch(API_ENDPOINTS.createMontage, {
-        method:'POST',
-        headers: socketId ? { 'X-Socket-Id': socketId } : undefined,
-        body:fd,
+    fd.append('enhanceMotion', String(enhanceMotion));
+    fd.append('colorBoost', String(colorBoost));
+    fd.append('smoothTransitions', String(smoothTransitions));
+    fd.append('contrastPolish', String(contrastPolish));
+
+    fetch(`${API_BASE}/api/create-montage`, {
+      method: 'POST',
+      headers: socketId ? { 'X-Socket-Id': socketId } : undefined,
+      body: fd,
+    })
+      .then((res) => {
+        if (!res.ok) return res.json().then((data) => Promise.reject(new Error(data.error || 'Montage failed')));
+        return res.json();
+      })
+      .then((data) => {
+        montage.setOutputFile({
+          filePath: data.filePath,
+          fileName: data.fileName,
+          downloadName: data.downloadName || data.fileName,
+          duration: data.duration || 0,
+          size: data.size || 0,
+        });
+        setMergeStatus('success');
+        setMergeProgress(100);
+        setMergeStageText('Complete');
+      })
+      .catch((err) => {
+        const msg = err.message || 'Failed to create montage';
+        setMergeError(msg);
+        setMergeStatus('error');
+        onError?.(msg);
       });
-      if (!res.ok) { const d = await res.json(); throw new Error(d.error || 'Failed'); }
-      const d = await res.json();
-      setOutputFile({ filePath:d.filePath, fileName:d.fileName, downloadName:d.downloadName, duration:d.duration, size:d.size });
-      setMergeStatus('success'); setMergeProgress(100); setMergeStageText('Complete');
-    } catch (err) {
-      const msg = err.message || 'An error occurred';
-      setMergeError(msg); setMergeStatus('error');
-      onError?.(msg);
-    }
-  };
-
-  const handleReset = () => {
-    setVideos([createVideoSlot(1), createVideoSlot(2), createVideoSlot(3)]);
-    setAudio(createAudioSlot());
-    setMergeStatus('idle'); setMergeProgress(0); setMergeStageText(''); setMergeError(''); setHasRealProgress(false);
-    setOutputFile({ filePath:'', fileName:'', downloadName:'', duration:'', size:'' });
-  };
-
-  const isProcessing = mergeStatus === 'processing';
-  const isSocketUnavailable = !socket && Boolean(socketError);
+  }
 
   return (
     <div style={{ width:'100%', height:'calc(100vh - 48px)', overflow:'hidden', background:'#080810', display:'flex', flexDirection:'column' }}>
@@ -992,7 +1267,7 @@ export default function MontageTab({ loadVideoInEditor, onError, onShurfer }) {
           ) : (
             <div style={{ width:'100%', height:'100%', minHeight:360, display:'flex', alignItems:'center', justifyContent:'center' }}>
               <div style={{ width:'100%', maxWidth:840, minHeight:280, display:'flex', alignItems:'center', justifyContent:'center' }}>
-                {mergeStatus === 'processing' && <ProcessingPreview progress={mergeProgress} status={mergeStageText} />}
+                {mergeStatus === 'processing' && <ProcessingPreview progress={mergeProgress} status={mergeStageText} totalEstimatedTime={mergeTotalEstimatedTime} timeSpent={mergeTimeSpent} timeLeft={mergeTimeLeft} />}
                 {mergeStatus === 'success' && <SuccessPreview outputFile={outputFile} loadVideoInEditor={loadVideoInEditor} onShurfer={onShurfer} onReset={handleReset} />}
                 {mergeStatus === 'error' && <ErrorPreview error={mergeError} onRetry={() => { setMergeStatus('idle'); setMergeError(''); setMergeProgress(0); setMergeStageText(''); }} />}
               </div>

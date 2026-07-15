@@ -1,5 +1,6 @@
 import { useEffect, useRef } from 'react';
 import { useSocket } from '../context/SocketContext';
+import API_BASE_URL from '../config.js';
 import './MediaPanel.css';
 
 /**
@@ -178,7 +179,7 @@ function MediaFieldCard({
     }));
 
     try {
-      const response = await fetch('http://localhost:3000/api/fetch-url-video', {
+      const response = await fetch(`${API_BASE_URL}/api/fetch-url-video`, {
         method: 'POST',
         headers: {
           'Content-Type': 'application/json',

@@ -1,4 +1,5 @@
 import { useState, useRef } from 'react';
+import API_BASE_URL from '../config.js';
 import './UrlVideoFetcher.css';
 
 /**
@@ -89,7 +90,8 @@ function UrlVideoFetcher({
     try {
       // Import socket dynamically to get current instance
       const { io } = await import('socket.io-client');
-      const socket = io(import.meta.env.VITE_SOCKET_URL || import.meta.env.VITE_API_URL || 'http://localhost:3000');
+      const socketUrl = import.meta.env.VITE_SOCKET_URL || API_BASE_URL;
+      const socket = io(socketUrl);
 
       // Wait for socket to connect
       await new Promise((resolve) => {
@@ -103,7 +105,7 @@ function UrlVideoFetcher({
       setupSocketListener(socket);
 
       // Call backend API
-      const response = await fetch('http://localhost:3000/api/fetch-url-video', {
+      const response = await fetch(`${API_BASE_URL}/api/fetch-url-video`, {
         method: 'POST',
         headers: {
           'Content-Type': 'application/json',

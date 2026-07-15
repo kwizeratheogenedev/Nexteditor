@@ -6,6 +6,8 @@ import { fileURLToPath } from 'url';
 import { randomUUID } from 'crypto';
 import { runFFmpeg, probeDuration } from '../services/ffmpeg.js';
 import { getIo } from '../socket.js';
+import pLimit from 'p-limit';
+import os from 'os';
 
 const __filename = fileURLToPath(import.meta.url);
 const __dirname = path.dirname(__filename);
@@ -17,33 +19,14 @@ const MIN_CLIP_DURATION = 3;
 const MAX_CLIP_DURATION = 4;
 const SKIP_INPUT_VIDEO_SECONDS = 40;
 
-class RequestError extends Error {
-  constructor(message, status = 400) {
-    super(message);
-    this.name = 'RequestError';
-    this.status = status;
-  }
-}
-
-function isPathInside(filePath, basePath) {
-  const relative = path.relative(basePath, filePath);
-  return relative !== '' && !relative.startsWith('..') && !path.isAbsolute(relative);
-}
-
 // Validate that a file path is within allowed directories
-function validateFilePath(filePath) {
+function validateFilePath(filePath, allowedBasePath = uploadsDir) {
   if (!filePath || typeof filePath !== 'string') {
     return false;
   }
-  try {
-    const resolvedPath = fs.realpathSync(path.resolve(filePath));
-    const resolvedUploads = fs.realpathSync(uploadsDir);
-    const resolvedClips = fs.realpathSync(clipsDir);
-    return fs.statSync(resolvedPath).isFile()
-      && (isPathInside(resolvedPath, resolvedUploads) || isPathInside(resolvedPath, resolvedClips));
-  } catch (_error) {
-    return false;
-  }
+  const resolvedPath = path.resolve(filePath);
+  const resolvedBase = path.resolve(allowedBasePath);
+  return resolvedPath.startsWith(resolvedBase) && resolvedPath !== resolvedBase;
 }
 
 // Configure multer for video and audio uploads
@@ -56,46 +39,21 @@ const storage = multer.diskStorage({
     cb(null, uploadsDir);
   },
   filename: (req, file, cb) => {
-    const safeOriginalName = path.basename(file.originalname).replace(/[^a-zA-Z0-9._-]/g, '_');
-    const uniqueName = `${randomUUID()}-${safeOriginalName || 'media'}`;
+    const uniqueName = `${randomUUID()}-${file.originalname}`;
+    // Ensure multer file object includes consistent path info for downstream handlers
+    try {
+      file.destination = path.join(__dirname, '..', 'uploads');
+      file.filename = uniqueName;
+      file.path = path.join(file.destination, uniqueName);
+    } catch (e) {}
     cb(null, uniqueName);
   },
 });
 
 const upload = multer({
   storage,
-  limits: { fileSize: 500 * 1024 * 1024, files: 10 }, // 500MB per file
-  fileFilter: (_req, file, cb) => {
-    const hasSupportedField = /^video[1-3]$/.test(file.fieldname) || /^audio\d*$/.test(file.fieldname);
-    const hasSupportedMime = file.mimetype.startsWith('video/')
-      || file.mimetype.startsWith('audio/')
-      || file.mimetype === 'application/octet-stream';
-    if (hasSupportedField && hasSupportedMime) {
-      cb(null, true);
-      return;
-    }
-    cb(new RequestError('Only video and audio files are supported'));
-  },
+  limits: { fileSize: 500 * 1024 * 1024 }, // 500MB
 });
-
-const montageUpload = upload.any();
-
-function uploadMontageMedia(req, res, next) {
-  montageUpload(req, res, (error) => {
-    if (!error) {
-      next();
-      return;
-    }
-    for (const uploadedFile of req.files || []) {
-      try {
-        if (uploadedFile.path && fs.existsSync(uploadedFile.path)) {
-          fs.unlinkSync(uploadedFile.path);
-        }
-      } catch (_cleanupError) {}
-    }
-    next(error);
-  });
-}
 
 // Handle both file uploads and URL-based file paths
 function getFileSource(file, filePath) {
@@ -104,26 +62,23 @@ function getFileSource(file, filePath) {
     // try to construct from destination+filename. Be defensive about types.
     if (typeof file.path === 'string' && file.path.length > 0) {
       if (!validateFilePath(file.path)) {
-        throw new RequestError('Invalid or missing media file');
+        throw new Error('Invalid file path');
       }
       return file.path;
     }
     if (typeof file.destination === 'string' && typeof file.filename === 'string') {
       const constructed = path.join(file.destination, file.filename);
       if (!validateFilePath(constructed)) {
-        throw new RequestError('Invalid or missing media file');
+        throw new Error('Invalid file path');
       }
       return constructed;
     }
   }
   if (filePath) {
     if (!validateFilePath(filePath)) {
-      throw new RequestError('This media file is no longer available. Fetch or upload it again.', 410);
+      throw new Error('Invalid file path');
     }
-    const resolvedPath = fs.realpathSync(path.resolve(filePath));
-    const now = new Date();
-    fs.utimesSync(resolvedPath, now, now);
-    return resolvedPath;
+    return filePath;
   }
   return null;
 }
@@ -133,7 +88,12 @@ function emitToClient(socketId, eventName, payload) {
   const clientSocket = socketId ? io?.sockets.sockets.get(socketId) : null;
   if (clientSocket) {
     clientSocket.emit(eventName, payload);
+    return;
   }
+
+  // Fallback so progress is still visible even if the request started before
+  // the frontend finished establishing its socket connection.
+  io?.emit(eventName, payload);
 }
 
 function sanitizeDownloadName(name) {
@@ -172,8 +132,9 @@ function pickClipDuration(remainingDuration, syncMode, tempoSensitivity) {
     aggressive: { min: 0.75, max: 0.25 },
   }[tempoSensitivity] || { min: 0.5, max: 0.5 };
 
-  const minDurationProbability = (baseWeight.min + tempoAdjustment.min) / 2;
-  return Math.random() < minDurationProbability ? MIN_CLIP_DURATION : MAX_CLIP_DURATION;
+  const weightMin = Math.min(baseWeight.min, tempoAdjustment.min);
+  const weightMax = Math.min(baseWeight.max, tempoAdjustment.max);
+  return Math.random() < weightMin ? MIN_CLIP_DURATION : MAX_CLIP_DURATION;
 }
 
 function pickRandomStart(duration, clipDuration, usedRanges, skipSeconds = 0) {
@@ -183,10 +144,7 @@ function pickRandomStart(duration, clipDuration, usedRanges, skipSeconds = 0) {
     return fallback;
   }
 
-  // Adjust skipSeconds if duration is too short to skip that much
-  const actualSkip = duration > (skipSeconds + clipDuration + 2) ? skipSeconds : 0;
-
-  const minStart = Math.min(actualSkip, Math.max(0, duration - clipDuration));
+  const minStart = Math.min(skipSeconds, Math.max(0, duration - clipDuration));
   const maxStart = Math.max(minStart, duration - clipDuration);
   const safetyGap = 1;
 
@@ -207,7 +165,7 @@ function pickRandomStart(duration, clipDuration, usedRanges, skipSeconds = 0) {
   return fallback;
 }
 
-function getQualitySettings(videoQuality) {
+function getQualitySettings(videoQuality){
   const map = {
     low: { preset: 'veryfast', crf: '28' },
     medium: { preset: 'faster', crf: '24' },
@@ -217,13 +175,12 @@ function getQualitySettings(videoQuality) {
   return map[videoQuality] || map.high;
 }
 
-function buildClipArgs(inputFile, startTime, clipDuration, outputFile, { beautyStyle, enhanceMotion, colorBoost, smoothTransitions, contrastPolish, videoQuality }) {
-  const quality = getQualitySettings(videoQuality);
+function buildClipArgs(inputFile, startTime, clipDuration, outputFile, { beautyStyle, enhanceMotion, colorBoost, smoothTransitions, contrastPolish, videoQuality }, isIntermediate = true) {
+  const quality = isIntermediate ? { preset: 'ultrafast', crf: '18' } : getQualitySettings(videoQuality);
   const filters = [
     'scale=1280:720:force_original_aspect_ratio=decrease',
     'pad=1280:720:(ow-iw)/2:(oh-ih)/2',
     'setsar=1',
-    'fps=30',
   ];
 
   if (beautyStyle === 'cinematic') {
@@ -241,19 +198,15 @@ function buildClipArgs(inputFile, startTime, clipDuration, outputFile, { beautyS
     filters.push('eq=contrast=1.06:gamma=1.02');
   }
   if (smoothTransitions) {
-    const fadeDuration = Math.min(0.25, clipDuration / 4);
-    const fadeOutStart = Math.max(0, clipDuration - fadeDuration);
-    filters.push(`fade=t=in:st=0:d=${fadeDuration},fade=t=out:st=${fadeOutStart}:d=${fadeDuration}`);
+    filters.push('fps=30');
   }
   if (enhanceMotion) {
     filters.push('unsharp=luma_msize_x=5:luma_msize_y=5:luma_amount=0.5');
   }
-  filters.push('format=yuv420p');
 
   const filterChain = filters.join(',');
 
   return [
-    '-stream_loop', '-1',
     '-ss', String(startTime),
     '-i', inputFile,
     '-t', String(clipDuration),
@@ -267,39 +220,18 @@ function buildClipArgs(inputFile, startTime, clipDuration, outputFile, { beautyS
   ];
 }
 
-router.post('/', uploadMontageMedia, async (req, res) => {
+router.post('/', upload.any(), async (req, res) => {
   let concatListPath = '';
-  let outputPath = '';
   const temporaryInputFiles = [];
   const generatedClipFiles = [];
   const socketId = req.headers['x-socket-id'];
-  const startedAt = Date.now();
-  let latestProgress = { percent: 0, currentTime: 'Request received. Preparing media...' };
-  const reportProgress = (percent, currentTime) => {
-    latestProgress = { percent, currentTime };
-    emitToClient(socketId, 'montage-progress', latestProgress);
-  };
-  const heartbeatId = setInterval(() => {
-    const elapsedSeconds = Math.max(1, Math.floor((Date.now() - startedAt) / 1000));
-    emitToClient(socketId, 'montage-progress', {
-      ...latestProgress,
-      currentTime: `${latestProgress.currentTime} · ${elapsedSeconds}s elapsed`,
-    });
-  }, 5000);
-  heartbeatId.unref?.();
 
   try {
-    reportProgress(1, 'Validating source media...');
+    console.log('createMontage: incoming request', { filesCount: req.files?.length || 0, bodyKeys: Object.keys(req.body || {}) });
     const outputDir = clipsDir;
 
     if (!fs.existsSync(outputDir)) {
       fs.mkdirSync(outputDir, { recursive: true });
-    }
-
-    for (const uploadedFile of req.files || []) {
-      if (typeof uploadedFile.path === 'string') {
-        temporaryInputFiles.push(uploadedFile.path);
-      }
     }
 
     // Collect video files
@@ -312,14 +244,25 @@ router.post('/', uploadMontageMedia, async (req, res) => {
       
       if (videoFile || videoPath) {
         const sourcePath = getFileSource(videoFile, videoPath);
+        console.log(`video${i} source:`, { fieldname: videoFile?.fieldname, path: videoFile?.path, videoPath, sourcePath });
         if (sourcePath) {
           videoFiles.push(sourcePath);
+          if (videoFile) {
+            const uploadedPath = (typeof videoFile.path === 'string' && videoFile.path.length > 0)
+              ? videoFile.path
+              : (typeof videoFile.destination === 'string' && typeof videoFile.filename === 'string'
+                ? path.join(videoFile.destination, videoFile.filename)
+                : null);
+            if (uploadedPath) temporaryInputFiles.push(uploadedPath);
+          }
         }
+      } else {
+        console.log(`video${i} missing file and path`);
       }
     }
 
     if (videoFiles.length < 2) {
-      throw new RequestError('At least 2 videos are required to create a montage');
+      return res.status(400).json({ error: 'At least 2 videos are required to create a montage' });
     }
 
     // Handle audio inputs: support multiple uploaded audio fields named
@@ -333,7 +276,7 @@ router.post('/', uploadMontageMedia, async (req, res) => {
     ].filter(Boolean);
 
     if (rawAudioInputs.length === 0) {
-      throw new RequestError('At least one audio track is required to create a montage');
+      return res.status(400).json({ error: 'At least one audio track is required to create a montage' });
     }
 
     // Normalize to resolved file paths
@@ -343,36 +286,34 @@ router.post('/', uploadMontageMedia, async (req, res) => {
     }).filter(Boolean);
 
     if (audioSources.length === 0) {
-      throw new RequestError('No valid audio sources found');
+      return res.status(400).json({ error: 'No valid audio sources found' });
     }
 
-    // Normalize every source to AAC so uploaded and URL-based audio behaves consistently.
-    reportProgress(3, 'Preparing audio track...');
-    const normalizedAudioFiles = [];
-    for (let i = 0; i < audioSources.length; i += 1) {
-      const src = audioSources[i];
-      const normalized = path.join(uploadsDir, `normalized-audio-${randomUUID()}.m4a`);
-      temporaryInputFiles.push(normalized);
-      await runFFmpeg([
-        '-i', src,
-        '-vn',
-        '-c:a', 'aac',
-        '-b:a', '192k',
-        '-y',
-        normalized,
-      ]);
-      normalizedAudioFiles.push(normalized);
-    }
+    // For each audio source, trim the first 40 seconds and produce trimmed files
+    const audioLimit = pLimit(2);
+    const trimmedAudioFiles = await Promise.all(
+      audioSources.map((src) => audioLimit(async () => {
+        const trimmed = path.join(uploadsDir, `trimmed-audio-${randomUUID()}.m4a`);
+        await runFFmpeg([
+          '-i', src,
+          '-vn',
+          '-c:a', 'aac',
+          '-b:a', '192k',
+          '-y',
+          trimmed,
+        ]);
+        temporaryInputFiles.push(trimmed);
+        return trimmed;
+      })),
+    );
 
-    // If multiple audio files were supplied, concatenate them in request order.
-    let mergedAudioPath = normalizedAudioFiles[0];
-    if (normalizedAudioFiles.length > 1) {
+    // If multiple trimmed audio files, concatenate them into one audio track
+    let mergedAudioPath = trimmedAudioFiles[0];
+    if (trimmedAudioFiles.length > 1) {
       const audioConcatList = path.join(uploadsDir, `audio-concat-${randomUUID()}.txt`);
-      const listContent = normalizedAudioFiles.map(p => `file '${p.replace(/'/g, "'\\''").replace(/\\/g, '/')}'`).join('\n');
+      const listContent = trimmedAudioFiles.map(p => `file '${p.replace(/\\/g, '/')}'`).join('\n');
       fs.writeFileSync(audioConcatList, listContent);
-      temporaryInputFiles.push(audioConcatList);
       const merged = path.join(uploadsDir, `merged-audio-${randomUUID()}.m4a`);
-      temporaryInputFiles.push(merged);
       await runFFmpeg([
         '-f', 'concat',
         '-safe', '0',
@@ -382,27 +323,23 @@ router.post('/', uploadMontageMedia, async (req, res) => {
         merged,
       ]);
       mergedAudioPath = merged;
+      temporaryInputFiles.push(audioConcatList);
+      temporaryInputFiles.push(merged);
     }
 
     // Generate output filename
-    const outputFileName = `montage-${Date.now()}.mp4`;
-    outputPath = path.join(outputDir, outputFileName);
-    const downloadName = sanitizeDownloadName(req.body.audioLabel || outputFileName);
+    const outputFileName = sanitizeDownloadName(req.body.audioLabel || `montage-${Date.now()}`);
+    const outputPath = path.join(outputDir, outputFileName);
+    const downloadName = outputFileName;
 
     const [audioDuration, ...videoDurations] = await Promise.all([
       probeDuration(mergedAudioPath),
       ...videoFiles.map((videoPath) => probeDuration(videoPath)),
     ]);
 
-    if (!Number.isFinite(audioDuration) || audioDuration <= 0) {
-      throw new RequestError('The selected audio track has no playable duration');
-    }
-    if (videoDurations.some((duration) => !Number.isFinite(duration) || duration <= 0)) {
-      throw new RequestError('One or more selected videos has no playable duration');
-    }
+    emitToClient(socketId, 'montage-progress', { percent: 5, currentTime: 'Analyzing source media...' });
 
-    reportProgress(5, 'Analyzing source media...');
-
+    const montageStartTime = Date.now();
     const syncMode = req.body.syncMode || 'beat';
     const tempoSensitivity = req.body.tempoSensitivity || 'medium';
     const beautyStyle = req.body.beautyStyle || 'cinematic';
@@ -435,37 +372,76 @@ router.post('/', uploadMontageMedia, async (req, res) => {
       sourceIndex = (sourceIndex + 1) % videoFiles.length;
     }
 
-    reportProgress(10, 'Creating random clips...');
+    emitToClient(socketId, 'montage-progress', { percent: 10, currentTime: 'Creating random clips...' });
 
-    for (let i = 0; i < clipPlan.length; i += 1) {
-      const plan = clipPlan[i];
-      const clipPath = path.join(clipsDir, `montage-clip-${randomUUID()}.mp4`);
-      generatedClipFiles.push(clipPath);
-      const clipStartPercent = 10 + ((i / clipPlan.length) * 45);
+    const clipLimit = pLimit(Math.max(2, Math.min(4, (os.cpus() || []).length || 4)));
+    let completedClips = 0;
+    const totalClips = clipPlan.length;
+    const clipRangeStart = 10;
+    const clipRangeEnd = 55;
+    const clipRange = clipRangeEnd - clipRangeStart;
+    const segmentSize = totalClips > 0 ? clipRange / totalClips : clipRange;
+    const clipStartTime = Date.now();
+    let estimatedTotalTime = 0;
 
-      reportProgress(Math.round(clipStartPercent), `Preparing clip ${i + 1}/${clipPlan.length}...`);
+    const clipPromises = clipPlan.map((plan, i) =>
+      clipLimit(async () => {
+        const clipPath = path.join(clipsDir, `montage-clip-${randomUUID()}.mp4`);
+        generatedClipFiles.push(clipPath);
 
-      await runFFmpeg(
-        buildClipArgs(videoFiles[plan.sourceIndex], plan.startTime, plan.clipDuration, clipPath, {
-          beautyStyle,
-          enhanceMotion,
-          colorBoost,
-          smoothTransitions,
-          contrastPolish,
-          videoQuality,
-        }),
-        {
-          duration: plan.clipDuration,
-          onProgress: (progress) => {
-            const scaledPercent = 10 + (((i + (progress.percent / 100)) / clipPlan.length) * 45);
-            reportProgress(Math.round(scaledPercent), `Creating clip ${i + 1}/${clipPlan.length}...`);
+        const segmentStart = clipRangeStart + (i * segmentSize);
+        const segmentEnd = segmentStart + segmentSize;
+
+        emitToClient(socketId, 'montage-progress', {
+          percent: Math.round(segmentStart),
+          currentTime: `Preparing clip ${i + 1}/${totalClips}...`,
+        });
+
+        await runFFmpeg(
+          buildClipArgs(videoFiles[plan.sourceIndex], plan.startTime, plan.clipDuration, clipPath, {
+            beautyStyle,
+            enhanceMotion,
+            colorBoost,
+            smoothTransitions,
+            contrastPolish,
+            videoQuality,
+          }, true),
+          {
+            duration: plan.clipDuration,
+            onProgress: (progress) => {
+              const clipProgress = Math.max(0, Math.min(1, progress.percent / 100));
+              const overallPercent = segmentStart + (clipProgress * segmentSize);
+              emitToClient(socketId, 'montage-progress', {
+                percent: Math.round(overallPercent),
+                currentTime: `Creating clip ${i + 1}/${totalClips}...`,
+              });
+            },
           },
-        },
-      );
+        );
 
-      const clipCompletePercent = 10 + (((i + 1) / clipPlan.length) * 45);
-      reportProgress(Math.round(clipCompletePercent), `Created clip ${i + 1}/${clipPlan.length}`);
-    }
+        completedClips += 1;
+        const now = Date.now();
+        const clipElapsed = now - clipStartTime;
+        const avgTimePerClip = completedClips > 0 ? clipElapsed / completedClips : 0;
+        const remainingClips = totalClips - completedClips;
+        const timeLeftClips = remainingClips > 0 && avgTimePerClip > 0 ? remainingClips * avgTimePerClip : 0;
+        const totalEstimatedClipsTime = totalClips > 0 && avgTimePerClip > 0 ? totalClips * avgTimePerClip : clipElapsed * 2;
+        estimatedTotalTime = totalEstimatedClipsTime + Math.max(15000, totalEstimatedClipsTime * 0.15);
+        const timeLeft = timeLeftClips + Math.max(15000, totalEstimatedClipsTime * 0.15);
+
+        emitToClient(socketId, 'montage-progress', {
+          percent: Math.round(segmentEnd),
+          currentTime: `Created clip ${completedClips}/${totalClips}`,
+          totalEstimatedTime: Math.round(estimatedTotalTime / 1000),
+          timeSpent: Math.round((now - montageStartTime) / 1000),
+          timeLeft: Math.round(timeLeft / 1000),
+        });
+
+        return clipPath;
+      }),
+    );
+
+    await Promise.all(clipPromises);
 
     concatListPath = path.join(uploadsDir, `concat-${randomUUID()}.txt`);
     const concatList = generatedClipFiles.map((filePath) => `file '${filePath.replace(/\\/g, '/')}'`).join('\n');
@@ -474,9 +450,13 @@ router.post('/', uploadMontageMedia, async (req, res) => {
     // Join the generated clips with the selected audio track. We explicitly map
     // the video stream from the concat input and the audio stream from the
     // provided audio source to avoid attached image/audio-only streams.
-    reportProgress(60, 'Joining clips with audio...');
+    const mergeStartTime = Date.now();
+    emitToClient(socketId, 'montage-progress', { percent: 60, currentTime: 'Joining clips with audio...', totalEstimatedTime: Math.round(estimatedTotalTime / 1000), timeSpent: Math.round((Date.now() - montageStartTime) / 1000) });
 
-    await runFFmpeg(
+    const finalQuality = getQualitySettings(videoQuality);
+    console.log('Starting final ffmpeg merge', { concatListPath, mergedAudioPath, outputPath, audioDuration, finalQuality });
+    try {
+      await runFFmpeg(
         [
           '-f', 'concat',
           '-safe', '0',
@@ -485,7 +465,9 @@ router.post('/', uploadMontageMedia, async (req, res) => {
           '-t', String(audioDuration),
           '-map', '0:v:0',
           '-map', '1:a:0',
-          '-c:v', 'copy',
+          '-c:v', 'libx264',
+          '-preset', finalQuality.preset,
+          '-crf', finalQuality.crf,
           '-c:a', 'aac',
           '-b:a', '192k',
           '-movflags', '+faststart',
@@ -497,12 +479,28 @@ router.post('/', uploadMontageMedia, async (req, res) => {
           duration: audioDuration,
           onProgress: (progress) => {
             const scaledPercent = 60 + (progress.percent * 0.35);
-            reportProgress(Math.round(scaledPercent), 'Joining clips with audio...');
+            const mergeElapsed = Date.now() - mergeStartTime;
+            const mergeProgress = Math.max(0, Math.min(1, progress.percent / 100));
+            const remainingMergePercent = 1 - mergeProgress;
+            const estimatedTotalMergeTime = mergeProgress > 0.05 ? mergeElapsed / mergeProgress : mergeElapsed * 2;
+            const timeLeft = remainingMergePercent * estimatedTotalMergeTime;
+            emitToClient(socketId, 'montage-progress', {
+              percent: Math.round(scaledPercent),
+              currentTime: progress.currentTime || 'Merging clips...',
+              totalEstimatedTime: Math.round(estimatedTotalTime / 1000),
+              timeSpent: Math.round((Date.now() - montageStartTime) / 1000),
+              timeLeft: Math.round(timeLeft / 1000),
+            });
           },
         },
       );
+      console.log('Final ffmpeg merge completed', { outputPath });
+    } catch (err) {
+      console.error('Final ffmpeg merge failed', err && (err.stack || err));
+      throw err;
+    }
 
-    reportProgress(98, 'Finalizing montage...');
+    emitToClient(socketId, 'montage-progress', { percent: 98, currentTime: 'Finalizing montage...', totalEstimatedTime: Math.round(estimatedTotalTime / 1000), timeSpent: Math.round((Date.now() - montageStartTime) / 1000), timeLeft: 0 });
 
     // Clean up concat list file
     if (concatListPath && fs.existsSync(concatListPath)) {
@@ -536,8 +534,6 @@ router.post('/', uploadMontageMedia, async (req, res) => {
       } catch (e) {}
     });
 
-    reportProgress(100, 'Complete');
-    clearInterval(heartbeatId);
     res.json({
       filePath: outputPath,
       fileName: outputFileName,
@@ -545,13 +541,9 @@ router.post('/', uploadMontageMedia, async (req, res) => {
       duration: outputDuration,
       size: stats.size,
     });
+    emitToClient(socketId, 'montage-progress', { percent: 100, currentTime: 'Complete', totalEstimatedTime: Math.round(estimatedTotalTime / 1000), timeSpent: Math.round((Date.now() - montageStartTime) / 1000), timeLeft: 0 });
   } catch (error) {
-    clearInterval(heartbeatId);
-    if ((error.status || 500) >= 500) {
-      console.error('Montage creation error:', error && (error.stack || error));
-    } else {
-      console.warn(`Montage request rejected: ${error.message}`);
-    }
+    console.error('Montage creation error:', error && (error.stack || error));
     if (concatListPath && fs.existsSync(concatListPath)) {
       try {
         fs.unlinkSync(concatListPath);
@@ -571,15 +563,10 @@ router.post('/', uploadMontageMedia, async (req, res) => {
         }
       } catch (_error) {}
     });
-    if (outputPath && fs.existsSync(outputPath)) {
-      try {
-        fs.unlinkSync(outputPath);
-      } catch (_error) {}
-    }
-    emitToClient(socketId, 'montage-error', { error: error.message || 'Failed to create montage' });
+    emitToClient(socketId, 'montage-error', { error: error.message || 'Failed to create montage', stack: error.stack });
     const response = { error: error.message || 'Failed to create montage' };
-    if (process.env.NODE_ENV !== 'production' && (error.status || 500) >= 500) response.stack = error.stack;
-    res.status(error.status || 500).json(response);
+    if (process.env.NODE_ENV !== 'production') response.stack = error.stack;
+    res.status(500).json(response);
   }
 });
 

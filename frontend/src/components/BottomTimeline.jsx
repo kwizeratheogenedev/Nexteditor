@@ -6,22 +6,51 @@ function TrackLabel({ type, label }) {
   return <div className="timeline-track-label"><TrackIcon type={type}/><span>{label}</span><div className="track-mini-actions"><button type="button" title="Toggle track">◉</button><button type="button" title="Lock track">⌑</button></div></div>;
 }
 
-function ClipBlock({ clip }) {
-  const width = Math.max(86, clip.duration * 22);
-  return <div className={`timeline-clip timeline-clip-${clip.type}`} style={{ width: `${width}px` }} title={clip.label}><span className="timeline-clip-leading"/>{clip.type === 'audio' && <span className="timeline-waveform">▂▅▃▆▄▇▃▅</span>}<strong>{clip.label}</strong><small>{clip.duration.toFixed(1)}s</small></div>;
+function ClipBlock({ clip, zoom, onTrimStart, onTrimEnd }) {
+  const baseWidth = Math.max(86, clip.duration * 22);
+  const width = baseWidth * (zoom / 100);
+  return <div className={`timeline-clip timeline-clip-${clip.type}`} style={{ width: `${width}px` }} title={clip.label}><span className="timeline-clip-leading"/><span className="timeline-clip-trim timeline-clip-trim-left" onMouseDown={(e) => { e.stopPropagation(); onTrimStart?.(); }} /><span className="timeline-clip-trim timeline-clip-trim-right" onMouseDown={(e) => { e.stopPropagation(); onTrimEnd?.(); }} />{clip.type === 'audio' && <span className="timeline-waveform">▂▅▃▆▄▇▃▅</span>}<strong>{clip.label}</strong><small>{clip.duration.toFixed(1)}s</small></div>;
 }
 
-function TrackRow({ clips, placeholder }) {
-  return <div className="timeline-track-row">{clips.length ? clips.map((clip) => <ClipBlock key={clip.id} clip={clip}/>) : <div className="timeline-placeholder">{placeholder}</div>}</div>;
+function TrackRow({ clips, placeholder, zoom, onTrimStart, onTrimEnd }) {
+  return <div className="timeline-track-row">{clips.length ? clips.map((clip) => <ClipBlock key={clip.id} clip={clip} zoom={zoom} onTrimStart={() => onTrimStart?.(clip.id)} onTrimEnd={() => onTrimEnd?.(clip.id)} />) : <div className="timeline-placeholder">{placeholder}</div>}</div>;
 }
 
-function BottomTimeline({ activeTab, tracks, currentTime, totalDuration, zoom, onZoomChange, onSeek, onSplit, onDelete }) {
+function BottomTimeline({ activeTab, tracks, currentTime, totalDuration, zoom, onZoomChange, onSeek, onSplit, onDelete, onTrimStart, onTrimEnd, timelineHeight, onTimelineHeightChange }) {
   const duration = Math.max(totalDuration || 0, 32);
   const playheadLeft = `${Math.max(0, Math.min((currentTime / duration) * 100, 100))}%`;
-  return <section className="bottom-timeline capcut-timeline">
+  const minToolbar = 42;
+  const minRuler = 25;
+  const minTracks = 43 * 3;
+  const minHeight = minToolbar + minRuler + minTracks + 16;
+  const maxHeight = 480;
+  const clampedHeight = Math.max(minHeight, Math.min(maxHeight, timelineHeight || 238));
+
+  const handleResizeStart = (e) => {
+    e.preventDefault();
+    const startY = e.clientY;
+    const startHeight = clampedHeight;
+
+    const handleMouseMove = (moveEvent) => {
+      const delta = moveEvent.clientY - startY;
+      const newHeight = startHeight + delta;
+      onTimelineHeightChange?.(newHeight);
+    };
+
+    const handleMouseUp = () => {
+      window.removeEventListener('mousemove', handleMouseMove);
+      window.removeEventListener('mouseup', handleMouseUp);
+    };
+
+    window.addEventListener('mousemove', handleMouseMove);
+    window.addEventListener('mouseup', handleMouseUp);
+  };
+
+  return <section className="bottom-timeline capcut-timeline" style={{ height: clampedHeight }}>
+    <div className="timeline-resize-handle" onMouseDown={handleResizeStart} title="Drag to resize timeline" />
     <div className="timeline-toolbar"><div className="timeline-tool-group"><button type="button" className="timeline-action-button" onClick={onSplit}>Split</button><button type="button" className="timeline-action-button" onClick={onDelete}>Delete</button><span/><button type="button" className="timeline-action-button">Undo</button><button type="button" className="timeline-action-button">Redo</button></div><div className="timeline-toolbar-spacer"/><span className="timeline-snapping">Magnet on</span><button type="button" className="timeline-action-button" onClick={() => onZoomChange(Math.max(50, zoom - 10))}>−</button><input aria-label="Timeline zoom" type="range" min="50" max="200" value={zoom} onChange={(event) => onZoomChange(Number(event.target.value))}/><button type="button" className="timeline-action-button" onClick={() => onZoomChange(Math.min(200, zoom + 10))}>+</button></div>
     <div className="timeline-ruler"><div className="timeline-ruler-offset"><span>{tracks.video.length + tracks.audio.length + tracks.text.length} tracks</span></div><div className="timeline-ruler-markers">{[0,4,8,12,16,20,24,28,32].map((marker)=><span key={marker}>{`00:${String(marker).padStart(2,'0')}`}</span>)}</div></div>
-    <div className="timeline-tracks"><div className="timeline-track-labels"><TrackLabel type="text" label="Text"/><TrackLabel type="video" label="Video 1"/><TrackLabel type="audio" label="Audio 1"/></div><div className="timeline-track-surface" onClick={(event)=>{const rect=event.currentTarget.getBoundingClientRect();onSeek(duration*Math.max(0,Math.min((event.clientX-rect.left)/rect.width,1)));}}><div className="timeline-playhead" style={{left:playheadLeft}}><span className="timeline-playhead-time">{currentTime.toFixed(1)}s</span><span className="timeline-playhead-handle"/></div><TrackRow clips={tracks.text} placeholder="Add text or captions"/><TrackRow clips={tracks.video} placeholder={activeTab==='editor'?'Drag media here':'Drop clips here'}/><TrackRow clips={tracks.audio} placeholder="Add audio"/></div></div>
+    <div className="timeline-tracks"><div className="timeline-track-labels"><TrackLabel type="text" label="Text"/><TrackLabel type="video" label="Video 1"/><TrackLabel type="audio" label="Audio 1"/></div><div className="timeline-track-surface" onClick={(event)=>{const rect=event.currentTarget.getBoundingClientRect();onSeek(duration*Math.max(0,Math.min((event.clientX-rect.left)/rect.width,1)));}}><div className="timeline-playhead" style={{left:playheadLeft}}><span className="timeline-playhead-time">{currentTime.toFixed(1)}s</span><span className="timeline-playhead-handle"/></div><TrackRow clips={tracks.text} placeholder="Add text or captions" zoom={zoom}/><TrackRow clips={tracks.video} placeholder={activeTab==='editor'?'Drag media here':'Drop clips here'} onTrimStart={onTrimStart} onTrimEnd={onTrimEnd} zoom={zoom}/><TrackRow clips={tracks.audio} placeholder="Add audio" zoom={zoom}/></div></div>
   </section>;
 }
 

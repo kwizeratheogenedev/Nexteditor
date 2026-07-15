@@ -24,6 +24,8 @@ const ALLOWED_ORIGINS = (process.env.CORS_ORIGIN || 'http://localhost:5173,http:
   .map((value) => value.trim())
   .filter(Boolean);
 
+const isDev = process.env.NODE_ENV !== 'production';
+
 const uploadsDir = path.join(__dirname, 'uploads');
 const clipsDir = path.join(__dirname, 'clips');
 
@@ -40,7 +42,7 @@ if (!fs.existsSync(clipsDir)) {
 
 app.use(cors({
   origin: (origin, callback) => {
-    if (!origin || isOriginAllowed(origin, ALLOWED_ORIGINS)) {
+    if (isDev || !origin || isOriginAllowed(origin, ALLOWED_ORIGINS)) {
       callback(null, true);
       return;
     }
@@ -85,7 +87,17 @@ setInterval(() => {
 
     fs.readdirSync(dir).forEach((file) => {
       const filePath = path.join(dir, file);
-      const stats = fs.statSync(filePath);
+      let stats;
+      try {
+        stats = fs.statSync(filePath);
+      } catch (_err) {
+        // File vanished between readdir and stat (e.g. concurrent
+        // cleanup). Skip it instead of crashing the whole server.
+        return;
+      }
+      if (stats.isDirectory()) {
+        return;
+      }
       if (now - stats.mtime.getTime() > 60 * 60 * 1000) {
         try {
           fs.unlinkSync(filePath);
@@ -101,12 +113,12 @@ setInterval(() => {
   }
 }, 15 * 60 * 1000);
 
-function startServer(p, attempts = 0) {
+function startServer(p, attempts = 0,hos ='0.0.0.0') {
   const serverInstance = http.createServer(app);
   const io = initSocket(serverInstance, ALLOWED_ORIGINS.join(','));
   app.set('io', io);
 
-  serverInstance.listen(p)
+  serverInstance.listen(p, hos)
     .once('listening', () => {
       console.log(`Video processing backend is listening on port ${p}`);
     })

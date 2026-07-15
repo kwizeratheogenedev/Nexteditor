@@ -1,5 +1,6 @@
 import { useState } from 'react';
 import { usePersistedState } from './usePersistedState';
+import { usePersistedEditorState } from './usePersistedEditorState';
 import {
   KEY_ACTIVE_TAB,
   KEY_AUDIO_META,
@@ -61,12 +62,22 @@ export function useMediaState() {
   const [progress, setProgress] = useState({ percent: 0, currentTime: '' });
 
   // Editor state
-  const [editorBannerVisible, setEditorBannerVisible] = useState(true);
-  const [editorTimeline, setEditorTimeline] = useState([]);
-  const [editorPlayhead, setEditorPlayhead] = useState(0);
-  const [editorIsPlaying, setEditorIsPlaying] = useState(false);
-  const [editorActiveClipIndex, setEditorActiveClipIndex] = useState(0);
-  const [timelineZoom, setTimelineZoom] = useState(100);
+  const editor = usePersistedEditorState();
+  const {
+    timeline: editorTimeline,
+    setTimeline: setEditorTimeline,
+    playhead: editorPlayhead,
+    setPlayhead: setEditorPlayhead,
+    isPlaying: editorIsPlaying,
+    setIsPlaying: setEditorIsPlaying,
+    activeClipIndex: editorActiveClipIndex,
+    setActiveClipIndex: setEditorActiveClipIndex,
+    zoom: timelineZoom,
+    setZoom: setTimelineZoom,
+    bannerVisible: editorBannerVisible,
+    setBannerVisible: setEditorBannerVisible,
+    clearAll: clearEditorState,
+  } = editor;
   const [editorVideo, setEditorVideo] = useState({ filePath: '', fileName: '' });
 
   // Preview state
@@ -155,6 +166,7 @@ export function useMediaState() {
     editorVideo,
     setEditorVideo,
     loadVideoInEditor,
+    clearEditorState,
 
     // Preview state
     previewCurrentTime,

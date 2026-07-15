@@ -1,4 +1,4 @@
-import { useEffect, useMemo, useRef } from 'react';
+import { useEffect, useMemo, useRef, useState } from 'react';
 import API_BASE_URL, { API_ENDPOINTS } from './config';
 import { useSocket } from './context/SocketContext';
 import { useMediaState } from './hooks/useMediaState';
@@ -96,6 +96,7 @@ function App() {
     setTimelineZoom,
     editorVideo,
     loadVideoInEditor,
+    clearEditorState,
     previewCurrentTime,
     setPreviewCurrentTime,
     previewDuration,
@@ -122,6 +123,23 @@ function App() {
     () => editorTimeline.reduce((acc, clip) => acc + (clip.trimmedEnd - clip.trimmedStart), 0),
     [editorTimeline],
   );
+
+  const [timelineHeight, setTimelineHeight] = useState(() => {
+    try {
+      const stored = localStorage.getItem('nexeditor_timeline_height');
+      return stored ? Number(stored) : 238;
+    } catch {
+      return 238;
+    }
+  });
+
+  useEffect(() => {
+    try {
+      localStorage.setItem('nexeditor_timeline_height', String(timelineHeight));
+    } catch {
+      // ignore storage errors
+    }
+  }, [timelineHeight]);
 
   useEffect(() => {
     const hasPreviousFiles = video1Meta || video2Meta || video3Meta || audioMeta || captionVideoMeta || captionFileMeta || shortsVideoMeta;
@@ -230,7 +248,7 @@ function App() {
   }, [editorVideo, setEditorActiveClipIndex, setEditorIsPlaying, setEditorPlayhead, setEditorTimeline, setErrorText]);
 
   useEffect(() => {
-    if (!editorVideoRef.current || editorTimeline.length === 0) {
+    if (!editorVideoRef.current || editorTimeline.length === 0 || editorIsPlaying) {
       return;
     }
 
@@ -240,11 +258,11 @@ function App() {
       if (editorPlayhead >= accumulatedTime && editorPlayhead < accumulatedTime + clipDuration) {
         if (editorActiveClipIndex !== i) {
           setEditorActiveClipIndex(i);
-          editorVideoRef.current.src = editorTimeline[i].url;
         }
 
         const localTarget = editorTimeline[i].trimmedStart + (editorPlayhead - accumulatedTime);
-        if (Math.abs(editorVideoRef.current.currentTime - localTarget) > 0.2 && !editorIsPlaying) {
+        if (Math.abs(editorVideoRef.current.currentTime - localTarget) > 0.2) {
+          editorVideoRef.current.src = editorTimeline[i].url;
           editorVideoRef.current.currentTime = localTarget;
         }
         break;
@@ -706,15 +724,7 @@ function App() {
       setShortsResults(null);
       setSelectedShortId(null);
     } else if (activeTab === 'editor') {
-      editorTimeline.forEach((clip) => {
-        if (clip.url) {
-          revokeObjectUrlIfNeeded(clip.url);
-        }
-      });
-      setEditorTimeline([]);
-      setEditorPlayhead(0);
-      setEditorActiveClipIndex(0);
-      setEditorIsPlaying(false);
+      clearEditorState();
       if (editorFileInputRef.current) {
         editorFileInputRef.current.value = '';
       }
@@ -803,6 +813,22 @@ function App() {
     setEditorPlayhead(0);
   };
 
+  const handleTrimStart = (clipId) => {
+    setEditorTimeline((prev) => prev.map((clip) => {
+      if (clip.id !== clipId) return clip;
+      const newStart = Math.min(clip.trimmedStart + 0.5, clip.trimmedEnd - 0.5);
+      return { ...clip, trimmedStart: newStart };
+    }));
+  };
+
+  const handleTrimEnd = (clipId) => {
+    setEditorTimeline((prev) => prev.map((clip) => {
+      if (clip.id !== clipId) return clip;
+      const newEnd = Math.max(clip.trimmedEnd - 0.5, clip.trimmedStart + 0.5);
+      return { ...clip, trimmedEnd: newEnd };
+    }));
+  };
+
   const handleEditorTogglePlayback = () => {
     if (!editorVideoRef.current || !editorTimeline.length) {
       return;
@@ -816,56 +842,80 @@ function App() {
     }
 
     let accumulatedTime = 0;
+    let targetIndex = -1;
+    let localTime = 0;
+
     for (let i = 0; i < editorTimeline.length; i += 1) {
       const clipDuration = editorTimeline[i].trimmedEnd - editorTimeline[i].trimmedStart;
       if (editorPlayhead >= accumulatedTime && editorPlayhead < accumulatedTime + clipDuration) {
-        if (editorActiveClipIndex !== i) {
-          setEditorActiveClipIndex(i);
-          editorVideoRef.current.src = editorTimeline[i].url;
-          editorVideoRef.current.currentTime = editorTimeline[i].trimmedStart + (editorPlayhead - accumulatedTime);
-        }
+        targetIndex = i;
+        localTime = editorPlayhead - accumulatedTime;
         break;
       }
       accumulatedTime += clipDuration;
     }
 
-    editorVideoRef.current.play();
-    setEditorIsPlaying(true);
+    if (targetIndex === -1) {
+      setEditorPlayhead(0);
+      targetIndex = 0;
+      localTime = 0;
+    }
+
+    if (editorActiveClipIndex !== targetIndex) {
+      setEditorActiveClipIndex(targetIndex);
+    }
+
+    const targetClip = editorTimeline[targetIndex];
+    editorVideoRef.current.src = targetClip.url;
+    editorVideoRef.current.currentTime = targetClip.trimmedStart + localTime;
+
+    const playPromise = editorVideoRef.current.play();
+    if (playPromise !== undefined) {
+      playPromise.then(() => {
+        setEditorIsPlaying(true);
+      }).catch(() => {
+        setEditorIsPlaying(false);
+      });
+    } else {
+      setEditorIsPlaying(true);
+    }
 
     const updatePlayhead = () => {
-      if (!editorVideoRef.current || editorVideoRef.current.ended) {
-        setEditorIsPlaying(false);
-        setEditorPlayhead(0);
-        if (editorVideoRef.current) {
-          editorVideoRef.current.currentTime = editorTimeline[0]?.trimmedStart || 0;
-        }
+      if (!editorVideoRef.current) {
         return;
       }
 
-      const currentLocal = editorVideoRef.current.currentTime;
+      const video = editorVideoRef.current;
+      const currentLocal = video.currentTime;
+
+      if (video.ended || currentLocal >= editorTimeline[editorActiveClipIndex]?.trimmedEnd) {
+        if (editorActiveClipIndex + 1 < editorTimeline.length) {
+          const nextIndex = editorActiveClipIndex + 1;
+          setEditorActiveClipIndex(nextIndex);
+          video.src = editorTimeline[nextIndex].url;
+          video.currentTime = editorTimeline[nextIndex].trimmedStart;
+          const nextPlayPromise = video.play();
+          if (nextPlayPromise !== undefined) {
+            nextPlayPromise.catch(() => {
+              setEditorIsPlaying(false);
+            });
+          }
+        } else {
+          video.pause();
+          setEditorIsPlaying(false);
+          const finalTime = editorTotalDuration || 0;
+          setEditorPlayhead(finalTime);
+          return;
+        }
+      }
+
       let accumulated = 0;
       for (let i = 0; i < editorActiveClipIndex; i += 1) {
         accumulated += editorTimeline[i].trimmedEnd - editorTimeline[i].trimmedStart;
       }
 
-      const newGlobalPlayhead = accumulated + (currentLocal - editorTimeline[editorActiveClipIndex].trimmedStart);
+      const newGlobalPlayhead = accumulated + (currentLocal - (editorTimeline[editorActiveClipIndex]?.trimmedStart || 0));
       setEditorPlayhead(newGlobalPlayhead);
-
-      if (currentLocal >= editorTimeline[editorActiveClipIndex].trimmedEnd) {
-        if (editorActiveClipIndex + 1 < editorTimeline.length) {
-          const nextIndex = editorActiveClipIndex + 1;
-          setEditorActiveClipIndex(nextIndex);
-          editorVideoRef.current.src = editorTimeline[nextIndex].url;
-          editorVideoRef.current.currentTime = editorTimeline[nextIndex].trimmedStart;
-          editorVideoRef.current.play();
-        } else {
-          editorVideoRef.current.pause();
-          setEditorIsPlaying(false);
-          setEditorPlayhead(0);
-          editorVideoRef.current.currentTime = editorTimeline[0]?.trimmedStart || 0;
-          return;
-        }
-      }
 
       editorAnimationRef.current = requestAnimationFrame(updatePlayhead);
     };
@@ -1180,6 +1230,10 @@ function App() {
         onSeek={handlePreviewSeek}
         onSplit={activeTab === 'editor' ? handleEditorSplit : undefined}
         onDelete={activeTab === 'editor' ? handleEditorDelete : undefined}
+        onTrimStart={activeTab === 'editor' ? handleTrimStart : undefined}
+        onTrimEnd={activeTab === 'editor' ? handleTrimEnd : undefined}
+        timelineHeight={timelineHeight}
+        onTimelineHeightChange={setTimelineHeight}
       />}
       <ErrorPopup errorText={errorText} setErrorText={setErrorText} />
     </div>

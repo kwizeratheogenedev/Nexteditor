@@ -32,6 +32,11 @@ export function isOriginAllowed(origin, allowedOrigins = []) {
     return true;
   }
 
+  const isDev = process.env.NODE_ENV !== 'production';
+  if (isDev) {
+    return true;
+  }
+
   try {
     const parsedOrigin = new URL(origin);
     const isLocalhost = ['localhost', '127.0.0.1', '::1'].includes(parsedOrigin.hostname);

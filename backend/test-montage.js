@@ -27,10 +27,10 @@ async function main() {
   createAudio(audio);
 
   const form = new FormData();
-  form.append('video1', fs.createReadStream(videoA));
-  form.append('video2', fs.createReadStream(videoB));
-  form.append('video3', fs.createReadStream(videoC));
-  form.append('audio', fs.createReadStream(audio));
+  form.append('video1', new Blob([fs.readFileSync(videoA)]), 'test-video1.mp4');
+  form.append('video2', new Blob([fs.readFileSync(videoB)]), 'test-video2.mp4');
+  form.append('video3', new Blob([fs.readFileSync(videoC)]), 'test-video3.mp4');
+  form.append('audio', new Blob([fs.readFileSync(audio)]), 'test-audio.mp3');
 
   const res = await fetch('http://localhost:3000/api/create-montage', {
     method: 'POST',
