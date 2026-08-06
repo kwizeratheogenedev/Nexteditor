@@ -3,3 +3,5 @@ uploads/*
 !uploads/.gitkeep
 clips/*
 !clips/.gitkeep
+node_modules/
+whisper/
