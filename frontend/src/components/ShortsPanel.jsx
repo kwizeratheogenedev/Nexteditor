@@ -35,7 +35,20 @@ function ShortsPanel({
   selectedShortId,
   onSelectShort,
   onDownload,
+  onReformat,
 }) {
+  const [reformattingId, setReformattingId] = useState(null);
+
+  const handleReformatClick = async (event, clip, formatStrategy) => {
+    event.stopPropagation();
+    if (!onReformat || reformattingId) return;
+    setReformattingId(clip.id);
+    try {
+      await onReformat(clip, formatStrategy);
+    } finally {
+      setReformattingId(null);
+    }
+  };
   const [sourceDuration, setSourceDuration] = useState(0);
   const previewUrl = useMemo(() => (shortsVideo ? URL.createObjectURL(shortsVideo) : ''), [shortsVideo]);
   useEffect(() => () => { if (previewUrl) URL.revokeObjectURL(previewUrl); }, [previewUrl]);
@@ -78,7 +91,7 @@ function ShortsPanel({
         </section>
       </div>
 
-      {results.length > 0 && <section className="shorts-results"><div className="shorts-results-head"><div><span className="shorts-kicker">YOUR CLIPS</span><h2>{results.length} shorts are ready</h2><p>Preview your clips and download the ones you want to publish.</p></div><span className="shorts-ready-pill">✓ Generation complete</span></div><div className="shorts-results-grid">{results.map((clip, index) => <article key={clip.id} className={`shorts-result-card ${selectedShortId === clip.id ? 'is-selected' : ''}`} onClick={() => onSelectShort?.(clip.id)}><div className="shorts-result-video"><video src={clip.url} controls preload="metadata" onClick={(event) => event.stopPropagation()} /><span>#{index + 1}</span></div><div className="shorts-result-info"><div><strong>Short {index + 1}</strong><span>{formatTime(clip.duration)} · starts at {formatTime(clip.startTime)}</span></div><button type="button" onClick={(event) => { event.stopPropagation(); onDownload?.(clip, index); }}><ShortIcon><path d="M12 3v12m0 0l4-4m-4 4l-4-4"/><path d="M5 19h14"/></ShortIcon>Download</button></div></article>)}</div></section>}
+      {results.length > 0 && <section className="shorts-results"><div className="shorts-results-head"><div><span className="shorts-kicker">YOUR CLIPS</span><h2>{results.length} shorts are ready</h2><p>Preview your clips and download the ones you want to publish.</p></div><span className="shorts-ready-pill">✓ Generation complete</span></div><div className="shorts-results-grid">{results.map((clip, index) => <article key={clip.id} className={`shorts-result-card ${selectedShortId === clip.id ? 'is-selected' : ''}`} onClick={() => onSelectShort?.(clip.id)}><div className="shorts-result-video"><video src={clip.url} controls preload="metadata" onClick={(event) => event.stopPropagation()} /><span>#{index + 1}</span></div><div className="shorts-result-info"><div><strong>Short {index + 1}</strong><span>{formatTime(clip.duration)} · starts at {formatTime(clip.startTime)}</span></div><button type="button" onClick={(event) => { event.stopPropagation(); onDownload?.(clip, index); }}><ShortIcon><path d="M12 3v12m0 0l4-4m-4 4l-4-4"/><path d="M5 19h14"/></ShortIcon>Download</button></div>{onReformat && <div className="shorts-reformat-row" onClick={(event) => event.stopPropagation()}><span>Reframe:</span><button type="button" disabled={reformattingId === clip.id} onClick={(event) => handleReformatClick(event, clip, 'crop')}>{reformattingId === clip.id ? 'Working…' : 'Crop to fill'}</button><button type="button" disabled={reformattingId === clip.id} onClick={(event) => handleReformatClick(event, clip, 'pad')}>{reformattingId === clip.id ? 'Working…' : 'Fit with padding'}</button></div>}</article>)}</div></section>}
     </div>
   );
 }

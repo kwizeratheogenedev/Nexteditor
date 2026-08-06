@@ -12,6 +12,7 @@ import reformatShortRouter from './routes/reformatShort.js';
 import createMontageRouter from './routes/createMontage.js';
 import fetchUrlVideoRouter from './routes/fetchUrlVideo.js';
 import generateCaptionsRouter from './routes/generateCaptions.js';
+import exportTimelineRouter from './routes/exportTimeline.js';
 import { jobStore, deleteJob } from './services/jobStore.js';
 import { initSocket, isOriginAllowed } from './socket.js';
 
@@ -62,11 +63,12 @@ app.use('/api/reformat-short', reformatShortRouter);
 app.use('/api/fetch-url-video', fetchUrlVideoRouter);
 app.use('/api/fetch-url', fetchUrlVideoRouter);
 app.use('/api/create-montage', createMontageRouter);
+app.use('/api/editor/export', exportTimelineRouter);
 
 app.use((err, req, res, next) => {
   if (err.code === 'LIMIT_FILE_SIZE') {
-    const isCaptionUpload = req.originalUrl?.startsWith('/api/generate-captions');
-    return res.status(413).json({ error: `File too large (max ${isCaptionUpload ? '2 GB' : '500 MB'})` });
+    const isLargeUpload = req.originalUrl?.startsWith('/api/generate-captions') || req.originalUrl?.startsWith('/api/burn-subtitles');
+    return res.status(413).json({ error: `File too large (max ${isLargeUpload ? '2 GB' : '500 MB'})` });
   }
   if (err.code === 'LIMIT_FILE_COUNT') {
     return res.status(400).json({ error: 'Too many files' });
@@ -117,6 +119,11 @@ function startServer(p, attempts = 0,hos ='0.0.0.0') {
   const serverInstance = http.createServer(app);
   const io = initSocket(serverInstance, ALLOWED_ORIGINS.join(','));
   app.set('io', io);
+
+  // Large (up to 2GB) caption/video uploads on slow connections can take
+  // longer than Node's default 5-minute request timeout; give them room.
+  serverInstance.requestTimeout = 30 * 60 * 1000;
+  serverInstance.headersTimeout = 31 * 60 * 1000;
 
   serverInstance.listen(p, hos)
     .once('listening', () => {

@@ -28,7 +28,6 @@ function CaptionsPanel({
 }) {
   const [activeMode, setActiveMode] = useState('auto');
   const [language, setLanguage] = useState('English (US)');
-  const [source, setSource] = useState('All audio');
   const [removeFillers, setRemoveFillers] = useState(true);
   const [captionPosition, setCaptionPosition] = useState('bottom');
   const [selectedPreviewMode, setSelectedPreviewMode] = useState(null);
@@ -62,7 +61,7 @@ function CaptionsPanel({
 
       <nav className="caption-mode-tabs" aria-label="Caption type">
         {modes.map((mode) => (
-          <button key={mode.id} type="button" className={activeMode === mode.id ? 'is-active' : ''} onClick={() => setActiveMode(mode.id)}>
+          <button key={mode.id} type="button" disabled={processing} className={activeMode === mode.id ? 'is-active' : ''} onClick={() => setActiveMode(mode.id)}>
             {mode.label}{mode.badge && <em>{mode.badge}</em>}
           </button>
         ))}
@@ -123,7 +122,6 @@ function CaptionsPanel({
             <>
               <div className="caption-card-title"><div><strong>{activeMode === 'auto' ? 'Auto captions' : 'Auto lyrics'}</strong><span>{activeMode === 'auto' ? 'Recognize speech from your video' : 'Sync lyrics to music automatically'}</span></div><span className="caption-soon">AI</span></div>
               <label className="caption-field"><span>Spoken language</span><select value={language} onChange={(event) => setLanguage(event.target.value)}><option>English (US)</option><option>English (UK)</option><option>Spanish</option><option>French</option><option>German</option></select></label>
-              <label className="caption-field"><span>Caption source</span><select value={source} onChange={(event) => setSource(event.target.value)}><option>All audio</option><option>Voiceover only</option><option>Original sound</option></select></label>
               <label className="caption-toggle-row"><span><strong>Remove filler words</strong><small>Clean up “um”, “uh”, and repeated words</small></span><input type="checkbox" checked={removeFillers} onChange={(event) => setRemoveFillers(event.target.checked)} /><i /></label>
               <div className="caption-info-box"><CaptionIcon><circle cx="12" cy="12" r="9"/><path d="M12 11v5M12 8h.01"/></CaptionIcon><span>Audio is optimized before transcription, then the generated captions are rendered directly into your video.</span></div>
             </>
@@ -149,7 +147,7 @@ function CaptionsPanel({
               </div>
             )}
             {processing && <div className="caption-progress"><span style={{ width: `${progress}%` }} /></div>}
-            <button type="button" className="caption-generate-button" disabled={!hasReadyFiles || processing} onClick={() => onGenerate(activeMode, { language, source, removeFillers, captionPosition })}>
+            <button type="button" className="caption-generate-button" disabled={!hasReadyFiles || processing} onClick={() => onGenerate(activeMode, { language, removeFillers, captionPosition })}>
               <CaptionIcon><path d="M12 3l1.6 4.4L18 9l-4.4 1.6L12 15l-1.6-4.4L6 9l4.4-1.6L12 3z"/><path d="M19 15l.8 2.2L22 18l-2.2.8L19 21l-.8-2.2L16 18l2.2-.8L19 15z"/></CaptionIcon>
               {processing ? `Generating ${activeMode === 'lyrics' ? 'lyrics' : 'captions'} ${Math.round(progress)}%` : activeMode === 'local' ? 'Generate captioned video' : activeMode === 'lyrics' ? 'Generate lyrics' : 'Generate captions'}
             </button>

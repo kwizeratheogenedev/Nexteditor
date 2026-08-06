@@ -5,6 +5,7 @@ import path from 'path';
 import { fileURLToPath } from 'url';
 import { randomUUID } from 'crypto';
 import { runFFmpeg, probeDuration } from '../services/ffmpeg.js';
+import { getFileSource as resolveFileSource } from '../services/fileResolve.js';
 import { getIo } from '../socket.js';
 import pLimit from 'p-limit';
 import os from 'os';
@@ -18,16 +19,6 @@ const clipsDir = path.resolve(__dirname, '..', 'clips');
 const MIN_CLIP_DURATION = 3;
 const MAX_CLIP_DURATION = 4;
 const SKIP_INPUT_VIDEO_SECONDS = 40;
-
-// Validate that a file path is within allowed directories
-function validateFilePath(filePath, allowedBasePath = uploadsDir) {
-  if (!filePath || typeof filePath !== 'string') {
-    return false;
-  }
-  const resolvedPath = path.resolve(filePath);
-  const resolvedBase = path.resolve(allowedBasePath);
-  return resolvedPath.startsWith(resolvedBase) && resolvedPath !== resolvedBase;
-}
 
 // Configure multer for video and audio uploads
 const storage = multer.diskStorage({
@@ -57,44 +48,45 @@ const upload = multer({
 
 // Handle both file uploads and URL-based file paths
 function getFileSource(file, filePath) {
-  if (file) {
-    // multer usually provides `file.path` as a string. If it's missing,
-    // try to construct from destination+filename. Be defensive about types.
-    if (typeof file.path === 'string' && file.path.length > 0) {
-      if (!validateFilePath(file.path)) {
-        throw new Error('Invalid file path');
-      }
-      return file.path;
-    }
-    if (typeof file.destination === 'string' && typeof file.filename === 'string') {
-      const constructed = path.join(file.destination, file.filename);
-      if (!validateFilePath(constructed)) {
-        throw new Error('Invalid file path');
-      }
-      return constructed;
-    }
-  }
-  if (filePath) {
-    if (!validateFilePath(filePath)) {
-      throw new Error('Invalid file path');
-    }
-    return filePath;
-  }
-  return null;
+  return resolveFileSource(file, filePath, [uploadsDir]);
 }
 
+// Latest progress/error payload per socket id, so the frontend can poll over
+// HTTP as a fallback when the socket connection is stale or reconnecting -
+// without ever broadcasting one user's job status to every other client.
+const progressBySocket = new Map();
+
 function emitToClient(socketId, eventName, payload) {
+  if (socketId && (eventName === 'montage-progress' || eventName === 'montage-error')) {
+    progressBySocket.set(socketId, { eventName, payload, updatedAt: Date.now() });
+  }
+
   const io = getIo();
   const clientSocket = socketId ? io?.sockets.sockets.get(socketId) : null;
   if (clientSocket) {
     clientSocket.emit(eventName, payload);
+  }
+  // No broadcast fallback: broadcasting to every connected socket would leak
+  // this job's progress/errors into other users' sessions whenever the
+  // socket id is stale (e.g. after a reconnect).
+}
+
+setInterval(() => {
+  const cutoff = Date.now() - 60 * 60 * 1000;
+  for (const [socketId, entry] of progressBySocket.entries()) {
+    if (entry.updatedAt < cutoff) progressBySocket.delete(socketId);
+  }
+}, 15 * 60 * 1000);
+
+router.get('/progress/:socketId', (req, res) => {
+  res.setHeader('Cache-Control', 'no-store');
+  const entry = progressBySocket.get(req.params.socketId);
+  if (!entry) {
+    res.json({ percent: 0, currentTime: '' });
     return;
   }
-
-  // Fallback so progress is still visible even if the request started before
-  // the frontend finished establishing its socket connection.
-  io?.emit(eventName, payload);
-}
+  res.json(entry.eventName === 'montage-error' ? { percent: 0, currentTime: '', error: entry.payload.error } : entry.payload);
+});
 
 function sanitizeDownloadName(name) {
   const baseName = path.parse(name || 'audio-track').name || 'audio-track';
@@ -133,7 +125,6 @@ function pickClipDuration(remainingDuration, syncMode, tempoSensitivity) {
   }[tempoSensitivity] || { min: 0.5, max: 0.5 };
 
   const weightMin = Math.min(baseWeight.min, tempoAdjustment.min);
-  const weightMax = Math.min(baseWeight.max, tempoAdjustment.max);
   return Math.random() < weightMin ? MIN_CLIP_DURATION : MAX_CLIP_DURATION;
 }
 

@@ -1,4 +1,4 @@
-function TopBar({ activeTab }) {
+function TopBar({ activeTab, onExport, exporting = false, exportProgress = 0 }) {
   return (
     <header className="topbar">
       <div className="topbar-left">
@@ -15,9 +15,11 @@ function TopBar({ activeTab }) {
           <>
             <span className="topbar-pill">1080p</span>
             <span className="topbar-pill">16:9</span>
+            <button type="button" className="topbar-export" disabled={exporting} onClick={onExport}>
+              {exporting ? `Exporting ${Math.round(exportProgress)}%` : 'Export'}
+            </button>
           </>
         )}
-        {/* Global export removed per request */}
       </div>
     </header>
   );

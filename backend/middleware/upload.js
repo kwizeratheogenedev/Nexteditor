@@ -53,4 +53,8 @@ const upload = createUpload();
 // disk so the Node process never holds the full upload in memory.
 export const captionUpload = createUpload({ fileSize: 2 * 1024 * 1024 * 1024, files: 1 });
 
+// Burning a user-supplied subtitle file onto a video uploads two files (video +
+// subtitle) but should honor the same large-video limit the UI advertises.
+export const captionBurnUpload = createUpload({ fileSize: 2 * 1024 * 1024 * 1024, files: 2 });
+
 export default upload;

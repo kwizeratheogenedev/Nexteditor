@@ -40,6 +40,20 @@ function captionStyle(position) {
   return `Alignment=${alignment},MarginV=${marginV},MarginL=36,MarginR=36`;
 }
 
+const FILLER_WORD_PATTERN = /\b(um+|uh+|erm+|hm+|you know|i mean)\b[,.]?\s*/gi;
+
+function removeFillerWords(srtText) {
+  return srtText
+    .split('\n')
+    .map((line) => {
+      // Skip index lines and timestamp lines (e.g. "00:00:01,000 --> 00:00:03,000").
+      if (/^\d+$/.test(line.trim()) || line.includes('-->')) return line;
+      const cleaned = line.replace(FILLER_WORD_PATTERN, ' ').replace(/\s{2,}/g, ' ').trim();
+      return cleaned;
+    })
+    .join('\n');
+}
+
 function captionedFileName(originalName) {
   const base = path.parse(originalName || 'video').name.replace(/[^a-zA-Z0-9 _.-]/g, '').trim() || 'video';
   return `${base}-captioned.mp4`;
@@ -76,8 +90,9 @@ router.post('/', captionUpload.single('video'), async (req, res) => {
       prompt,
       onProgress: (done, total) => emitProgress(req, 26 + (done / total) * 44, `${req.body.mode === 'lyrics' ? 'Transcribing lyrics' : 'Transcribing speech'} ${done}/${total}...`),
     });
+    const finalSrt = req.body.removeFillers === 'true' ? removeFillerWords(srt) : srt;
     const subtitlePath = path.join(jobDir, 'captions.srt');
-    await fsp.writeFile(subtitlePath, srt, 'utf8');
+    await fsp.writeFile(subtitlePath, finalSrt, 'utf8');
 
     emitProgress(req, 71, 'Adding captions to video...');
     await runFFmpeg([

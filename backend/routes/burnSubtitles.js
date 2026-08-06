@@ -1,12 +1,13 @@
 import express from 'express';
 import fs from 'fs';
 import path from 'path';
-import upload from '../middleware/upload.js';
+import { captionBurnUpload } from '../middleware/upload.js';
 import { probeDuration, runFFmpeg } from '../services/ffmpeg.js';
 import { getIo } from '../socket.js';
 
 const router = express.Router();
 const clipsDir = path.resolve(process.cwd(), 'clips');
+const progressByJob = new Map();
 
 function emitToClient(req, eventName, payload) {
   const io = getIo();
@@ -16,6 +17,17 @@ function emitToClient(req, eventName, payload) {
     clientSocket.emit(eventName, payload);
   }
 }
+
+function emitProgress(req, payload) {
+  const jobId = req.headers['x-job-id'];
+  if (jobId) progressByJob.set(jobId, { ...payload, updatedAt: Date.now() });
+  emitToClient(req, 'ffmpeg-progress', payload);
+}
+
+router.get('/progress/:jobId', (req, res) => {
+  res.setHeader('Cache-Control', 'no-store');
+  res.json(progressByJob.get(req.params.jobId) || { percent: 0, currentTime: 'Waiting for upload...' });
+});
 
 function captionStyle(position) {
   // Keep this mapping identical to automatic caption rendering.
@@ -32,13 +44,14 @@ function captionedFileName(originalName) {
 
 router.post(
   '/',
-  upload.fields([
+  captionBurnUpload.fields([
     { name: 'video', maxCount: 1 },
     { name: 'subtitle', maxCount: 1 },
   ]),
   async (req, res) => {
     const tempFiles = [];
     const outputFiles = [];
+    const jobId = req.headers['x-job-id'];
 
     try {
       const files = req.files;
@@ -84,11 +97,12 @@ router.post(
         {
           duration: videoDuration,
           onProgress: (progress) => {
-            emitToClient(req, 'ffmpeg-progress', progress);
+            emitProgress(req, progress);
           },
         },
       );
 
+      emitProgress(req, { percent: 100, currentTime: 'Captioned video ready' });
       emitToClient(req, 'ffmpeg-complete', { taskId, status: 'success', outputPath: path.basename(outputPath) });
       res.download(outputPath, captionedFileName(files.video[0].originalname), () => {
         for (const filePath of outputFiles) {
@@ -97,6 +111,7 @@ router.post(
       });
     } catch (err) {
       console.error(err);
+      emitProgress(req, { percent: 0, currentTime: 'Caption burn failed' });
       for (const filePath of outputFiles) {
         fs.rm(filePath, { force: true }, () => {});
       }
@@ -107,6 +122,7 @@ router.post(
       for (const filePath of tempFiles) {
         fs.rm(filePath, { force: true }, () => {});
       }
+      if (jobId) setTimeout(() => progressByJob.delete(jobId), 15 * 60 * 1000);
     }
   },
 );

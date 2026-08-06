@@ -2,8 +2,10 @@ import fs from 'fs';
 import path from 'path';
 import { execFileSync } from 'child_process';
 import ffmpegPath from 'ffmpeg-static';
+import { fileURLToPath } from 'url';
 
-const tmp = 'c:\\Users\\IE\\Documents\\learn\\mern\\Nexteditor\\backend';
+const __dirname = path.dirname(fileURLToPath(import.meta.url));
+const tmp = __dirname;
 const videoA = path.join(tmp, 'test-video1.mp4');
 const videoB = path.join(tmp, 'test-video2.mp4');
 const videoC = path.join(tmp, 'test-video3.mp4');

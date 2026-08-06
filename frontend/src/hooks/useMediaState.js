@@ -58,6 +58,7 @@ export function useMediaState() {
   // UI state
   const [processing, setProcessing] = useState(false);
   const [resultUrl, setResultUrl] = useState(null);
+  const [resultTab, setResultTab] = useState(null);
   const [errorText, setErrorText] = useState(null);
   const [progress, setProgress] = useState({ percent: 0, currentTime: '' });
 
@@ -66,6 +67,9 @@ export function useMediaState() {
   const {
     timeline: editorTimeline,
     setTimeline: setEditorTimeline,
+    commitTimeline: commitEditorTimeline,
+    pushHistory: pushEditorHistory,
+    updateClip: updateEditorClip,
     playhead: editorPlayhead,
     setPlayhead: setEditorPlayhead,
     isPlaying: editorIsPlaying,
@@ -76,9 +80,30 @@ export function useMediaState() {
     setZoom: setTimelineZoom,
     bannerVisible: editorBannerVisible,
     setBannerVisible: setEditorBannerVisible,
+    selectedClipId,
+    setSelectedClipId,
+    selectedClipIds,
+    setSelectedClipIds,
+    expandedTracks,
+    setExpandedTracks,
+    snapEnabled,
+    setSnapEnabled,
+    autoFollowPlayhead,
+    setAutoFollowPlayhead,
+    insertMode,
+    setInsertMode,
+    trackMeta,
+    setTrackMeta,
+    markers,
+    setMarkers,
     clearAll: clearEditorState,
   } = editor;
+  const undo = editor.undo;
+  const redo = editor.redo;
   const [editorVideo, setEditorVideo] = useState({ filePath: '', fileName: '' });
+  const [dragState, setDragState] = useState({ active: false, clipId: null, startX: 0, currentX: 0, startY: 0, currentY: 0, sourceIndex: -1, selectedIds: [], originals: null });
+  const [trimState, setTrimState] = useState({ active: false, clipId: null, side: null, startX: 0, originalStart: 0, originalEnd: 0, originalStartTime: 0 });
+  const [playheadDrag, setPlayheadDrag] = useState(false);
 
   // Preview state
   const [previewCurrentTime, setPreviewCurrentTime] = useState(0);
@@ -145,6 +170,8 @@ export function useMediaState() {
     setProcessing,
     resultUrl,
     setResultUrl,
+    resultTab,
+    setResultTab,
     errorText,
     setErrorText,
     progress,
@@ -155,6 +182,9 @@ export function useMediaState() {
     setEditorBannerVisible,
     editorTimeline,
     setEditorTimeline,
+    commitEditorTimeline,
+    pushEditorHistory,
+    updateEditorClip,
     editorPlayhead,
     setEditorPlayhead,
     editorIsPlaying,
@@ -165,8 +195,32 @@ export function useMediaState() {
     setTimelineZoom,
     editorVideo,
     setEditorVideo,
+    selectedClipId,
+    setSelectedClipId,
+    selectedClipIds,
+    setSelectedClipIds,
+    dragState,
+    setDragState,
+    trimState,
+    setTrimState,
+    playheadDrag,
+    setPlayheadDrag,
+    snapEnabled,
+    setSnapEnabled,
+    expandedTracks,
+    setExpandedTracks,
+    autoFollowPlayhead,
+    setAutoFollowPlayhead,
+    insertMode,
+    setInsertMode,
+    trackMeta,
+    setTrackMeta,
+    markers,
+    setMarkers,
     loadVideoInEditor,
     clearEditorState,
+    undo,
+    redo,
 
     // Preview state
     previewCurrentTime,

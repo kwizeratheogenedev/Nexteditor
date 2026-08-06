@@ -3,7 +3,10 @@ import path from 'path';
 import ffmpegPath from 'ffmpeg-static';
 import { execFileSync } from 'child_process';
 
-const tmp = process.cwd();
+import { fileURLToPath } from 'url';
+
+const __dirname = path.dirname(fileURLToPath(import.meta.url));
+const tmp = __dirname;
 const videoA = path.join(tmp, 'test-video1.mp4');
 const videoB = path.join(tmp, 'test-video2.mp4');
 const videoC = path.join(tmp, 'test-video3.mp4');

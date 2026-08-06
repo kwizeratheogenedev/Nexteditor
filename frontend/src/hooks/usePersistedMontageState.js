@@ -106,15 +106,22 @@ export function usePersistedMontageState() {
         setAudio(a);
 
         if (processingState) {
-          setMergeStatus(processingState.mergeStatus || 'idle');
-          setMergeProgress(processingState.mergeProgress || 0);
-          setMergeStageText(processingState.mergeStageText || '');
+          // A 'processing' status persisted from a previous page load has no
+          // live request behind it anymore (the fetch promise that would have
+          // resolved it is gone) - trusting it as-is would strand the UI at
+          // ~99% forever. Treat it as unknown instead of resuming it.
+          const wasStillProcessing = processingState.mergeStatus === 'processing';
+          setMergeStatus(wasStillProcessing ? 'error' : (processingState.mergeStatus || 'idle'));
+          setMergeProgress(wasStillProcessing ? 0 : (processingState.mergeProgress || 0));
+          setMergeStageText(wasStillProcessing ? '' : (processingState.mergeStageText || ''));
           setMergeTotalEstimatedTime(processingState.mergeTotalEstimatedTime || 0);
           setMergeTimeSpent(processingState.mergeTimeSpent || 0);
           setMergeTimeLeft(processingState.mergeTimeLeft || 0);
-          setMergeError(processingState.mergeError || '');
+          setMergeError(wasStillProcessing
+            ? 'Your previous montage job was interrupted by a page reload. Please check your downloads, or start a new merge.'
+            : (processingState.mergeError || ''));
           setOutputFile(processingState.outputFile || { filePath:'', fileName:'', downloadName:'', duration:'', size:'' });
-          setHasRealProgress(processingState.hasRealProgress || false);
+          setHasRealProgress(wasStillProcessing ? false : (processingState.hasRealProgress || false));
           setLastProgressUpdate(processingState.lastProgressUpdate || Date.now());
           setSyncMode(processingState.syncMode || 'beat');
           setTempoSensitivity(processingState.tempoSensitivity || 'medium');

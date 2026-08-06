@@ -1,0 +1,5 @@
+*.log
+uploads/*
+!uploads/.gitkeep
+clips/*
+!clips/.gitkeep

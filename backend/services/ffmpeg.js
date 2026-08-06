@@ -68,6 +68,31 @@ export function probeDuration(filePath) {
   });
 }
 
+export function probeHasAudio(filePath) {
+  return new Promise((resolve) => {
+    const child = spawn(FFPROBE_BINARY, [
+      '-v',
+      'error',
+      '-select_streams',
+      'a',
+      '-show_entries',
+      'stream=codec_type',
+      '-of',
+      'csv=p=0',
+      filePath,
+    ]);
+
+    let stdout = '';
+    child.stdout.on('data', (chunk) => {
+      stdout += chunk.toString();
+    });
+    // A source with no readable audio stream shouldn't fail the whole
+    // export - callers substitute silence for it instead.
+    child.on('error', () => resolve(false));
+    child.on('close', () => resolve(stdout.trim().length > 0));
+  });
+}
+
 export function runFFmpeg(args, { duration, onProgress } = {}) {
   const FFMPEG_TIMEOUT = parseInt(process.env.FFMPEG_TIMEOUT || '3600000', 10); // Default 1 hour
   

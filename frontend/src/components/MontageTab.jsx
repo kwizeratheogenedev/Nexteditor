@@ -1072,11 +1072,20 @@ export default function MontageTab({ loadVideoInEditor, onError, onShurfer, onRe
     onReset?.();
   }, [clearAll, onReset]);
 
+  // Stable per-slot setters - MediaCard's internal effect re-subscribes its
+  // socket listeners whenever `setItem` changes identity, so a fresh inline
+  // arrow here on every render was tearing down/re-subscribing constantly.
+  const setVideo0 = useCallback((u) => updateVideo(0, u), [updateVideo]);
+  const setVideo1 = useCallback((u) => updateVideo(1, u), [updateVideo]);
+  const setVideo2 = useCallback((u) => updateVideo(2, u), [updateVideo]);
+
   useEffect(() => {
     if (!socket) return;
     const onProg = (p) => {
       setHasRealProgress(true);
-      setMergeProgress(p?.percent || 0);
+      // Never let a real update (or the fake ticker below) move the bar
+      // backward - both write the same value independently and can race.
+      setMergeProgress((current) => Math.max(current, p?.percent || 0));
       setLastProgressUpdate(Date.now());
       setMergeStageText(p?.currentTime || '');
       setMergeTotalEstimatedTime(typeof p?.totalEstimatedTime === 'number' ? p.totalEstimatedTime : 0);
@@ -1096,6 +1105,31 @@ export default function MontageTab({ loadVideoInEditor, onError, onShurfer, onRe
       socket.off('montage-error', onErr);
     };
   }, [onError, socket, setHasRealProgress, setMergeProgress, setMergeStageText, setMergeStatus, setMergeError, setLastProgressUpdate, setMergeTimeLeft, setMergeTimeSpent, setMergeTotalEstimatedTime]);
+
+  useEffect(() => {
+    if (mergeStatus !== 'processing' || !socketId) {
+      return undefined;
+    }
+
+    // Poll the job-store-backed HTTP endpoint as a fallback so progress still
+    // advances if the socket connection drops or reconnects mid-job.
+    const poller = window.setInterval(async () => {
+      try {
+        const response = await fetch(`${API_BASE}/api/create-montage/progress/${socketId}`, { cache: 'no-store' });
+        if (!response.ok) return;
+        const status = await response.json();
+        if (status.error) return;
+        if (status.percent > 0) {
+          setHasRealProgress(true);
+          setMergeProgress((current) => Math.max(current, status.percent));
+          setLastProgressUpdate(Date.now());
+          if (status.currentTime) setMergeStageText(status.currentTime);
+        }
+      } catch { /* socket progress remains available */ }
+    }, 1500);
+
+    return () => window.clearInterval(poller);
+  }, [mergeStatus, socketId, setHasRealProgress, setMergeProgress, setMergeStageText, setLastProgressUpdate]);
 
   useEffect(() => {
     if (mergeStatus !== 'processing') {
@@ -1247,9 +1281,9 @@ export default function MontageTab({ loadVideoInEditor, onError, onShurfer, onRe
                 </div>
 
                 <div style={{ display:'grid', gridTemplateColumns:'repeat(4,minmax(0,1fr))', gap:16, alignItems:'stretch' }}>
-                  <MediaCard label="Video Source 1" item={videos[0]} setItem={u => updateVideo(0,u)} accept="video/*" type="video" onError={onError} animDelay="mt-stagger-1" />
-                  <MediaCard label="Video Source 2" item={videos[1]} setItem={u => updateVideo(1,u)} accept="video/*" type="video" onError={onError} animDelay="mt-stagger-2" />
-                  <MediaCard label="Video Source 3" item={videos[2]} setItem={u => updateVideo(2,u)} accept="video/*" type="video" onError={onError} animDelay="mt-stagger-3" />
+                  <MediaCard label="Video Source 1" item={videos[0]} setItem={setVideo0} accept="video/*" type="video" onError={onError} animDelay="mt-stagger-1" />
+                  <MediaCard label="Video Source 2" item={videos[1]} setItem={setVideo1} accept="video/*" type="video" onError={onError} animDelay="mt-stagger-2" />
+                  <MediaCard label="Video Source 3" item={videos[2]} setItem={setVideo2} accept="video/*" type="video" onError={onError} animDelay="mt-stagger-3" />
                   <div className="mt-card mt-add-card" style={{ borderRadius:20, border:'1px dashed rgba(124,58,237,.3)', background:'#0d0d16', display:'flex', flexDirection:'column', alignItems:'center', justifyContent:'center', gap:12, padding:20, textAlign:'center', minHeight:210, cursor:'default' }}>
                     <div style={{ width:44, height:44, borderRadius:14, background:'rgba(124,58,237,.15)', display:'flex', alignItems:'center', justifyContent:'center', color:'#a78bfa' }}><Icon.Plus /></div>
                     <div style={{ fontSize:13, fontWeight:700, color:'#d0d0e8' }}>Add more video</div>
