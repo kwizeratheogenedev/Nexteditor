@@ -1,4 +1,33 @@
-function TopBar({ activeTab, onExport, exporting = false, exportProgress = 0 }) {
+import { useState } from 'react';
+import { useAuth } from '../context/AuthContext.jsx';
+
+function TopBar({ activeTab, onExport, exporting = false, exportProgress = 0, projectName, currentProjectId, projectSyncStatus, onSaveProject, onOpenProjects }) {
+  const { user, logout } = useAuth();
+  const [saveError, setSaveError] = useState('');
+  const [saving, setSaving] = useState(false);
+
+  const handleLogout = async () => {
+    await logout();
+    window.location.href = '/';
+  };
+
+  const handleSaveProject = async () => {
+    if (!onSaveProject || saving) return;
+    setSaving(true);
+    setSaveError('');
+    try {
+      await onSaveProject(projectName);
+    } catch (err) {
+      setSaveError(err.code === 'UPGRADE_REQUIRED' ? 'Free plan limit reached (3 projects) - upgrade to save more.' : (err.message || 'Failed to save project.'));
+    } finally {
+      setSaving(false);
+    }
+  };
+
+  const syncLabel = currentProjectId
+    ? (saving || projectSyncStatus === 'saving' ? 'Saving...' : projectSyncStatus === 'error' ? 'Sync error' : 'Saved to account')
+    : 'Saved locally';
+
   return (
     <header className="topbar">
       <div className="topbar-left">
@@ -6,7 +35,21 @@ function TopBar({ activeTab, onExport, exporting = false, exportProgress = 0 }) 
           <span className="brand-mark-primary">Nex</span>
           <span className="brand-mark-accent">Editor</span>
         </div>
-        {activeTab === 'editor' && <div className="editor-project-title"><span>Projects</span><i>/</i><strong>Untitled project</strong><small>Saved locally</small></div>}
+        {activeTab === 'editor' && (
+          <div className="editor-project-title">
+            <span style={{ cursor: onOpenProjects ? 'pointer' : 'default' }} onClick={onOpenProjects}>Projects</span>
+            <i>/</i>
+            <strong>{projectName || 'Untitled project'}</strong>
+            {!currentProjectId && user && onSaveProject ? (
+              <button type="button" className="topbar-pill" style={{ marginLeft: 8 }} onClick={handleSaveProject} disabled={saving}>
+                {saving ? 'Saving...' : 'Save to account'}
+              </button>
+            ) : (
+              <small>{syncLabel}</small>
+            )}
+            {saveError && <small style={{ color: '#ff8a8a', marginLeft: 8 }}>{saveError}</small>}
+          </div>
+        )}
       </div>
 
       <div className="topbar-right">
@@ -19,6 +62,12 @@ function TopBar({ activeTab, onExport, exporting = false, exportProgress = 0 }) 
               {exporting ? `Exporting ${Math.round(exportProgress)}%` : 'Export'}
             </button>
           </>
+        )}
+        {user && (
+          <span className="topbar-pill" title={user.email} style={{ display: 'flex', alignItems: 'center', gap: 8, cursor: 'pointer' }} onClick={handleLogout}>
+            {user.name || user.email}
+            <span style={{ opacity: 0.6 }}>Log out</span>
+          </span>
         )}
       </div>
     </header>

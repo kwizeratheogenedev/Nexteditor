@@ -1,7 +1,10 @@
 *.log
+.env
 uploads/*
 !uploads/.gitkeep
 clips/*
 !clips/.gitkeep
 node_modules/
 whisper/
+# Local OAuth token storage (YouTube upload) - never commit real tokens.
+data/

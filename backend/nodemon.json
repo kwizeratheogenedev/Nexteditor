@@ -3,9 +3,11 @@
     "server.js",
     "socket.js",
     "loadEnv.js",
+    "db.js",
     "routes",
     "services",
-    "middleware"
+    "middleware",
+    "models"
   ],
   "ext": "js,mjs,cjs,json",
   "ignore": [

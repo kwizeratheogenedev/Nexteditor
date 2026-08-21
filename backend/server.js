@@ -1,6 +1,7 @@
 import './loadEnv.js';
 import express from 'express';
 import cors from 'cors';
+import cookieParser from 'cookie-parser';
 import fs from 'fs';
 import path from 'path';
 import http from 'http';
@@ -13,8 +14,15 @@ import createMontageRouter from './routes/createMontage.js';
 import fetchUrlVideoRouter from './routes/fetchUrlVideo.js';
 import generateCaptionsRouter from './routes/generateCaptions.js';
 import exportTimelineRouter from './routes/exportTimeline.js';
+import youtubeRouter from './routes/youtube.js';
+import authRouter from './routes/auth.js';
+import projectsRouter from './routes/projects.js';
+import jobsRouter from './routes/jobs.js';
+import billingMomoRouter from './routes/billingMomo.js';
+import billingCardsRouter from './routes/billingCards.js';
 import { jobStore, deleteJob } from './services/jobStore.js';
 import { initSocket, isOriginAllowed } from './socket.js';
+import { connectDB } from './db.js';
 
 const __filename = fileURLToPath(import.meta.url);
 const __dirname = path.dirname(__filename);
@@ -50,8 +58,9 @@ app.use(cors({
     callback(null, false);
   },
   credentials: true,
-  methods: ['GET', 'POST', 'OPTIONS'],
+  methods: ['GET', 'POST', 'PUT', 'PATCH', 'DELETE', 'OPTIONS'],
 }));
+app.use(cookieParser());
 app.use(express.json());
 app.use('/clips', express.static(clipsDir));
 
@@ -64,6 +73,12 @@ app.use('/api/fetch-url-video', fetchUrlVideoRouter);
 app.use('/api/fetch-url', fetchUrlVideoRouter);
 app.use('/api/create-montage', createMontageRouter);
 app.use('/api/editor/export', exportTimelineRouter);
+app.use('/api/youtube', youtubeRouter);
+app.use('/api/auth', authRouter);
+app.use('/api/projects', projectsRouter);
+app.use('/api/jobs', jobsRouter);
+app.use('/api/billing/momo', billingMomoRouter);
+app.use('/api/billing/cards', billingCardsRouter);
 
 app.use((err, req, res, next) => {
   if (err.code === 'LIMIT_FILE_SIZE') {
@@ -116,6 +131,7 @@ setInterval(() => {
 }, 15 * 60 * 1000);
 
 function startServer(p, attempts = 0,hos ='0.0.0.0') {
+  connectDB();
   const serverInstance = http.createServer(app);
   const io = initSocket(serverInstance, ALLOWED_ORIGINS.join(','));
   app.set('io', io);

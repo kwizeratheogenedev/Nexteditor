@@ -7,6 +7,8 @@ import { randomUUID } from 'crypto';
 import { runFFmpeg, probeDuration } from '../services/ffmpeg.js';
 import { getFileSource as resolveFileSource } from '../services/fileResolve.js';
 import { getIo } from '../socket.js';
+import { optionalAuth } from '../middleware/auth.js';
+import { upsertJob } from '../services/jobTracker.js';
 import pLimit from 'p-limit';
 import os from 'os';
 
@@ -51,14 +53,20 @@ function getFileSource(file, filePath) {
   return resolveFileSource(file, filePath, [uploadsDir]);
 }
 
-// Latest progress/error payload per socket id, so the frontend can poll over
-// HTTP as a fallback when the socket connection is stale or reconnecting -
-// without ever broadcasting one user's job status to every other client.
-const progressBySocket = new Map();
+// Latest progress/error payload per JOB id (not socket id - a socket
+// connection is reused across every montage a browser tab creates in one
+// session, so keying this by socketId let a second "Create new" montage's
+// early polls read the FIRST montage's stale terminal 100%/"Complete" entry
+// before the new run's own first progress update overwrote it; combined
+// with the frontend's monotonic Math.max(current, incoming) progress guard,
+// that stale 100% permanently latched the bar even though the real second
+// render was still in progress). jobId is fresh per request, so no two
+// separate montage runs can ever collide here.
+const progressByJob = new Map();
 
-function emitToClient(socketId, eventName, payload) {
-  if (socketId && (eventName === 'montage-progress' || eventName === 'montage-error')) {
-    progressBySocket.set(socketId, { eventName, payload, updatedAt: Date.now() });
+function emitToClient(jobId, socketId, eventName, payload) {
+  if (jobId && (eventName === 'montage-progress' || eventName === 'montage-error')) {
+    progressByJob.set(jobId, { eventName, payload, updatedAt: Date.now() });
   }
 
   const io = getIo();
@@ -73,14 +81,14 @@ function emitToClient(socketId, eventName, payload) {
 
 setInterval(() => {
   const cutoff = Date.now() - 60 * 60 * 1000;
-  for (const [socketId, entry] of progressBySocket.entries()) {
-    if (entry.updatedAt < cutoff) progressBySocket.delete(socketId);
+  for (const [jobId, entry] of progressByJob.entries()) {
+    if (entry.updatedAt < cutoff) progressByJob.delete(jobId);
   }
 }, 15 * 60 * 1000);
 
-router.get('/progress/:socketId', (req, res) => {
+router.get('/progress/:jobId', (req, res) => {
   res.setHeader('Cache-Control', 'no-store');
-  const entry = progressBySocket.get(req.params.socketId);
+  const entry = progressByJob.get(req.params.jobId);
   if (!entry) {
     res.json({ percent: 0, currentTime: '' });
     return;
@@ -211,11 +219,20 @@ function buildClipArgs(inputFile, startTime, clipDuration, outputFile, { beautyS
   ];
 }
 
-router.post('/', upload.any(), async (req, res) => {
+router.post('/', optionalAuth, upload.any(), async (req, res) => {
   let concatListPath = '';
   const temporaryInputFiles = [];
   const generatedClipFiles = [];
   const socketId = req.headers['x-socket-id'];
+  // A fresh id per request - must NOT fall back to socketId, since a single
+  // browser tab reuses the same socket connection across every "Create new"
+  // montage in a session; keying progress tracking by socketId let a new
+  // run's early polls read the previous run's stale terminal state (see the
+  // progressByJob comment above).
+  const jobId = req.headers['x-job-id'] || `montage-${Date.now()}-${Math.random().toString(16).slice(2)}`;
+  const ownerId = req.user?._id;
+
+  if (ownerId) upsertJob(ownerId, { jobId, kind: 'montage', status: 'running', progress: 0, message: 'Starting montage...' });
 
   try {
     console.log('createMontage: incoming request', { filesCount: req.files?.length || 0, bodyKeys: Object.keys(req.body || {}) });
@@ -280,6 +297,16 @@ router.post('/', upload.any(), async (req, res) => {
       return res.status(400).json({ error: 'No valid audio sources found' });
     }
 
+    // Everything needed to start is validated - respond now instead of
+    // holding this one connection open for the entire render (which can
+    // take several minutes). A screen lock/sleep, a backgrounded tab being
+    // throttled, or any network blip during that window would otherwise
+    // kill the connection and surface as a hard failure even though the
+    // render was working fine - processing continues below regardless, and
+    // progress/result land in progressByJob (and, if signed in, the Job
+    // model) for the frontend to poll/resume watching.
+    res.status(202).json({ jobId });
+
     // For each audio source, trim the first 40 seconds and produce trimmed files
     const audioLimit = pLimit(2);
     const trimmedAudioFiles = await Promise.all(
@@ -328,7 +355,8 @@ router.post('/', upload.any(), async (req, res) => {
       ...videoFiles.map((videoPath) => probeDuration(videoPath)),
     ]);
 
-    emitToClient(socketId, 'montage-progress', { percent: 5, currentTime: 'Analyzing source media...' });
+    emitToClient(jobId, socketId, 'montage-progress', { percent: 5, currentTime: 'Analyzing source media...' });
+    if (ownerId) upsertJob(ownerId, { jobId, progress: 5, message: 'Analyzing source media...' });
 
     const montageStartTime = Date.now();
     const syncMode = req.body.syncMode || 'beat';
@@ -363,7 +391,7 @@ router.post('/', upload.any(), async (req, res) => {
       sourceIndex = (sourceIndex + 1) % videoFiles.length;
     }
 
-    emitToClient(socketId, 'montage-progress', { percent: 10, currentTime: 'Creating random clips...' });
+    emitToClient(jobId, socketId, 'montage-progress', { percent: 10, currentTime: 'Creating random clips...' });
 
     const clipLimit = pLimit(Math.max(2, Math.min(4, (os.cpus() || []).length || 4)));
     let completedClips = 0;
@@ -383,7 +411,7 @@ router.post('/', upload.any(), async (req, res) => {
         const segmentStart = clipRangeStart + (i * segmentSize);
         const segmentEnd = segmentStart + segmentSize;
 
-        emitToClient(socketId, 'montage-progress', {
+        emitToClient(jobId, socketId, 'montage-progress', {
           percent: Math.round(segmentStart),
           currentTime: `Preparing clip ${i + 1}/${totalClips}...`,
         });
@@ -402,7 +430,7 @@ router.post('/', upload.any(), async (req, res) => {
             onProgress: (progress) => {
               const clipProgress = Math.max(0, Math.min(1, progress.percent / 100));
               const overallPercent = segmentStart + (clipProgress * segmentSize);
-              emitToClient(socketId, 'montage-progress', {
+              emitToClient(jobId, socketId, 'montage-progress', {
                 percent: Math.round(overallPercent),
                 currentTime: `Creating clip ${i + 1}/${totalClips}...`,
               });
@@ -420,7 +448,7 @@ router.post('/', upload.any(), async (req, res) => {
         estimatedTotalTime = totalEstimatedClipsTime + Math.max(15000, totalEstimatedClipsTime * 0.15);
         const timeLeft = timeLeftClips + Math.max(15000, totalEstimatedClipsTime * 0.15);
 
-        emitToClient(socketId, 'montage-progress', {
+        emitToClient(jobId, socketId, 'montage-progress', {
           percent: Math.round(segmentEnd),
           currentTime: `Created clip ${completedClips}/${totalClips}`,
           totalEstimatedTime: Math.round(estimatedTotalTime / 1000),
@@ -442,7 +470,8 @@ router.post('/', upload.any(), async (req, res) => {
     // the video stream from the concat input and the audio stream from the
     // provided audio source to avoid attached image/audio-only streams.
     const mergeStartTime = Date.now();
-    emitToClient(socketId, 'montage-progress', { percent: 60, currentTime: 'Joining clips with audio...', totalEstimatedTime: Math.round(estimatedTotalTime / 1000), timeSpent: Math.round((Date.now() - montageStartTime) / 1000) });
+    emitToClient(jobId, socketId, 'montage-progress', { percent: 60, currentTime: 'Joining clips with audio...', totalEstimatedTime: Math.round(estimatedTotalTime / 1000), timeSpent: Math.round((Date.now() - montageStartTime) / 1000) });
+    if (ownerId) upsertJob(ownerId, { jobId, progress: 60, message: 'Joining clips with audio...' });
 
     const finalQuality = getQualitySettings(videoQuality);
     console.log('Starting final ffmpeg merge', { concatListPath, mergedAudioPath, outputPath, audioDuration, finalQuality });
@@ -475,7 +504,7 @@ router.post('/', upload.any(), async (req, res) => {
             const remainingMergePercent = 1 - mergeProgress;
             const estimatedTotalMergeTime = mergeProgress > 0.05 ? mergeElapsed / mergeProgress : mergeElapsed * 2;
             const timeLeft = remainingMergePercent * estimatedTotalMergeTime;
-            emitToClient(socketId, 'montage-progress', {
+            emitToClient(jobId, socketId, 'montage-progress', {
               percent: Math.round(scaledPercent),
               currentTime: progress.currentTime || 'Merging clips...',
               totalEstimatedTime: Math.round(estimatedTotalTime / 1000),
@@ -491,7 +520,7 @@ router.post('/', upload.any(), async (req, res) => {
       throw err;
     }
 
-    emitToClient(socketId, 'montage-progress', { percent: 98, currentTime: 'Finalizing montage...', totalEstimatedTime: Math.round(estimatedTotalTime / 1000), timeSpent: Math.round((Date.now() - montageStartTime) / 1000), timeLeft: 0 });
+    emitToClient(jobId, socketId, 'montage-progress', { percent: 98, currentTime: 'Finalizing montage...', totalEstimatedTime: Math.round(estimatedTotalTime / 1000), timeSpent: Math.round((Date.now() - montageStartTime) / 1000), timeLeft: 0 });
 
     // Clean up concat list file
     if (concatListPath && fs.existsSync(concatListPath)) {
@@ -525,14 +554,19 @@ router.post('/', upload.any(), async (req, res) => {
       } catch (e) {}
     });
 
-    res.json({
+    const result = {
       filePath: outputPath,
       fileName: outputFileName,
       downloadName,
       duration: outputDuration,
       size: stats.size,
-    });
-    emitToClient(socketId, 'montage-progress', { percent: 100, currentTime: 'Complete', totalEstimatedTime: Math.round(estimatedTotalTime / 1000), timeSpent: Math.round((Date.now() - montageStartTime) / 1000), timeLeft: 0 });
+    };
+    // The client already got its response (202) when the job started - the
+    // result now travels via the live socket push and the polling endpoint
+    // (both read from the same progressByJob entry this writes), which is
+    // what a client reconnecting after a dropped connection picks back up.
+    emitToClient(jobId, socketId, 'montage-progress', { percent: 100, currentTime: 'Complete', totalEstimatedTime: Math.round(estimatedTotalTime / 1000), timeSpent: Math.round((Date.now() - montageStartTime) / 1000), timeLeft: 0, result });
+    if (ownerId) upsertJob(ownerId, { jobId, status: 'done', progress: 100, message: 'Complete', result });
   } catch (error) {
     console.error('Montage creation error:', error && (error.stack || error));
     if (concatListPath && fs.existsSync(concatListPath)) {
@@ -554,10 +588,18 @@ router.post('/', upload.any(), async (req, res) => {
         }
       } catch (_error) {}
     });
-    emitToClient(socketId, 'montage-error', { error: error.message || 'Failed to create montage', stack: error.stack });
-    const response = { error: error.message || 'Failed to create montage' };
-    if (process.env.NODE_ENV !== 'production') response.stack = error.stack;
-    res.status(500).json(response);
+    emitToClient(jobId, socketId, 'montage-error', { error: error.message || 'Failed to create montage', stack: error.stack });
+    if (ownerId) upsertJob(ownerId, { jobId, status: 'error', error: error.message || 'Failed to create montage' });
+    // Once the early 202 has gone out, this request's own response is
+    // already spent - the emitToClient/upsertJob calls above are what
+    // actually reach the client now. Only a validation failure that threw
+    // before that early response (none currently do, but keep this
+    // defensive) would still have a response left to send.
+    if (!res.headersSent) {
+      const response = { error: error.message || 'Failed to create montage' };
+      if (process.env.NODE_ENV !== 'production') response.stack = error.stack;
+      res.status(500).json(response);
+    }
   }
 });
 

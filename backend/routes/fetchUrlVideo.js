@@ -3,9 +3,9 @@ import fs from 'fs';
 import path from 'path';
 import { createWriteStream } from 'fs';
 import { pipeline } from 'stream/promises';
-import { spawn } from 'child_process';
 import crypto from 'crypto';
 import { fileURLToPath } from 'url';
+import ytdl from '@distube/ytdl-core';
 import { probeDuration } from '../services/ffmpeg.js';
 import { getIo } from '../socket.js';
 
@@ -81,42 +81,44 @@ function getEventNames(mediaType) {
 }
 
 /**
- * Download video from YouTube using yt-dlp
- * Requires: yt-dlp CLI tool installed on the system
+ * Download video from YouTube using @distube/ytdl-core - a pure-JS
+ * extractor (no external binary). The original implementation shelled out
+ * to the `yt-dlp` CLI, which needs installing system-wide and, like
+ * whisper.cpp's local binary, is exactly the kind of unsigned executable
+ * Windows Smart App Control blocks with no reliable per-app exception -
+ * running entirely inside the already-trusted Node process sidesteps that
+ * whole problem.
  */
-async function downloadYouTubeVideo(url, outputPath, socketId, progressEvent, slotId) {
-  return new Promise((resolve, reject) => {
-    // yt-dlp command: download best video format as mp4
-    const args = [
-      '-f', 'best[ext=mp4]/best',
-      '-o', outputPath,
-      url,
-    ];
+async function downloadYouTubeVideo(url, outputPath, socketId, progressEvent, slotId, mediaType) {
+  if (!ytdl.validateURL(url)) {
+    throw new Error('That doesn\'t look like a valid YouTube video URL.');
+  }
 
-    const ytdlp = spawn('yt-dlp', args);
-    let stderr = '';
+  const requestOptions = {
+    headers: {
+      'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/124.0.0.0 Safari/537.36',
+    },
+  };
+  const info = await ytdl.getInfo(url, { requestOptions });
+  const format = mediaType === 'audio'
+    ? ytdl.chooseFormat(info.formats, { filter: 'audioonly', quality: 'highestaudio' })
+    : ytdl.chooseFormat(info.formats, { filter: 'videoandaudio', quality: 'highest' });
+  if (!format) {
+    throw new Error(`This YouTube video has no downloadable ${mediaType === 'audio' ? 'audio-only' : 'combined video+audio'} format available.`);
+  }
 
-    ytdlp.stderr.on('data', (chunk) => {
-      stderr += chunk.toString();
-      // Parse progress from yt-dlp output (optional)
-      const progressMatch = chunk.toString().match(/(\d+\.\d+)%/);
-      if (progressMatch) {
-        const percent = parseFloat(progressMatch[1]);
-        emitProgress(socketId, progressEvent, { percent, slotId });
-      }
+  await new Promise((resolve, reject) => {
+    const stream = ytdl.downloadFromInfo(info, { format, requestOptions });
+    const writeStream = createWriteStream(outputPath);
+
+    stream.on('progress', (_chunkLength, downloaded, total) => {
+      if (total > 0) emitProgress(socketId, progressEvent, { percent: Math.round((downloaded / total) * 100), slotId });
     });
+    stream.on('error', (err) => reject(new Error(`YouTube download failed: ${err.message}`)));
+    writeStream.on('error', reject);
+    writeStream.on('finish', resolve);
 
-    ytdlp.on('close', (code) => {
-      if (code !== 0) {
-        reject(new Error(`yt-dlp failed: ${stderr || 'Unknown error'}`));
-      } else {
-        resolve();
-      }
-    });
-
-    ytdlp.on('error', (err) => {
-      reject(new Error(`yt-dlp not found: Please install yt-dlp system-wide. Visit: https://github.com/yt-dlp/yt-dlp/wiki/Installation`));
-    });
+    stream.pipe(writeStream);
   });
 }
 
@@ -214,7 +216,7 @@ router.post('/', async (req, res) => {
 
     // Execute appropriate download method
     if (sourceType === 'youtube') {
-      await downloadYouTubeVideo(downloadUrl, outputPath, socketId, events.progress, slotId);
+      await downloadYouTubeVideo(downloadUrl, outputPath, socketId, events.progress, slotId, mediaType);
     } else {
       // Google Drive, Dropbox, or direct URLs
       await downloadHttpVideo(downloadUrl, outputPath, socketId, events.progress, slotId);

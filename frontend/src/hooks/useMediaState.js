@@ -97,6 +97,12 @@ export function useMediaState() {
     markers,
     setMarkers,
     clearAll: clearEditorState,
+    currentProjectId,
+    projectName,
+    setProjectName,
+    syncStatus: projectSyncStatus,
+    saveProjectToAccount,
+    loadProjectFromAccount,
   } = editor;
   const undo = editor.undo;
   const redo = editor.redo;
@@ -221,6 +227,12 @@ export function useMediaState() {
     clearEditorState,
     undo,
     redo,
+    currentProjectId,
+    projectName,
+    setProjectName,
+    projectSyncStatus,
+    saveProjectToAccount,
+    loadProjectFromAccount,
 
     // Preview state
     previewCurrentTime,

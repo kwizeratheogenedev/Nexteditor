@@ -11,6 +11,7 @@ import { buildAudioTrackClip } from './effects/audioTrack.js';
 import { buildOverlayClip, compositeOverlayClip } from './effects/overlayTrack.js';
 import { hasSpeedCurve, applyVideoSpeedCurve, applyAudioSpeedCurve, clipOutputDuration } from './effects/speedCurve.js';
 import { applyAdjustmentLayer } from './effects/adjustmentLayer.js';
+import { applyFreeTierWatermark } from './effects/freeTierLimits.js';
 
 // Builds the -filter_complex string for an editor export: lane 0's video
 // clips are trimmed/sped-up/transformed/color-graded independently, then
@@ -28,7 +29,7 @@ import { applyAdjustmentLayer } from './effects/adjustmentLayer.js';
 // reference the same input twice with different trim points instead of
 // opening the file again). `jobDir` is a scratch directory the caller
 // creates/cleans up, used for text-clip temp files.
-export function buildEditorExportGraph(clips, inputIndexBySourceId, sourceHasAudio, canvas, jobDir) {
+export function buildEditorExportGraph(clips, inputIndexBySourceId, sourceHasAudio, canvas, jobDir, { freeTier = false } = {}) {
   const graph = new FilterGraph();
   const laneZeroVideoClips = clips.filter((clip) => (clip.type === 'video' || !clip.type) && (clip.trackIndex || 0) === 0);
   // Overlay (real media) and adjustment (filter-only, no media - see M13's
@@ -127,6 +128,10 @@ export function buildEditorExportGraph(clips, inputIndexBySourceId, sourceHasAud
     const duration = Math.max(0.05, (clip.trimmedEnd - clip.trimmedStart) / (clip.speed || 1));
     videoLabel = applyTextOverlay(graph, videoLabel, clip, canvas, clip.startTime, clip.startTime + duration, jobDir);
   });
+
+  if (freeTier) {
+    videoLabel = applyFreeTierWatermark(graph, videoLabel, canvas);
+  }
 
   return { filterComplex: graph.build(), videoOutputLabel: videoLabel, audioOutputLabel: aout };
 }

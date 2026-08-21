@@ -1,8 +1,11 @@
 import { useState, useEffect, useCallback } from 'react';
 import { persistFile, getPersistedFile, removePersistedFile, clearAllPersistedFiles } from '../utils/indexedDB';
+import { useAuth } from '../context/AuthContext.jsx';
+import { API_ENDPOINTS } from '../config.js';
 
 const STORAGE_PREFIX = 'nexeditor_editor_';
 const SCHEMA_VERSION = 3;
+const PROJECT_ID_KEY = `${STORAGE_PREFIX}projectId`;
 
 function createEmptyTimeline() {
   return [];
@@ -212,6 +215,22 @@ export function usePersistedEditorState() {
   const [restored, setRestored] = useState(false);
   const [timelineHistory, setTimelineHistory] = useState([]);
   const [historyIndex, setHistoryIndex] = useState(-1);
+  // Backend project sync (M4) - additive to the localStorage/IndexedDB
+  // persistence above, which stays the instant local cache exactly as
+  // before. currentProjectId is null until the user explicitly saves the
+  // project to their account (saveProjectToAccount); after that, edits
+  // debounce-sync to the backend so the project (and any unfinished work)
+  // survives logout.
+  const [currentProjectId, setCurrentProjectId] = useState(() => {
+    try {
+      return localStorage.getItem(PROJECT_ID_KEY) || null;
+    } catch {
+      return null;
+    }
+  });
+  const [projectName, setProjectName] = useState('Untitled project');
+  const [syncStatus, setSyncStatus] = useState('idle'); // 'idle' | 'saving' | 'saved' | 'error'
+  const { user } = useAuth();
 
   useEffect(() => {
     let cancelled = false;
@@ -349,6 +368,147 @@ export function usePersistedEditorState() {
     return () => clearTimeout(timer);
   }, [restored, timeline, playhead, activeClipIndex, zoom, bannerVisible, selectedClipId, selectedClipIds, expandedTracks, snapEnabled, autoFollowPlayhead, insertMode, trackMeta, markers]);
 
+  // Backend sync - only runs once a project has been explicitly saved to the
+  // account (currentProjectId set) and the user is signed in. Longer debounce
+  // than the localStorage effect above since this is a network call, not a
+  // local write.
+  useEffect(() => {
+    if (!restored || !user || !currentProjectId) return;
+
+    const timer = setTimeout(async () => {
+      try {
+        setSyncStatus('saving');
+        const clips = timeline.map(({ file, url, ...rest }) => ({
+          ...rest,
+          ...(url && !url.startsWith('blob:') ? { remoteUrl: url } : {}),
+        }));
+        const data = {
+          version: SCHEMA_VERSION,
+          clips,
+          playhead,
+          activeClipIndex,
+          zoom,
+          bannerVisible,
+          selectedClipId,
+          selectedClipIds,
+          expandedTracks,
+          snapEnabled,
+          autoFollowPlayhead,
+          insertMode,
+          trackMeta,
+          markers,
+        };
+        const res = await fetch(API_ENDPOINTS.project(currentProjectId), {
+          method: 'PUT',
+          credentials: 'include',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ name: projectName, data }),
+        });
+        if (!res.ok) throw new Error('Sync failed');
+        setSyncStatus('saved');
+      } catch (error) {
+        console.warn('Error syncing project to account:', error);
+        setSyncStatus('error');
+      }
+    }, 3000);
+
+    return () => clearTimeout(timer);
+  }, [restored, user, currentProjectId, projectName, timeline, playhead, activeClipIndex, zoom, bannerVisible, selectedClipId, selectedClipIds, expandedTracks, snapEnabled, autoFollowPlayhead, insertMode, trackMeta, markers]);
+
+  useEffect(() => {
+    try {
+      if (currentProjectId) localStorage.setItem(PROJECT_ID_KEY, currentProjectId);
+      else localStorage.removeItem(PROJECT_ID_KEY);
+    } catch { /* ignore */ }
+  }, [currentProjectId]);
+
+  // Saves the current in-progress timeline as a new backend project (subject
+  // to the free-tier project cap enforced server-side). Throws on failure
+  // (e.g. {code:'UPGRADE_REQUIRED'}) so the caller can show the upgrade
+  // prompt rather than failing silently.
+  const saveProjectToAccount = useCallback(async (name) => {
+    const clips = timeline.map(({ file, url, ...rest }) => ({
+      ...rest,
+      ...(url && !url.startsWith('blob:') ? { remoteUrl: url } : {}),
+    }));
+    const data = {
+      version: SCHEMA_VERSION,
+      clips,
+      playhead,
+      activeClipIndex,
+      zoom,
+      bannerVisible,
+      selectedClipId,
+      selectedClipIds,
+      expandedTracks,
+      snapEnabled,
+      autoFollowPlayhead,
+      insertMode,
+      trackMeta,
+      markers,
+    };
+    const res = await fetch(API_ENDPOINTS.projects, {
+      method: 'POST',
+      credentials: 'include',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ type: 'editor', name: name || 'Untitled project', data }),
+    });
+    const payload = await res.json();
+    if (!res.ok) {
+      const error = new Error(payload.error || 'Failed to save project.');
+      error.code = payload.code;
+      throw error;
+    }
+    setCurrentProjectId(payload.project._id);
+    setProjectName(payload.project.name);
+    setSyncStatus('saved');
+    return payload.project;
+  }, [timeline, playhead, activeClipIndex, zoom, bannerVisible, selectedClipId, selectedClipIds, expandedTracks, snapEnabled, autoFollowPlayhead, insertMode, trackMeta, markers]);
+
+  // Loads a project previously saved to the account (e.g. picked from the
+  // "My Projects" list) and replaces the live timeline with it. Local source
+  // blobs only exist if they were persisted to THIS browser's IndexedDB
+  // (same-browser restore, per M4's scope) - clips referencing sources not
+  // found locally restore with an empty url, same fallback the mount-time
+  // restore already handles.
+  const loadProjectFromAccount = useCallback(async (id) => {
+    const res = await fetch(API_ENDPOINTS.project(id), { credentials: 'include' });
+    const payload = await res.json();
+    if (!res.ok) throw new Error(payload.error || 'Failed to load project.');
+    const parsed = payload.project.data;
+
+    const sourceCache = new Map();
+    const restoredClips = [];
+    for (const clip of parsed.clips || []) {
+      let resolved = clip.sourceId ? sourceCache.get(clip.sourceId) : null;
+      if (!resolved && clip.sourceId) {
+        const file = await getPersistedFile(`${STORAGE_PREFIX}source_${clip.sourceId}`);
+        resolved = file ? { file, url: URL.createObjectURL(file) } : { file: null, url: '' };
+        sourceCache.set(clip.sourceId, resolved);
+      }
+      restoredClips.push(normalizeClip({ ...clip, file: resolved?.file || null, url: resolved?.url || clip.remoteUrl || '' }));
+    }
+
+    setTimeline(restoredClips);
+    setPlayhead(parsed.playhead || 0);
+    setActiveClipIndex(parsed.activeClipIndex || 0);
+    setZoom(parsed.zoom || 100);
+    setBannerVisible(parsed.bannerVisible !== false);
+    setSelectedClipId(parsed.selectedClipId || null);
+    setSelectedClipIds(Array.isArray(parsed.selectedClipIds) ? parsed.selectedClipIds : []);
+    setExpandedTracks(parsed.expandedTracks || { video: true, audio: false, text: false });
+    setSnapEnabled(parsed.snapEnabled !== false);
+    setAutoFollowPlayhead(parsed.autoFollowPlayhead !== false);
+    setInsertMode(parsed.insertMode === true);
+    setTrackMeta(parsed.trackMeta || defaultTrackMeta());
+    setMarkers(Array.isArray(parsed.markers) ? parsed.markers : []);
+    setTimelineHistory([]);
+    setHistoryIndex(-1);
+    setCurrentProjectId(payload.project._id);
+    setProjectName(payload.project.name);
+    setSyncStatus('saved');
+  }, []);
+
   const clearAll = useCallback(() => {
     timeline.forEach((clip) => {
       if (clip.url && clip.url.startsWith('blob:')) {
@@ -371,6 +531,9 @@ export function usePersistedEditorState() {
     setMarkers([]);
     setTimelineHistory([]);
     setHistoryIndex(-1);
+    setCurrentProjectId(null);
+    setProjectName('Untitled project');
+    setSyncStatus('idle');
 
     localStorage.removeItem(`${STORAGE_PREFIX}timeline`);
     localStorage.removeItem(`${STORAGE_PREFIX}known_sources`);
@@ -490,5 +653,11 @@ export function usePersistedEditorState() {
     setHistoryIndex,
     undo,
     redo,
+    currentProjectId,
+    projectName,
+    setProjectName,
+    syncStatus,
+    saveProjectToAccount,
+    loadProjectFromAccount,
   };
 }

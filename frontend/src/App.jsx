@@ -11,6 +11,8 @@ import LeftSidebar from './components/LeftSidebar';
 import CenterPanel from './components/CenterPanel';
 import RightPanel from './components/RightPanel';
 import ErrorPopup from './components/ErrorPopup';
+import ProjectsModal from './components/ProjectsModal';
+import JobsResumeBanner from './components/JobsResumeBanner';
 import MontageTab from './components/MontageTab';
 import BottomTimeline, { PX_PER_SECOND, LANE_ROW_HEIGHT } from './components/BottomTimeline';
 
@@ -108,6 +110,11 @@ function App() {
     clearEditorState,
     undo,
     redo,
+    currentProjectId,
+    projectName,
+    projectSyncStatus,
+    saveProjectToAccount,
+    loadProjectFromAccount,
     selectedClipId,
     setSelectedClipId,
     selectedClipIds,
@@ -137,6 +144,8 @@ function App() {
     previewIsPlaying,
     setPreviewIsPlaying,
   } = mediaState;
+
+  const [projectsModalOpen, setProjectsModalOpen] = useState(false);
 
   const video1Ref = useRef(null);
   const video2Ref = useRef(null);
@@ -480,6 +489,18 @@ function App() {
       setActiveTab('editor');
     }
   }, [activeTab, setActiveTab]);
+
+  // A `montageSession` URL param means this tab was opened via MontageTab's
+  // "Create another montage" button - land on the Montage tab explicitly
+  // rather than relying on whatever tab was last active (normally the same
+  // one, since the button only shows while already on Montage, but this
+  // keeps the new tab's landing spot correct even if that assumption ever
+  // breaks - e.g. activeTab is shared, unnamespaced localStorage).
+  useEffect(() => {
+    if (new URLSearchParams(window.location.search).has('montageSession')) {
+      setActiveTab('media');
+    }
+  }, [setActiveTab]);
 
   useEffect(() => {
     if (!dragState.active) return;
@@ -1793,7 +1814,7 @@ function App() {
     setSelectedClipIds(additions.map((c) => c.id));
     setSelectedClipId(additions[0].id);
   };
-
+ 
   const handleGroupSelected = () => {
     if (selectedClipIds.length < 2) return;
     const groupId = `group-${Date.now()}`;
@@ -2118,6 +2139,7 @@ function App() {
         let progressTimer;
         request.open('POST', `${API_BASE_URL}/api/editor/export`);
         request.responseType = 'json';
+        request.withCredentials = true;
         if (socketId) request.setRequestHeader('X-Socket-Id', socketId);
         request.setRequestHeader('X-Job-Id', jobId);
         request.upload.onprogress = (event) => {
@@ -2268,7 +2290,18 @@ function App() {
 
   return (
     <div id="app-shell">
-      <TopBar activeTab={activeTab} onTabChange={setActiveTab} onExport={triggerExport} exporting={activeTab === 'editor' && processing} exportProgress={progress?.percent || 0} />
+      <TopBar
+        activeTab={activeTab}
+        onTabChange={setActiveTab}
+        onExport={triggerExport}
+        exporting={activeTab === 'editor' && processing}
+        exportProgress={progress?.percent || 0}
+        projectName={projectName}
+        currentProjectId={currentProjectId}
+        projectSyncStatus={projectSyncStatus}
+        onSaveProject={saveProjectToAccount}
+        onOpenProjects={() => setProjectsModalOpen(true)}
+      />
       <EditorStateProvider timelineValue={editorTimelineContextValue} playbackValue={editorPlaybackContextValue}>
       <div id="main-area">
         <LeftSidebar activeTab={activeTab} onSelect={setActiveTab} />
@@ -2389,6 +2422,16 @@ function App() {
       <input ref={audioFileInputRef} type="file" accept="audio/*,video/*" onChange={handleAudioUpload} className="sr-only-input" style={{ display: 'none' }} />
       </EditorStateProvider>
       <ErrorPopup errorText={errorText} setErrorText={setErrorText} />
+      <JobsResumeBanner />
+      {projectsModalOpen && (
+        <ProjectsModal
+          onClose={() => setProjectsModalOpen(false)}
+          onResume={async (id) => {
+            await loadProjectFromAccount(id);
+            setActiveTab('editor');
+          }}
+        />
+      )}
     </div>
   );
 }

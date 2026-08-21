@@ -1,7 +1,7 @@
 import { useState, useEffect, useCallback } from 'react';
 import { persistFile, getPersistedFile, removePersistedFile } from '../utils/indexedDB';
 
-const STORAGE_PREFIX = 'nexeditor_montage_';
+const BASE_STORAGE_PREFIX = 'nexeditor_montage_';
 
 function createVideoSlot(id) {
   return { id, sourceMode: 'device', file: null, url: '', filePath: '', fileName: '', duration: null, status: 'idle', progress: 0, error: '' };
@@ -50,7 +50,16 @@ async function persistSlot(storageKey, fileKey, slotState) {
   }
 }
 
-export function usePersistedMontageState() {
+// `sessionId` namespaces every localStorage key this hook touches, so a
+// "New" montage opened in a second browser tab (see MontageTab's New
+// button) gets its own independent video/audio slots and processing state
+// instead of fighting over the same keys as the tab that's still rendering
+// - two tabs sharing plain localStorage keys would otherwise stomp on each
+// other's state on every debounced write. Omit it (or pass '') for the
+// original/default session, which keeps using the same unprefixed keys
+// pre-existing users already have data under.
+export function usePersistedMontageState(sessionId = '') {
+  const STORAGE_PREFIX = sessionId ? `${BASE_STORAGE_PREFIX}${sessionId}_` : BASE_STORAGE_PREFIX;
   const [videos, setVideos] = useState(() => [createVideoSlot(1), createVideoSlot(2), createVideoSlot(3)]);
   const [audio, setAudio] = useState(() => createAudioSlot());
   const [mergeStatus, setMergeStatus] = useState('idle');
@@ -60,6 +69,10 @@ export function usePersistedMontageState() {
   const [mergeTimeSpent, setMergeTimeSpent] = useState(0);
   const [mergeTimeLeft, setMergeTimeLeft] = useState(0);
   const [mergeError, setMergeError] = useState('');
+  // The active job's id (see MontageTab's handleMerge) - persisted so a
+  // reload or reopening this same session's tab can resume polling an
+  // actually-still-running backend job instead of assuming it died.
+  const [mergeJobId, setMergeJobId] = useState('');
   const [outputFile, setOutputFile] = useState({ filePath:'', fileName:'', downloadName:'', duration:'', size:'' });
   const [hasRealProgress, setHasRealProgress] = useState(false);
   const [lastProgressUpdate, setLastProgressUpdate] = useState(() => Date.now());
@@ -106,22 +119,30 @@ export function usePersistedMontageState() {
         setAudio(a);
 
         if (processingState) {
-          // A 'processing' status persisted from a previous page load has no
-          // live request behind it anymore (the fetch promise that would have
-          // resolved it is gone) - trusting it as-is would strand the UI at
-          // ~99% forever. Treat it as unknown instead of resuming it.
+          // Montage jobs now run independently of any one connection (the
+          // backend accepts the request and keeps rendering regardless of
+          // whether this tab is still around - see createMontage.js) and
+          // the frontend polls by jobId rather than relying on the original
+          // fetch resolving. So a 'processing' status found on reload is
+          // resumable, not dead - as long as a jobId was actually persisted
+          // (older saved state from before this change won't have one, and
+          // genuinely has no way to resume, so that case still falls back
+          // to the old "treat as interrupted" behavior).
           const wasStillProcessing = processingState.mergeStatus === 'processing';
-          setMergeStatus(wasStillProcessing ? 'error' : (processingState.mergeStatus || 'idle'));
-          setMergeProgress(wasStillProcessing ? 0 : (processingState.mergeProgress || 0));
-          setMergeStageText(wasStillProcessing ? '' : (processingState.mergeStageText || ''));
+          const resumableJobId = wasStillProcessing ? (processingState.mergeJobId || '') : '';
+          const trulyInterrupted = wasStillProcessing && !resumableJobId;
+          setMergeStatus(trulyInterrupted ? 'error' : (processingState.mergeStatus || 'idle'));
+          setMergeProgress(trulyInterrupted ? 0 : (processingState.mergeProgress || 0));
+          setMergeStageText(trulyInterrupted ? '' : (processingState.mergeStageText || ''));
           setMergeTotalEstimatedTime(processingState.mergeTotalEstimatedTime || 0);
           setMergeTimeSpent(processingState.mergeTimeSpent || 0);
           setMergeTimeLeft(processingState.mergeTimeLeft || 0);
-          setMergeError(wasStillProcessing
+          setMergeError(trulyInterrupted
             ? 'Your previous montage job was interrupted by a page reload. Please check your downloads, or start a new merge.'
             : (processingState.mergeError || ''));
+          setMergeJobId(resumableJobId);
           setOutputFile(processingState.outputFile || { filePath:'', fileName:'', downloadName:'', duration:'', size:'' });
-          setHasRealProgress(wasStillProcessing ? false : (processingState.hasRealProgress || false));
+          setHasRealProgress(trulyInterrupted ? false : (processingState.hasRealProgress || false));
           setLastProgressUpdate(processingState.lastProgressUpdate || Date.now());
           setSyncMode(processingState.syncMode || 'beat');
           setTempoSensitivity(processingState.tempoSensitivity || 'medium');
@@ -166,6 +187,7 @@ export function usePersistedMontageState() {
         mergeTimeSpent,
         mergeTimeLeft,
         mergeError,
+        mergeJobId,
         outputFile,
         hasRealProgress,
         lastProgressUpdate,
@@ -187,7 +209,7 @@ export function usePersistedMontageState() {
     }, 100);
 
     return () => clearTimeout(timer);
-  }, [restored, videos, audio, mergeStatus, mergeProgress, mergeStageText, mergeTotalEstimatedTime, mergeTimeSpent, mergeTimeLeft, mergeError, outputFile, hasRealProgress, lastProgressUpdate, syncMode, tempoSensitivity, videoQuality, beautyStyle, enhanceMotion, colorBoost, smoothTransitions, contrastPolish]);
+  }, [restored, videos, audio, mergeStatus, mergeProgress, mergeStageText, mergeTotalEstimatedTime, mergeTimeSpent, mergeTimeLeft, mergeError, mergeJobId, outputFile, hasRealProgress, lastProgressUpdate, syncMode, tempoSensitivity, videoQuality, beautyStyle, enhanceMotion, colorBoost, smoothTransitions, contrastPolish]);
 
   const updateVideo = useCallback((index, updater) => {
     setVideos((prev) => {
@@ -207,6 +229,7 @@ export function usePersistedMontageState() {
     setMergeTimeSpent(0);
     setMergeTimeLeft(0);
     setMergeError('');
+    setMergeJobId('');
     setOutputFile({ filePath:'', fileName:'', downloadName:'', duration:'', size:'' });
     setHasRealProgress(false);
     setLastProgressUpdate(Date.now());
@@ -248,6 +271,8 @@ export function usePersistedMontageState() {
     setMergeTimeLeft,
     mergeError,
     setMergeError,
+    mergeJobId,
+    setMergeJobId,
     outputFile,
     setOutputFile,
     hasRealProgress,

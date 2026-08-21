@@ -133,6 +133,11 @@ const Icon = {
       <line x1="12" y1="5" x2="12" y2="19"/><line x1="5" y1="12" x2="19" y2="12"/>
     </svg>
   ),
+  Youtube: () => (
+    <svg viewBox="0 0 24 24" fill="currentColor">
+      <path d="M23.5 6.2a3 3 0 0 0-2.1-2.1C19.5 3.5 12 3.5 12 3.5s-7.5 0-9.4.6A3 3 0 0 0 .5 6.2 31 31 0 0 0 0 12a31 31 0 0 0 .5 5.8 3 3 0 0 0 2.1 2.1c1.9.6 9.4.6 9.4.6s7.5 0 9.4-.6a3 3 0 0 0 2.1-2.1A31 31 0 0 0 24 12a31 31 0 0 0-.5-5.8zM9.6 15.6V8.4L15.8 12l-6.2 3.6z"/>
+    </svg>
+  ),
   Waveform: () => (
     <svg viewBox="0 0 40 24" fill="none" stroke="currentColor" strokeWidth="1.5" strokeLinecap="round">
       <line x1="2" y1="12" x2="2" y2="12"/><line x1="6" y1="8" x2="6" y2="16"/>
@@ -699,6 +704,258 @@ function ProcessingPreview({ progress, status, totalEstimatedTime, timeSpent, ti
   );
 }
 
+// ─── YouTube publish panel ─────────────────────────────────────────────────
+// Uploads the finished montage straight to YouTube (no manual
+// download-then-reupload), then lets the user finish title/description/
+// tags/hashtags in-app once the upload lands - saved back via a second
+// videos.update call rather than making them go to YouTube Studio.
+
+const ytFieldLabel = { fontSize:10, fontWeight:600, color:'#7a7a94', textTransform:'uppercase', letterSpacing:'.03em' };
+const ytFieldInput = { width:'100%', padding:'8px 10px', background:'#0a0a12', border:'1px solid #1e1e2a', borderRadius:8, color:'#e5e5f0', fontSize:12, outline:'none', boxSizing:'border-box' };
+const ytPrimaryBtn = { display:'flex', alignItems:'center', justifyContent:'center', gap:8, padding:'10px 16px', background:'#ff0033', border:'none', borderRadius:10, color:'#fff', fontSize:12, fontWeight:600, cursor:'pointer' };
+
+function YouTubePublishPanel({ outputFile, onClose }) {
+  const { socket, socketId } = useSocket();
+  // checking -> not-configured | disconnected -> connecting -> ready -> uploading -> details -> saved
+  const [status, setStatus] = useState('checking');
+  const [channel, setChannel] = useState(null);
+  const [progress, setProgress] = useState(0);
+  const [errorText, setErrorText] = useState('');
+  const [saving, setSaving] = useState(false);
+  const [videoId, setVideoId] = useState(null);
+  const [videoUrl, setVideoUrl] = useState(null);
+  const [form, setForm] = useState({
+    title: (outputFile.downloadName || outputFile.fileName || '').replace(/\.[^.]+$/, ''),
+    description: '',
+    tags: '',
+    hashtags: '',
+    privacyStatus: 'private',
+  });
+  const pollRef = useRef(null);
+  const pollAttemptsRef = useRef(0);
+
+  const updateForm = (patch) => setForm((prev) => ({ ...prev, ...patch }));
+
+  const checkStatus = useCallback(async () => {
+    try {
+      const res = await fetch(API_ENDPOINTS.youtubeAuthStatus, { credentials: 'include' });
+      const data = await res.json();
+      if (data.connected) {
+        setChannel({ title: data.channelTitle, thumbnail: data.channelThumbnail });
+        setStatus((prev) => (prev === 'uploading' || prev === 'details' || prev === 'saved' ? prev : 'ready'));
+        return true;
+      }
+      setStatus(data.configured ? 'disconnected' : 'not-configured');
+      return false;
+    } catch {
+      setStatus('not-configured');
+      return false;
+    }
+  }, []);
+
+  useEffect(() => { checkStatus(); }, [checkStatus]);
+
+  useEffect(() => () => {
+    if (pollRef.current) clearInterval(pollRef.current);
+  }, []);
+
+  useEffect(() => {
+    if (!socket) return undefined;
+    const handleProgress = (payload) => setProgress(payload?.percent || 0);
+    socket.on('youtube-upload-progress', handleProgress);
+    return () => socket.off('youtube-upload-progress', handleProgress);
+  }, [socket]);
+
+  const handleConnect = async () => {
+    setErrorText('');
+    try {
+      const res = await fetch(API_ENDPOINTS.youtubeAuthUrl, { credentials: 'include' });
+      const data = await res.json();
+      if (!res.ok) {
+        setErrorText(data.error || 'Could not start the connection.');
+        return;
+      }
+      setStatus('connecting');
+      const popup = window.open(data.url, 'youtube-oauth', 'width=520,height=680');
+      pollAttemptsRef.current = 0;
+      pollRef.current = setInterval(async () => {
+        pollAttemptsRef.current += 1;
+        const connected = await checkStatus();
+        const timedOut = pollAttemptsRef.current > 80; // ~2 minutes at 1.5s
+        if (connected || popup?.closed || timedOut) {
+          clearInterval(pollRef.current);
+          pollRef.current = null;
+          if (!connected) {
+            setStatus('disconnected');
+            if (timedOut) setErrorText('Connection timed out - try again.');
+          }
+        }
+      }, 1500);
+    } catch (err) {
+      setErrorText(err.message || 'Could not start the connection.');
+    }
+  };
+
+  const handleUpload = async () => {
+    setErrorText('');
+    setStatus('uploading');
+    setProgress(0);
+    try {
+      const jobId = `yt-${Date.now()}`;
+      const res = await fetch(API_ENDPOINTS.youtubeUpload, {
+        method: 'POST',
+        credentials: 'include',
+        headers: {
+          'Content-Type': 'application/json',
+          'X-Job-Id': jobId,
+          ...(socketId ? { 'X-Socket-Id': socketId } : {}),
+        },
+        body: JSON.stringify({
+          filePath: outputFile.filePath,
+          fileName: outputFile.fileName,
+          title: form.title,
+          privacyStatus: form.privacyStatus,
+        }),
+      });
+      const data = await res.json();
+      if (!res.ok) throw new Error(data.error || 'Upload failed.');
+      setVideoId(data.videoId);
+      setVideoUrl(data.videoUrl);
+      setStatus('details');
+    } catch (err) {
+      setErrorText(err.message || 'Upload failed.');
+      setStatus('ready');
+    }
+  };
+
+  const handleSaveDetails = async () => {
+    setErrorText('');
+    setSaving(true);
+    try {
+      const res = await fetch(API_ENDPOINTS.youtubeVideo(videoId), {
+        method: 'PATCH',
+        credentials: 'include',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify(form),
+      });
+      const data = await res.json();
+      if (!res.ok) throw new Error(data.error || 'Save failed.');
+      setStatus('saved');
+    } catch (err) {
+      setErrorText(err.message || 'Save failed.');
+    } finally {
+      setSaving(false);
+    }
+  };
+
+  return (
+    <div style={{ position:'fixed', inset:0, background:'rgba(0,0,0,.6)', backdropFilter:'blur(2px)', display:'flex', alignItems:'center', justifyContent:'center', zIndex:100 }} onClick={onClose}>
+      <div className="mt-fade-up" style={{ width:420, maxWidth:'92vw', maxHeight:'86vh', overflowY:'auto', background:'#0e0e18', border:'1px solid #1e1e2a', borderRadius:16, padding:20, display:'flex', flexDirection:'column', gap:12 }} onClick={(e) => e.stopPropagation()}>
+        <div style={{ display:'flex', alignItems:'center', justifyContent:'space-between' }}>
+          <div style={{ display:'flex', alignItems:'center', gap:8 }}>
+            <div style={{ width:20, height:20, color:'#ff0033' }}><Icon.Youtube /></div>
+            <span style={{ fontSize:14, fontWeight:700, color:'#e5e5f0' }}>Upload to YouTube</span>
+          </div>
+          <button onClick={onClose} style={{ width:26, height:26, borderRadius:8, background:'transparent', border:'none', color:'#6a6a80', cursor:'pointer', display:'flex', alignItems:'center', justifyContent:'center' }}>
+            <div style={{ width:14, height:14 }}><Icon.X /></div>
+          </button>
+        </div>
+
+        {errorText && (
+          <div style={{ padding:'8px 10px', background:'rgba(239,68,68,.12)', border:'1px solid rgba(239,68,68,.3)', borderRadius:8, color:'#fca5a5', fontSize:11 }}>{errorText}</div>
+        )}
+
+        {status === 'checking' && (
+          <div style={{ display:'flex', alignItems:'center', justifyContent:'center', gap:8, padding:'20px 0', color:'#7a7a94', fontSize:12 }}>
+            <div style={{ width:14, height:14 }}><Icon.Spin /></div> Checking connection...
+          </div>
+        )}
+
+        {status === 'not-configured' && (
+          <div style={{ fontSize:12, color:'#9a9ab0', lineHeight:1.6 }}>
+            YouTube upload isn&apos;t set up yet. Add <code>YOUTUBE_CLIENT_ID</code>, <code>YOUTUBE_CLIENT_SECRET</code> and <code>YOUTUBE_REDIRECT_URI</code> to <code>backend/.env</code> and restart the server, then reopen this panel.
+          </div>
+        )}
+
+        {(status === 'disconnected' || status === 'connecting') && (
+          <div style={{ display:'flex', flexDirection:'column', alignItems:'center', gap:12, padding:'16px 0' }}>
+            <div style={{ fontSize:12, color:'#9a9ab0', textAlign:'center' }}>Connect your YouTube account to publish this video directly from NexEditor.</div>
+            <button disabled={status === 'connecting'} onClick={handleConnect} style={{ ...ytPrimaryBtn, cursor: status === 'connecting' ? 'default' : 'pointer', opacity: status === 'connecting' ? 0.7 : 1 }}>
+              {status === 'connecting' ? (
+                <><div style={{ width:13, height:13 }}><Icon.Spin /></div> Waiting for Google...</>
+              ) : (
+                <><div style={{ width:13, height:13 }}><Icon.Youtube /></div> Connect YouTube account</>
+              )}
+            </button>
+          </div>
+        )}
+
+        {status === 'ready' && (
+          <div style={{ display:'flex', flexDirection:'column', gap:10 }}>
+            {channel && (
+              <div style={{ display:'flex', alignItems:'center', gap:8, padding:'8px 10px', background:'#0a0a12', border:'1px solid #1a1a24', borderRadius:10 }}>
+                {channel.thumbnail && <img src={channel.thumbnail} alt="" style={{ width:24, height:24, borderRadius:'50%' }} />}
+                <span style={{ fontSize:11, color:'#b0b0c8' }}>Connected as <b style={{ color:'#e5e5f0' }}>{channel.title}</b></span>
+              </div>
+            )}
+            <label style={ytFieldLabel}>Title</label>
+            <input value={form.title} onChange={(e) => updateForm({ title: e.target.value })} style={ytFieldInput} placeholder="Video title" />
+            <label style={ytFieldLabel}>Privacy</label>
+            <select value={form.privacyStatus} onChange={(e) => updateForm({ privacyStatus: e.target.value })} style={ytFieldInput}>
+              <option value="private">Private</option>
+              <option value="unlisted">Unlisted</option>
+              <option value="public">Public</option>
+            </select>
+            <button onClick={handleUpload} disabled={!form.title.trim()} style={{ ...ytPrimaryBtn, opacity: form.title.trim() ? 1 : 0.5, cursor: form.title.trim() ? 'pointer' : 'default' }}>
+              <div style={{ width:13, height:13 }}><Icon.Upload /></div> Start Upload
+            </button>
+          </div>
+        )}
+
+        {status === 'uploading' && (
+          <div style={{ display:'flex', flexDirection:'column', gap:10, padding:'10px 0' }}>
+            <div style={{ fontSize:12, color:'#9a9ab0', textAlign:'center' }}>Uploading to YouTube... {progress}%</div>
+            <div style={{ height:6, background:'#1a1a24', borderRadius:99, overflow:'hidden' }}>
+              <div style={{ height:'100%', width:`${progress}%`, background:'#ff0033', transition:'width .2s' }} />
+            </div>
+          </div>
+        )}
+
+        {(status === 'details' || status === 'saved') && (
+          <div style={{ display:'flex', flexDirection:'column', gap:10 }}>
+            <div style={{ display:'flex', alignItems:'center', gap:8, padding:'8px 10px', background:'rgba(34,197,94,.12)', border:'1px solid rgba(34,197,94,.3)', borderRadius:8, color:'#86efac', fontSize:11 }}>
+              <div style={{ width:14, height:14 }}><Icon.Check /></div>
+              {status === 'saved' ? 'Saved to YouTube.' : 'Uploaded! Now finish your details.'}
+            </div>
+            {videoUrl && (
+              <a href={videoUrl} target="_blank" rel="noreferrer" style={{ fontSize:11, color:'#93c5fd', display:'flex', alignItems:'center', gap:5, textDecoration:'none' }}>
+                <div style={{ width:12, height:12 }}><Icon.Link /></div> View on YouTube
+              </a>
+            )}
+            <label style={ytFieldLabel}>Title</label>
+            <input value={form.title} onChange={(e) => updateForm({ title: e.target.value })} style={ytFieldInput} />
+            <label style={ytFieldLabel}>Description</label>
+            <textarea value={form.description} onChange={(e) => updateForm({ description: e.target.value })} style={{ ...ytFieldInput, minHeight:70, resize:'vertical', fontFamily:'inherit' }} placeholder="Tell viewers about this video..." />
+            <label style={ytFieldLabel}>Tags (comma separated)</label>
+            <input value={form.tags} onChange={(e) => updateForm({ tags: e.target.value })} style={ytFieldInput} placeholder="editing, tutorial, capcut" />
+            <label style={ytFieldLabel}>Hashtags</label>
+            <input value={form.hashtags} onChange={(e) => updateForm({ hashtags: e.target.value })} style={ytFieldInput} placeholder="#shorts #viral" />
+            <label style={ytFieldLabel}>Privacy</label>
+            <select value={form.privacyStatus} onChange={(e) => updateForm({ privacyStatus: e.target.value })} style={ytFieldInput}>
+              <option value="private">Private</option>
+              <option value="unlisted">Unlisted</option>
+              <option value="public">Public</option>
+            </select>
+            <button onClick={handleSaveDetails} disabled={saving} style={{ ...ytPrimaryBtn, opacity: saving ? 0.7 : 1, cursor: saving ? 'default' : 'pointer' }}>
+              {saving ? (<><div style={{ width:13, height:13 }}><Icon.Spin /></div> Saving...</>) : (<><div style={{ width:13, height:13 }}><Icon.Check /></div> Save to YouTube</>)}
+            </button>
+          </div>
+        )}
+      </div>
+    </div>
+  );
+}
+
 function SuccessPreview({ outputFile, loadVideoInEditor, onShurfer, onReset }) {
   const videoRef = useRef(null);
   const containerRef = useRef(null);
@@ -713,6 +970,7 @@ function SuccessPreview({ outputFile, loadVideoInEditor, onShurfer, onReset }) {
   const [isDownloading, setIsDownloading] = useState(false);
   const [showVolumeSlider, setShowVolumeSlider] = useState(false);
   const [showSpeedMenu, setShowSpeedMenu] = useState(false);
+  const [showYoutubePanel, setShowYoutubePanel] = useState(false);
   const hideTimerRef = useRef(null);
   const src = outputFile.fileName ? `${API_BASE}/clips/${outputFile.fileName}` : '';
 
@@ -987,6 +1245,9 @@ function SuccessPreview({ outputFile, loadVideoInEditor, onShurfer, onReset }) {
           <button onClick={() => loadVideoInEditor(outputFile.filePath, outputFile.fileName)} style={{ display:'flex', alignItems:'center', gap:6, padding:'7px 14px', background:'transparent', border:'1px solid rgba(124,58,237,.4)', borderRadius:9, color:'#a78bfa', fontSize:11, fontWeight:600, cursor:'pointer', whiteSpace:'nowrap' }}>
             <div style={{ width:13, height:13 }}><Icon.Edit /></div> Edit
           </button>
+          <button onClick={() => setShowYoutubePanel(true)} style={{ display:'flex', alignItems:'center', gap:6, padding:'7px 14px', background:'rgba(255,0,51,.12)', border:'1px solid rgba(255,0,51,.35)', borderRadius:9, color:'#ff6b81', fontSize:11, fontWeight:600, cursor:'pointer', whiteSpace:'nowrap' }}>
+            <div style={{ width:13, height:13 }}><Icon.Youtube /></div> Upload to YouTube
+          </button>
           <button onClick={onShurfer} style={{ display:'flex', alignItems:'center', gap:6, padding:'7px 14px', background:'rgba(34,197,94,.18)', border:'1px solid rgba(34,197,94,.32)', borderRadius:9, color:'#bef264', fontSize:11, fontWeight:600, cursor:'pointer', whiteSpace:'nowrap' }}>
             <div style={{ width:13, height:13 }}><Icon.Star /></div> Shurfer
           </button>
@@ -995,6 +1256,7 @@ function SuccessPreview({ outputFile, loadVideoInEditor, onShurfer, onReset }) {
           </button>
         </div>
       </div>
+      {showYoutubePanel && <YouTubePublishPanel outputFile={outputFile} onClose={() => setShowYoutubePanel(false)} />}
     </div>
   );
 }
@@ -1023,7 +1285,14 @@ export default function MontageTab({ loadVideoInEditor, onError, onShurfer, onRe
   injectStyles();
   const { socket, socketId, socketError } = useSocket();
 
-  const montage = usePersistedMontageState();
+  // A `montageSession` URL param namespaces this tab's persisted state (see
+  // usePersistedMontageState) so it can run a montage independently of any
+  // other tab - see the "New" button below, which is how a second tab gets
+  // one. Read once per mount; the value never needs to change within a
+  // single page load.
+  const [montageSessionId] = useState(() => new URLSearchParams(window.location.search).get('montageSession') || '');
+
+  const montage = usePersistedMontageState(montageSessionId);
   const {
     videos,
     updateVideo,
@@ -1043,6 +1312,8 @@ export default function MontageTab({ loadVideoInEditor, onError, onShurfer, onRe
     setMergeTimeLeft,
     mergeError,
     setMergeError,
+    mergeJobId,
+    setMergeJobId,
     outputFile,
     hasRealProgress,
     setHasRealProgress,
@@ -1082,6 +1353,25 @@ export default function MontageTab({ loadVideoInEditor, onError, onShurfer, onRe
   useEffect(() => {
     if (!socket) return;
     const onProg = (p) => {
+      // The server responds to the initial request as soon as the job is
+      // accepted (see handleMerge) rather than holding the connection open
+      // for the whole render - a screen lock, sleep/wake, or backgrounded
+      // tab can no longer surface as a hard failure just because that one
+      // long-lived connection dropped. Completion/result now arrive here
+      // (or via the poller below) instead of the original fetch response.
+      if (p?.percent >= 100 && p?.result) {
+        montage.setOutputFile({
+          filePath: p.result.filePath,
+          fileName: p.result.fileName,
+          downloadName: p.result.downloadName || p.result.fileName,
+          duration: p.result.duration || 0,
+          size: p.result.size || 0,
+        });
+        setMergeStatus('success');
+        setMergeProgress(100);
+        setMergeStageText('Complete');
+        return;
+      }
       setHasRealProgress(true);
       // Never let a real update (or the fake ticker below) move the bar
       // backward - both write the same value independently and can race.
@@ -1104,21 +1394,48 @@ export default function MontageTab({ loadVideoInEditor, onError, onShurfer, onRe
       socket.off('montage-progress', onProg);
       socket.off('montage-error', onErr);
     };
-  }, [onError, socket, setHasRealProgress, setMergeProgress, setMergeStageText, setMergeStatus, setMergeError, setLastProgressUpdate, setMergeTimeLeft, setMergeTimeSpent, setMergeTotalEstimatedTime]);
+  }, [onError, socket, setHasRealProgress, setMergeProgress, setMergeStageText, setMergeStatus, setMergeError, setLastProgressUpdate, setMergeTimeLeft, setMergeTimeSpent, setMergeTotalEstimatedTime, montage.setOutputFile]);
 
   useEffect(() => {
-    if (mergeStatus !== 'processing' || !socketId) {
+    if (mergeStatus !== 'processing' || !mergeJobId) {
       return undefined;
     }
+    const jobId = mergeJobId;
 
     // Poll the job-store-backed HTTP endpoint as a fallback so progress still
-    // advances if the socket connection drops or reconnects mid-job.
+    // advances if the socket connection drops or reconnects mid-job. Keyed
+    // by a fresh per-request jobId (not the socket connection, which is
+    // reused across every montage a tab creates) so a new "Create new" run
+    // can never read a previous run's stale terminal progress entry.
     const poller = window.setInterval(async () => {
       try {
-        const response = await fetch(`${API_BASE}/api/create-montage/progress/${socketId}`, { cache: 'no-store' });
+        const response = await fetch(`${API_BASE}/api/create-montage/progress/${jobId}`, { cache: 'no-store' });
         if (!response.ok) return;
         const status = await response.json();
-        if (status.error) return;
+        if (status.error) {
+          // The original request's own connection may have dropped (screen
+          // lock/sleep, backgrounded tab, network blip) long before the
+          // backend actually failed - this poller is what surfaces a real
+          // failure now, instead of silently leaving the UI stuck at
+          // whatever progress it last saw.
+          setMergeError(status.error);
+          setMergeStatus('error');
+          onError?.(status.error);
+          return;
+        }
+        if (status.percent >= 100 && status.result) {
+          montage.setOutputFile({
+            filePath: status.result.filePath,
+            fileName: status.result.fileName,
+            downloadName: status.result.downloadName || status.result.fileName,
+            duration: status.result.duration || 0,
+            size: status.result.size || 0,
+          });
+          setMergeStatus('success');
+          setMergeProgress(100);
+          setMergeStageText('Complete');
+          return;
+        }
         if (status.percent > 0) {
           setHasRealProgress(true);
           setMergeProgress((current) => Math.max(current, status.percent));
@@ -1129,7 +1446,7 @@ export default function MontageTab({ loadVideoInEditor, onError, onShurfer, onRe
     }, 1500);
 
     return () => window.clearInterval(poller);
-  }, [mergeStatus, socketId, setHasRealProgress, setMergeProgress, setMergeStageText, setLastProgressUpdate]);
+  }, [mergeStatus, mergeJobId, setHasRealProgress, setMergeProgress, setMergeStageText, setLastProgressUpdate, setMergeStatus, setMergeError, onError, montage.setOutputFile]);
 
   useEffect(() => {
     if (mergeStatus !== 'processing') {
@@ -1175,6 +1492,11 @@ export default function MontageTab({ loadVideoInEditor, onError, onShurfer, onRe
 
   const handleMerge = () => {
     if (!canMerge || isProcessing) return;
+    // Read synchronously (not from mergeJobId state, which won't reflect
+    // this until after the state update flushes) so it's available
+    // immediately below for the X-Job-Id header.
+    const newJobId = globalThis.crypto?.randomUUID?.() || `montage-${Date.now()}-${Math.random().toString(16).slice(2)}`;
+    setMergeJobId(newJobId);
     setMergeStatus('processing');
     setMergeProgress(0);
     setMergeStageText('Preparing upload...');
@@ -1200,24 +1522,22 @@ export default function MontageTab({ loadVideoInEditor, onError, onShurfer, onRe
 
     fetch(`${API_BASE}/api/create-montage`, {
       method: 'POST',
-      headers: socketId ? { 'X-Socket-Id': socketId } : undefined,
+      credentials: 'include',
+      headers: {
+        'X-Job-Id': newJobId,
+        ...(socketId ? { 'X-Socket-Id': socketId } : {}),
+      },
       body: fd,
     })
       .then((res) => {
+        // The server now accepts the job and responds immediately (202 +
+        // jobId) rather than holding this connection open for the whole
+        // render - completion/errors arrive via the socket listener above
+        // or the poller below instead of this response, so a screen
+        // lock/sleep or backgrounded tab dropping THIS connection can no
+        // longer surface as a hard failure partway through a real render.
         if (!res.ok) return res.json().then((data) => Promise.reject(new Error(data.error || 'Montage failed')));
         return res.json();
-      })
-      .then((data) => {
-        montage.setOutputFile({
-          filePath: data.filePath,
-          fileName: data.fileName,
-          downloadName: data.downloadName || data.fileName,
-          duration: data.duration || 0,
-          size: data.size || 0,
-        });
-        setMergeStatus('success');
-        setMergeProgress(100);
-        setMergeStageText('Complete');
       })
       .catch((err) => {
         const msg = err.message || 'Failed to create montage';
@@ -1226,6 +1546,21 @@ export default function MontageTab({ loadVideoInEditor, onError, onShurfer, onRe
         onError?.(msg);
       });
   }
+
+  // Lets a user start a second (or third...) montage while this one is
+  // still rendering, without waiting for it or losing it. This tab's videos/
+  // audio/progress are namespaced under montageSessionId (see
+  // usePersistedMontageState) precisely so a second tab pointed at a fresh
+  // session id can run fully independently - same origin, same localStorage,
+  // but non-overlapping keys, so neither tab's autosave can stomp the
+  // other's state. The backend already supports any number of concurrent
+  // montage jobs (each gets its own jobId), so this is really just giving
+  // the new tab its own workspace to kick one off from.
+  const handleOpenNewMontageTab = () => {
+    const url = new URL(window.location.href);
+    url.searchParams.set('montageSession', globalThis.crypto?.randomUUID?.() || `${Date.now()}-${Math.random().toString(16).slice(2)}`);
+    window.open(url.toString(), '_blank', 'noopener');
+  };
 
   return (
     <div style={{ width:'100%', height:'calc(100vh - 48px)', overflow:'hidden', background:'#080810', display:'flex', flexDirection:'column' }}>
@@ -1301,7 +1636,20 @@ export default function MontageTab({ loadVideoInEditor, onError, onShurfer, onRe
           ) : (
             <div style={{ width:'100%', height:'100%', minHeight:360, display:'flex', alignItems:'center', justifyContent:'center' }}>
               <div style={{ width:'100%', maxWidth:840, minHeight:280, display:'flex', alignItems:'center', justifyContent:'center' }}>
-                {mergeStatus === 'processing' && <ProcessingPreview progress={mergeProgress} status={mergeStageText} totalEstimatedTime={mergeTotalEstimatedTime} timeSpent={mergeTimeSpent} timeLeft={mergeTimeLeft} />}
+                {mergeStatus === 'processing' && (
+                  <div style={{ display:'flex', flexDirection:'column', alignItems:'center', gap:18 }}>
+                    <ProcessingPreview progress={mergeProgress} status={mergeStageText} totalEstimatedTime={mergeTotalEstimatedTime} timeSpent={mergeTimeSpent} timeLeft={mergeTimeLeft} />
+                    <button
+                      type="button"
+                      onClick={handleOpenNewMontageTab}
+                      title="Opens a new tab so you can start another montage while this one keeps rendering"
+                      style={{ display:'flex', alignItems:'center', gap:8, padding:'10px 18px', background:'rgba(124,58,237,.12)', border:'1px solid rgba(124,58,237,.3)', borderRadius:10, color:'#c084fc', fontSize:12, fontWeight:600, cursor:'pointer' }}
+                    >
+                      <div style={{ width:14, height:14 }}><Icon.Plus /></div>
+                      Create another montage
+                    </button>
+                  </div>
+                )}
                 {mergeStatus === 'success' && <SuccessPreview outputFile={outputFile} loadVideoInEditor={loadVideoInEditor} onShurfer={onShurfer} onReset={handleReset} />}
                 {mergeStatus === 'error' && <ErrorPreview error={mergeError} onRetry={() => { setMergeStatus('idle'); setMergeError(''); setMergeProgress(0); setMergeStageText(''); }} />}
               </div>

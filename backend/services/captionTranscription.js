@@ -1,113 +1,91 @@
-import fs from 'fs';
 import fsp from 'fs/promises';
-import path from 'path';
-import { spawn } from 'child_process';
 
-const backendRoot = process.cwd();
-const defaultRuntime = path.join(backendRoot, 'whisper', 'runtime');
-const defaultModel = path.join(backendRoot, 'whisper', 'models', 'ggml-base.bin');
-const WHISPER_TIMEOUT = Number.parseInt(process.env.WHISPER_TIMEOUT || '3600000', 10);
+// Transcription runs against Groq's hosted Whisper API rather than a local
+// whisper.cpp binary - Windows Smart App Control blocks unsigned local
+// executables like whisper.cpp on machines where it's enabled (confirmed:
+// even `whisper-cli.exe -h` alone gets killed with no output), with no
+// reliable per-app exception once it's on. Unlike OpenAI's API, Groq
+// rejects response_format=srt ("must be one of [json text verbose_json]" -
+// confirmed against the live API), so this requests verbose_json and builds
+// SRT text from its segments itself, matching the shape offsetSrt() below
+// already expects from local whisper.cpp's own SRT output.
+const GROQ_API_URL = 'https://api.groq.com/openai/v1/audio/transcriptions';
+const GROQ_MODEL = process.env.GROQ_WHISPER_MODEL || 'whisper-large-v3-turbo';
+const REQUEST_TIMEOUT_MS = Number.parseInt(process.env.GROQ_TRANSCRIBE_TIMEOUT || '300000', 10);
 
-function findFile(root, names) {
-  if (!fs.existsSync(root)) return null;
-  const matches = new Map();
-  const queue = [root];
-  while (queue.length) {
-    const current = queue.shift();
-    for (const entry of fs.readdirSync(current, { withFileTypes: true })) {
-      const fullPath = path.join(current, entry.name);
-      if (entry.isDirectory()) queue.push(fullPath);
-      else if (names.includes(entry.name.toLowerCase())) matches.set(entry.name.toLowerCase(), fullPath);
+async function transcribeChunkWithGroq(chunkPath, { language, prompt }) {
+  const apiKey = process.env.GROQ_API_KEY;
+  if (!apiKey) {
+    throw new Error('Captions aren\'t configured yet - add GROQ_API_KEY to backend/.env (free at console.groq.com/keys).');
+  }
+
+  const fileBuffer = await fsp.readFile(chunkPath);
+  const form = new FormData();
+  form.append('file', new Blob([fileBuffer], { type: 'audio/mpeg' }), 'chunk.mp3');
+  form.append('model', GROQ_MODEL);
+  form.append('response_format', 'verbose_json');
+  form.append('temperature', '0');
+  if (language) form.append('language', language);
+  if (prompt) form.append('prompt', prompt);
+
+  const controller = new AbortController();
+  const timer = setTimeout(() => controller.abort(), REQUEST_TIMEOUT_MS);
+  try {
+    const response = await fetch(GROQ_API_URL, {
+      method: 'POST',
+      headers: { Authorization: `Bearer ${apiKey}` },
+      body: form,
+      signal: controller.signal,
+    });
+    if (!response.ok) {
+      let message = `Groq transcription failed (${response.status}).`;
+      try {
+        const data = await response.json();
+        message = data?.error?.message || message;
+      } catch { /* body wasn't JSON - keep the generic message */ }
+      throw new Error(message);
     }
+    const data = await response.json();
+    return segmentsToSrt(data.segments || []);
+  } catch (err) {
+    if (err.name === 'AbortError') {
+      throw new Error(`Groq transcription timed out after ${Math.round(REQUEST_TIMEOUT_MS / 60000)} minutes.`);
+    }
+    throw err;
+  } finally {
+    clearTimeout(timer);
   }
-  for (const name of names) {
-    if (matches.has(name)) return matches.get(name);
-  }
-  return null;
 }
 
-function resolveWhisperBinary() {
-  if (process.env.WHISPER_CPP_PATH) return path.resolve(process.env.WHISPER_CPP_PATH);
-  return findFile(defaultRuntime, process.platform === 'win32' ? ['whisper-cli.exe', 'main.exe'] : ['whisper-cli', 'main']);
-}
-
-function runWhisper(inputPath, outputPrefix, { language, threads, onProgress }) {
-  const binary = resolveWhisperBinary();
-  const model = path.resolve(process.env.WHISPER_MODEL_PATH || defaultModel);
-  if (!binary || !fs.existsSync(binary)) {
-    throw new Error('Local Whisper is not installed. Run backend/scripts/setup-whisper.ps1 first.');
-  }
-  if (!fs.existsSync(model)) {
-    throw new Error(`Whisper model not found: ${model}`);
-  }
-
-  const args = [
-    '-m', model,
-    '-f', path.resolve(inputPath),
-    '-of', path.resolve(outputPrefix),
-    '-osrt',
-    '-pp',
-    '-ml', '72',
-    '-sow',
-    '-l', language || 'auto',
-    '-t', String(threads),
-  ];
-
-  return new Promise((resolve, reject) => {
-    const child = spawn(binary, args, { cwd: path.dirname(binary), windowsHide: true });
-    let stderr = '';
-    let settled = false;
-    const timer = setTimeout(() => {
-      child.kill('SIGTERM');
-      if (!settled) reject(new Error(`Local Whisper timed out after ${Math.round(WHISPER_TIMEOUT / 60000)} minutes.`));
-      settled = true;
-    }, WHISPER_TIMEOUT);
-
-    child.stderr.on('data', (chunk) => {
-      const text = chunk.toString();
-      stderr += text;
-      for (const match of text.matchAll(/progress\s*=\s*(\d+)%/gi)) onProgress?.(Number(match[1]));
-    });
-    child.on('error', (error) => {
-      clearTimeout(timer);
-      if (!settled) reject(error);
-      settled = true;
-    });
-    child.on('close', (code) => {
-      clearTimeout(timer);
-      if (settled) return;
-      settled = true;
-      if (code !== 0) reject(new Error(stderr.trim().split(/\r?\n/).slice(-4).join(' ') || `Whisper exited with code ${code}.`));
-      else resolve();
-    });
-  });
+// verbose_json's segments give start/end in seconds (float) - reuses the
+// same formatTimestamp() the rest of this file already has for local
+// whisper.cpp's millisecond-based SRT output.
+function segmentsToSrt(segments) {
+  return segments
+    .map((segment, i) => {
+      const text = (segment.text || '').trim();
+      if (!text) return null;
+      return `${i + 1}\n${formatTimestamp(segment.start * 1000)} --> ${formatTimestamp(segment.end * 1000)}\n${text}`;
+    })
+    .filter(Boolean)
+    .join('\n\n');
 }
 
 export function getWhisperStatus() {
-  const binary = resolveWhisperBinary();
-  const model = path.resolve(process.env.WHISPER_MODEL_PATH || defaultModel);
-  return { ready: Boolean(binary && fs.existsSync(model)), binary, model, engine: 'whisper.cpp', local: true };
+  return { ready: Boolean(process.env.GROQ_API_KEY), engine: 'groq-whisper', model: GROQ_MODEL, local: false };
 }
 
-export async function transcribeChunks(chunkPaths, { language, onProgress } = {}) {
-  const cpuCount = Number.parseInt(process.env.NUMBER_OF_PROCESSORS || '4', 10);
-  const threads = Math.max(1, Number.parseInt(process.env.WHISPER_THREADS || String(Math.max(2, cpuCount - 1)), 10));
+export async function transcribeChunks(chunkPaths, { language, prompt, onProgress } = {}) {
   const combined = [];
   let nextIndex = 1;
 
   for (let index = 0; index < chunkPaths.length; index += 1) {
-    const outputPrefix = `${chunkPaths[index]}-captions`;
-    await runWhisper(chunkPaths[index], outputPrefix, {
-      language,
-      threads,
-      onProgress: (chunkPercent) => onProgress?.(index + chunkPercent / 100, chunkPaths.length),
-    });
-    const generatedPath = `${outputPrefix}.srt`;
-    const srt = await fsp.readFile(generatedPath, 'utf8');
+    onProgress?.(index, chunkPaths.length);
+    // eslint-disable-next-line no-await-in-loop
+    const srt = await transcribeChunkWithGroq(chunkPaths[index], { language, prompt });
     const adjusted = offsetSrt(srt, index * 1200, nextIndex);
     nextIndex = adjusted.nextIndex;
     if (adjusted.text) combined.push(adjusted.text);
-    await fsp.rm(generatedPath, { force: true });
     onProgress?.(index + 1, chunkPaths.length);
   }
 
@@ -133,7 +111,7 @@ function formatTimestamp(milliseconds) {
 function offsetSrt(srt, offsetSeconds, startingIndex) {
   let index = startingIndex;
   const output = [];
-  for (const block of srt.replace(/^\uFEFF/, '').trim().split(/\r?\n\s*\r?\n/)) {
+  for (const block of srt.replace(/^﻿/, '').trim().split(/\r?\n\s*\r?\n/)) {
     const lines = block.split(/\r?\n/);
     const timingIndex = lines.findIndex((line) => line.includes('-->'));
     if (timingIndex < 0) continue;

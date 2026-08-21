@@ -72,14 +72,17 @@ router.post('/', captionUpload.single('video'), async (req, res) => {
     if (!Number.isFinite(duration) || duration <= 0) throw new Error('The uploaded video has no readable duration.');
 
     emitProgress(req, 12, 'Extracting speech audio...');
-    const chunkPattern = path.join(jobDir, 'speech-%03d.wav');
+    // Compressed (not raw PCM) so each 20-minute chunk stays well under the
+    // Groq/OpenAI transcription API's ~25MB per-file limit - mono 16kHz
+    // speech at 64kbps runs about 9.6MB for a full 20-minute segment.
+    const chunkPattern = path.join(jobDir, 'speech-%03d.mp3');
     await runFFmpeg([
       '-hide_banner', '-loglevel', 'error', '-i', req.file.path,
-      '-vn', '-ac', '1', '-ar', '16000', '-c:a', 'pcm_s16le',
+      '-vn', '-ac', '1', '-ar', '16000', '-c:a', 'libmp3lame', '-b:a', '64k',
       '-f', 'segment', '-segment_time', '1200', '-reset_timestamps', '1', chunkPattern,
     ], { duration, onProgress: (value) => emitProgress(req, 12 + value.percent * 0.13, 'Extracting speech audio...') });
 
-    const chunks = (await fsp.readdir(jobDir)).filter((name) => name.endsWith('.wav')).sort().map((name) => path.join(jobDir, name));
+    const chunks = (await fsp.readdir(jobDir)).filter((name) => name.endsWith('.mp3')).sort().map((name) => path.join(jobDir, name));
     if (!chunks.length) throw new Error('No audio track was found in this video.');
 
     emitProgress(req, 26, req.body.mode === 'lyrics' ? 'Recognizing lyrics with Whisper...' : 'Recognizing speech with Whisper...');
