@@ -1018,11 +1018,40 @@ input[type="color"] {
 
 .timeline-ruler-markers {
   flex: 1;
-  display: grid;
-  grid-template-columns: repeat(9, minmax(0, 1fr));
+  min-width: 0;
+  position: relative;
+  overflow: hidden;
   font-size: 10px;
   color: var(--text-muted);
   font-variant-numeric: tabular-nums;
+}
+
+/* Absolutely-positioned at marker*pxPerSecond (set inline per tick) inside a
+   track exactly as wide as the scrollable timeline content, so each label
+   sits directly above its real position - shifted via a transform mirroring
+   the track-surface's scrollLeft, so it scrolls in lockstep instead of
+   floating at a fixed offset once the timeline is scrolled. */
+.timeline-ruler-markers-track {
+  position: relative;
+  height: 100%;
+  padding-left: 10px; /* matches .timeline-track-surface's own left padding, so tick N lines up with the clip content starting at the same time */
+}
+
+.timeline-ruler-tick {
+  position: absolute;
+  top: 50%;
+  transform: translateY(-50%);
+  white-space: nowrap;
+}
+
+.timeline-ruler-tick::before {
+  content: '';
+  position: absolute;
+  left: -6px;
+  top: -9px;
+  width: 1px;
+  height: 6px;
+  background: var(--border-light);
 }
 
 .timeline-tracks {
@@ -1335,14 +1364,79 @@ input[type="color"] {
   font-variant-numeric: tabular-nums;
 }
 
-.timeline-waveform {
-  display: inline-flex;
-  align-items: center;
-  gap: 1px;
-  font-size: 9px;
-  line-height: 1;
-  opacity: 0.7;
-  letter-spacing: -0.5px;
+.timeline-waveform-canvas {
+  position: absolute;
+  left: 0;
+  top: 0;
+  pointer-events: none;
+  opacity: 0.85;
+}
+
+.timeline-clip-filmstrip {
+  position: absolute;
+  left: 0;
+  top: 0;
+  display: flex;
+  overflow: hidden;
+  pointer-events: none;
+  opacity: 0.55;
+}
+
+.timeline-clip-filmstrip-cell {
+  height: 100%;
+  background-size: cover;
+  background-position: center;
+  flex-shrink: 0;
+  border-right: 1px solid rgba(0, 0, 0, 0.25);
+}
+
+.timeline-hover-preview {
+  position: fixed;
+  transform: translate(-50%, calc(-100% - 14px));
+  pointer-events: none;
+  z-index: 50;
+  border-radius: 6px;
+  overflow: hidden;
+  border: 1px solid var(--timeline-accent, #7c3aed);
+  box-shadow: 0 6px 20px rgba(0, 0, 0, 0.45);
+}
+
+.timeline-hover-preview img {
+  display: block;
+  width: 160px;
+  height: 90px;
+  object-fit: cover;
+}
+
+.timeline-minimap {
+  position: relative;
+  height: 22px;
+  margin: 0 12px 6px;
+  border-radius: 4px;
+  background: rgba(255, 255, 255, 0.04);
+  border: 1px solid rgba(255, 255, 255, 0.08);
+  cursor: pointer;
+  overflow: hidden;
+  flex-shrink: 0;
+}
+
+.timeline-minimap-clip {
+  position: absolute;
+  top: 3px;
+  bottom: 3px;
+  border-radius: 2px;
+  opacity: 0.75;
+  pointer-events: none;
+}
+
+.timeline-minimap-viewport {
+  position: absolute;
+  top: 0;
+  bottom: 0;
+  background: rgba(167, 139, 250, 0.18);
+  border: 1px solid var(--timeline-playhead, #a78bfa);
+  border-radius: 3px;
+  pointer-events: none;
 }
 
 .timeline-placeholder {

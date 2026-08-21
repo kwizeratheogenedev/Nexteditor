@@ -34,6 +34,10 @@ function KeyframeButton({ active, hasAny, onClick, disabled, title }) {
   );
 }
 
+// Organizational tag colors for a clip block - purely a timeline display
+// aid (see normalizeClip's `color` field), not sent in the export payload.
+const CLIP_COLOR_PRESETS = ['#ef4444', '#f59e0b', '#eab308', '#22c55e', '#06b6d4', '#7c3aed', '#ec4899'];
+
 const DEFAULT_TRANSFORM = { x: 0, y: 0, scaleX: 1, scaleY: 1, rotation: 0, opacity: 1 };
 const DEFAULT_COLOR_PARAMS = { brightness: 0, contrast: 0, saturation: 0, temperature: 0 };
 const DEFAULT_TEXT_STYLE = { content: '', fontFamily: 'Inter, sans-serif', fontSize: 64, color: '#ffffff', align: 'center' };
@@ -146,7 +150,15 @@ function RightPanel() {
     setActivePanel(isTextClip ? 'text' : isAudioClip ? 'audio' : isAdjustmentClip ? 'color' : 'basic');
   }, [selectedClipId, isTextClip, isAudioClip, isAdjustmentClip]);
 
-  const clipName = selectedClip?.file?.name || selectedClip?.label || 'No clip selected';
+  // A clip that only has a remoteUrl (no local File, e.g. brought in from
+  // Montage output via "Edit", or restored on a different browser than it
+  // was imported on) has neither file.name nor label - falling all the way
+  // through to 'No clip selected' there would be misleading since the clip
+  // IS selected and its other properties do populate correctly below.
+  const clipNameFromUrl = (selectedClip?.url || selectedClip?.remoteUrl || '').split('/').pop()?.split('?')[0];
+  const clipName = selectedClip
+    ? (selectedClip.file?.name || selectedClip.label || clipNameFromUrl || `${(selectedClip.type || 'video').replace(/^./, (c) => c.toUpperCase())} clip`)
+    : 'No clip selected';
   const clipDuration = selectedClip ? (selectedClip.trimmedEnd - selectedClip.trimmedStart) : 0;
   const disabled = !selectedClip;
 
@@ -386,6 +398,29 @@ function RightPanel() {
             {selectedClipIds.length > 1 ? `${selectedClipIds.length} clips selected` : disabled ? 'Select a clip to edit its properties' : `Duration: ${clipDuration.toFixed(2)}s`}
           </div>
         </div>
+        {!disabled && (
+          <PropertyRow label="Clip color" value="">
+            <div className="swatch-row">
+              <button
+                type="button"
+                className={`color-swatch ${!selectedClip?.color ? 'is-active' : ''}`}
+                style={{ background: 'var(--timeline-clip-video, #3b82f6)' }}
+                title="Default (by clip type)"
+                onClick={() => updateClip(selectedClipId, (clip) => ({ ...clip, color: null }))}
+              />
+              {CLIP_COLOR_PRESETS.map((swatch) => (
+                <button
+                  key={swatch}
+                  type="button"
+                  className={`color-swatch ${selectedClip?.color === swatch ? 'is-active' : ''}`}
+                  style={{ background: swatch }}
+                  title={swatch}
+                  onClick={() => updateClip(selectedClipId, (clip) => ({ ...clip, color: swatch }))}
+                />
+              ))}
+            </div>
+          </PropertyRow>
+        )}
         {activePanel === 'basic' && (
           <>
             <PropertyRow label="Scale" value={`${draft.basic.scale}%`}>

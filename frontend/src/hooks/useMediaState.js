@@ -107,7 +107,7 @@ export function useMediaState() {
   const undo = editor.undo;
   const redo = editor.redo;
   const [editorVideo, setEditorVideo] = useState({ filePath: '', fileName: '' });
-  const [dragState, setDragState] = useState({ active: false, clipId: null, startX: 0, currentX: 0, startY: 0, currentY: 0, sourceIndex: -1, selectedIds: [], originals: null });
+  const [dragState, setDragState] = useState({ active: false, clipId: null, startX: 0, startY: 0, sourceIndex: -1, selectedIds: [], originals: null });
   const [trimState, setTrimState] = useState({ active: false, clipId: null, side: null, startX: 0, originalStart: 0, originalEnd: 0, originalStartTime: 0 });
   const [playheadDrag, setPlayheadDrag] = useState(false);
 

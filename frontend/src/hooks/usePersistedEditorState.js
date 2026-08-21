@@ -81,6 +81,10 @@ export function normalizeClip(clip) {
     enabled: true,
     frozen: false,
     reversed: false,
+    // Optional per-clip organizational color override (null = fall back to
+    // the type-based color) - purely a timeline display aid, never sent in
+    // the export payload.
+    color: null,
     ...clip,
     keyframes: { ...defaultKeyframes(), ...clip.keyframes },
   };
@@ -589,27 +593,28 @@ export function usePersistedEditorState() {
     });
   }, [commitTimeline]);
 
+  // Reads historyIndex/timelineHistory directly rather than reaching for the
+  // latest value via setTimelineHistory's updater function - that updater
+  // was only ever used to peek at `prev` (it always returned it unchanged),
+  // which calls setHistoryIndex/setTimeline as a side effect of an updater
+  // meant to be pure. React may invoke an updater more than once per commit
+  // (e.g. StrictMode's dev-mode double-invoke), which would double-fire
+  // those side effects.
   const undo = useCallback(() => {
-    setTimelineHistory((prev) => {
-      if (historyIndex <= 0) return prev;
-      const newIndex = historyIndex - 1;
-      setHistoryIndex(newIndex);
-      const snapshot = prev[newIndex];
-      if (snapshot) setTimeline(snapshot.slice());
-      return prev;
-    });
-  }, [historyIndex]);
+    if (historyIndex <= 0) return;
+    const newIndex = historyIndex - 1;
+    const snapshot = timelineHistory[newIndex];
+    setHistoryIndex(newIndex);
+    if (snapshot) setTimeline(snapshot.slice());
+  }, [historyIndex, timelineHistory]);
 
   const redo = useCallback(() => {
-    setTimelineHistory((prev) => {
-      if (historyIndex >= prev.length - 1) return prev;
-      const newIndex = historyIndex + 1;
-      setHistoryIndex(newIndex);
-      const snapshot = prev[newIndex];
-      if (snapshot) setTimeline(snapshot.slice());
-      return prev;
-    });
-  }, [historyIndex]);
+    if (historyIndex >= timelineHistory.length - 1) return;
+    const newIndex = historyIndex + 1;
+    const snapshot = timelineHistory[newIndex];
+    setHistoryIndex(newIndex);
+    if (snapshot) setTimeline(snapshot.slice());
+  }, [historyIndex, timelineHistory]);
 
   return {
     timeline,

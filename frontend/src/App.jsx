@@ -14,7 +14,7 @@ import ErrorPopup from './components/ErrorPopup';
 import ProjectsModal from './components/ProjectsModal';
 import JobsResumeBanner from './components/JobsResumeBanner';
 import MontageTab from './components/MontageTab';
-import BottomTimeline, { PX_PER_SECOND, LANE_ROW_HEIGHT } from './components/BottomTimeline';
+import BottomTimeline, { PX_PER_SECOND, laneHeight } from './components/BottomTimeline';
 
 const VALID_TABS = ['media', 'captions', 'shorts', 'editor'];
 
@@ -318,6 +318,16 @@ function App() {
         startTime: clip.startTime,
         duration: clipDuration(clip),
         type: clip.type || 'video',
+        // Carried through (beyond the label/position fields the timeline
+        // itself needs) so BottomTimeline's waveform/thumbnail rendering can
+        // resolve and cache the clip's actual source media.
+        sourceId: clip.sourceId,
+        trimmedStart: clip.trimmedStart,
+        trimmedEnd: clip.trimmedEnd,
+        file: clip.file,
+        url: clip.url,
+        remoteUrl: clip.remoteUrl,
+        color: clip.color,
       });
       return {
         video: buildLanes(editorVideoClips, trackMeta.video.length).map((lane) => lane.map(toDisplay('Clip'))),
@@ -469,6 +479,14 @@ function App() {
     return () => window.clearTimeout(timer);
   }, [errorText]);
 
+  // Corrects a wildly mismatched zoom (e.g. left over from a previous,
+  // very differently-sized project) back toward a sane "fit" level - but
+  // only when the CONTENT DURATION itself changes, not on every zoom
+  // change. timelineZoom is deliberately not a dependency (read via a
+  // functional update instead): including it would re-run this on every
+  // zoom tick and fight the user's own zoom-in clicks the moment they
+  // passed 1.5x "fit", which is exactly backwards - zooming in past the
+  // fit level to do precise trims is the normal, expected use of zoom.
   useEffect(() => {
     if (activeTab !== 'editor') return;
     const total = effectiveTimelineDuration;
@@ -477,12 +495,11 @@ function App() {
     const containerWidth = 1100;
     const targetMaxWidth = containerWidth * 0.9;
     const autoZoom = Math.max(10, Math.min(400, Math.floor((targetMaxWidth / (total * PX_PER_SECOND)) * 100)));
-    const currentZoom = timelineZoom;
 
-    if (currentZoom > autoZoom * 1.5 || currentZoom < autoZoom * 0.5) {
-      setTimelineZoom(autoZoom);
-    }
-  }, [activeTab, effectiveTimelineDuration, timelineZoom, setTimelineZoom]);
+    setTimelineZoom((currentZoom) => (
+      currentZoom > autoZoom * 1.5 || currentZoom < autoZoom * 0.5 ? autoZoom : currentZoom
+    ));
+  }, [activeTab, effectiveTimelineDuration, setTimelineZoom]);
 
   useEffect(() => {
     if (!VALID_TABS.includes(activeTab)) {
@@ -504,10 +521,8 @@ function App() {
 
   useEffect(() => {
     if (!dragState.active) return;
-    window.addEventListener('mousemove', handleClipDragMove);
     window.addEventListener('mouseup', handleClipDragEnd);
     return () => {
-      window.removeEventListener('mousemove', handleClipDragMove);
       window.removeEventListener('mouseup', handleClipDragEnd);
     };
   }, [dragState.active]);
@@ -1088,12 +1103,42 @@ function App() {
     }
   };
 
-  const handleEditorUpload = (event) => {
-    const file = event.target.files[0];
-    if (!file) {
-      return;
-    }
+  // Shared by the main "+ Import" button (handleEditorUpload, below) and the
+  // audio track's own "+ Add audio" button (handleAudioUpload) - probes
+  // duration via a real <audio> element (a <video> element's duration
+  // read on a pure-audio file is unreliable across browsers) and appends to
+  // the audio track, same positioning rule the text track uses.
+  const addAudioFileToTimeline = (file) => {
+    const url = URL.createObjectURL(file);
+    const tempAudio = document.createElement('audio');
+    tempAudio.preload = 'metadata';
+    tempAudio.src = url;
 
+    tempAudio.onloadedmetadata = () => {
+      const duration = tempAudio.duration;
+      if (!Number.isFinite(duration) || duration <= 0) return;
+
+      const laneZeroEnd = editorAudioClips
+        .filter((clip) => (clip.trackIndex || 0) === 0)
+        .reduce((max, clip) => Math.max(max, clip.startTime + clipDuration(clip)), 0);
+      const clip = createAudioClip({
+        sourceId: createSourceId(),
+        file,
+        url,
+        trackIndex: 0,
+        startTime: laneZeroEnd,
+        trimmedStart: 0,
+        trimmedEnd: duration,
+      });
+      commitEditorTimeline((prev) => [...prev, clip]);
+      setSelectedClipId(clip.id);
+      setSelectedClipIds([clip.id]);
+    };
+
+    tempAudio.load();
+  };
+
+  const addVideoFileToTimeline = (file) => {
     const url = URL.createObjectURL(file);
     const tempVideo = document.createElement('video');
     tempVideo.preload = 'metadata';
@@ -1156,6 +1201,23 @@ function App() {
     };
 
     tempVideo.load();
+  };
+
+  // The main Import button accepts both video and audio now - route by the
+  // picked file's actual type instead of assuming everything is video, so
+  // an audio file lands on the audio track automatically instead of being
+  // probed with a <video> element and dropped onto the video track.
+  const handleEditorUpload = (event) => {
+    const file = event.target.files[0];
+    if (!file) {
+      return;
+    }
+    if (file.type.startsWith('audio/')) {
+      addAudioFileToTimeline(file);
+    } else {
+      addVideoFileToTimeline(file);
+    }
+    event.target.value = '';
   };
 
   // Splits whichever clip is under the playhead - now that every clip has
@@ -1387,6 +1449,14 @@ function App() {
       originalStart: clip.trimmedStart,
       originalEnd: clip.trimmedEnd,
       originalStartTime: clip.startTime,
+      // Holding Alt while grabbing a trim handle ripples the trim: every
+      // downstream (right-handle) or upstream (left-handle) same-lane clip
+      // shifts by the same delta, preserving adjacency instead of opening/
+      // closing a gap - captured once at gesture start, same convention
+      // handleClipDragEnd already uses for insert-mode's Alt override.
+      rippleMode: e.altKey,
+      laneType: clip.type || 'video',
+      laneIndex: clip.trackIndex || 0,
     });
     setSelectedClipId(clipId);
   };
@@ -1404,6 +1474,9 @@ function App() {
       originalStart: clip.trimmedStart,
       originalEnd: clip.trimmedEnd,
       originalStartTime: clip.startTime,
+      rippleMode: e.altKey,
+      laneType: clip.type || 'video',
+      laneIndex: clip.trackIndex || 0,
     });
     setSelectedClipId(clipId);
   };
@@ -1483,22 +1556,15 @@ function App() {
       active: true,
       clipId,
       startX: e.clientX,
-      currentX: e.clientX,
       startY: e.clientY,
-      currentY: e.clientY,
       selectedIds: targetIds,
       originals,
     });
   };
 
-  const handleClipDragMove = (e) => {
-    if (!dragState.active) return;
-    setDragState((prev) => ({ ...prev, currentX: e.clientX, currentY: e.clientY }));
-  };
-
   // Snap targets are every OTHER clip's absolute start/end (across every
   // lane - dragging near any clip's edge, not just ones on the same lane,
-  // is still a useful alignment point) plus the playhead.
+  // is still a useful alignment point) plus the playhead and every marker.
   const getSnapPoints = (excludeClipId) => {
     if (!snapEnabled) return [];
     const points = [];
@@ -1508,6 +1574,7 @@ function App() {
       }
     });
     points.push(editorPlayhead);
+    markers.forEach((marker) => points.push(marker.time));
     return points;
   };
 
@@ -1526,21 +1593,16 @@ function App() {
     return closest;
   };
 
-  // Takes the mouseup event itself rather than reading dragState.currentX/Y:
-  // the window listener is attached once per gesture (effect depends only
-  // on dragState.active, so it isn't re-attached on every mousemove), so a
-  // closure over `dragState` here would see whatever currentX/Y were at
-  // attach time, not the latest drag position. startX/startY/originals are
-  // fine to read from that same closure since they're set once at
-  // drag-start and never change mid-gesture - only currentX/Y needed a
-  // fresh source, which the mouseup event itself provides directly.
+  // Reads position straight off the mouseup event rather than tracking a
+  // live currentX/Y in dragState - there's no mid-drag visual feedback to
+  // drive (the dragged clip only moves on drop), so updating state on every
+  // mousemove would just force a full re-render per pixel for no payoff.
   const handleClipDragEnd = (e) => {
     if (!dragState.active) return;
     const deltaX = e.clientX - dragState.startX;
     const deltaY = e.clientY - dragState.startY;
     const zoom = timelineZoom / 100;
     const deltaTime = deltaX / (PX_PER_SECOND * zoom);
-    const laneDelta = Math.round(deltaY / LANE_ROW_HEIGHT);
     const originals = dragState.originals || new Map();
     // Insert mode (persistent toolbar toggle OR holding Alt for just this
     // drop) makes a drop push same-lane clips forward to make room, CapCut's
@@ -1555,7 +1617,24 @@ function App() {
         if (!original) return;
         const newStartTime = Math.max(0, original.startTime + deltaTime);
         const snappedStart = snapTime(newStartTime, clip.id);
-        const newTrackIndex = Math.max(0, original.trackIndex + laneDelta);
+        // trackMeta keys adjustment layers under 'video' (they share video's
+        // lane stack for z-order) - same mapping trackMetaTypeFor/isClipLocked
+        // use elsewhere.
+        const metaType = original.type === 'adjustment' ? 'video' : (original.type || 'video');
+        // A type's lanes expand/collapse as one group (expandedTracks is
+        // per-type, not per-lane), so this single row height is valid for
+        // every lane of that type - no need to walk individual row offsets.
+        const rowHeight = laneHeight(expandedTracks?.[metaType]);
+        const laneDelta = Math.round(deltaY / rowHeight);
+        const laneCount = trackMeta[metaType]?.length || 1;
+        let newTrackIndex = Math.max(0, Math.min(original.trackIndex + laneDelta, laneCount - 1));
+        // Reject a drop onto a locked destination lane - keep the clip on
+        // its original lane (only startTime still moves) rather than
+        // bypassing the same lock rule already enforced at drag-start for
+        // the source lane.
+        if (trackMeta[metaType]?.[newTrackIndex]?.locked) {
+          newTrackIndex = original.trackIndex;
+        }
         moves.set(clip.id, { startTime: snappedStart, trackIndex: newTrackIndex, type: original.type, duration: clipDuration(clip) });
       });
 
@@ -1579,7 +1658,7 @@ function App() {
 
       return next;
     });
-    setDragState({ active: false, clipId: null, startX: 0, currentX: 0, startY: 0, currentY: 0, selectedIds: [], originals: null });
+    setDragState({ active: false, clipId: null, startX: 0, startY: 0, selectedIds: [], originals: null });
   };
 
   const handleTrimDragMove = (e) => {
@@ -1587,30 +1666,59 @@ function App() {
     const deltaX = e.clientX - trimState.startX;
     const zoom = timelineZoom / 100;
     const deltaTime = deltaX / (PX_PER_SECOND * zoom);
+    const isSameLane = (clip) => (clip.type || 'video') === trimState.laneType && (clip.trackIndex || 0) === trimState.laneIndex;
 
-    setEditorTimeline((prev) => prev.map((clip) => {
-      if (clip.id !== trimState.clipId) return clip;
+    setEditorTimeline((prev) => {
+      const trimmedClip = prev.find((clip) => clip.id === trimState.clipId);
+      if (!trimmedClip) return prev;
+
       if (trimState.side === 'left') {
         // Dragging the left handle changes which part of the source plays
         // (trimmedStart) *and* moves startTime by the same amount, so the
         // clip's absolute end time stays put - only its start and duration
         // change, standard trim-left behavior.
-        const newStart = Math.max(0, Math.min(trimState.originalStart + deltaTime, clip.trimmedEnd - 0.5));
+        const newStart = Math.max(0, Math.min(trimState.originalStart + deltaTime, trimmedClip.trimmedEnd - 0.5));
         const clampedDelta = newStart - trimState.originalStart;
         const newStartTime = Math.max(0, trimState.originalStartTime + clampedDelta);
-        const snappedStartTime = snapTime(newStartTime, clip.id);
+        const snappedStartTime = snapTime(newStartTime, trimmedClip.id);
         const appliedDelta = snappedStartTime - trimState.originalStartTime;
-        return { ...clip, trimmedStart: trimState.originalStart + appliedDelta, startTime: snappedStartTime };
+        return prev.map((clip) => {
+          if (clip.id === trimState.clipId) {
+            return { ...clip, trimmedStart: trimState.originalStart + appliedDelta, startTime: snappedStartTime };
+          }
+          // Ripple mode: shift every OTHER same-lane clip that started at or
+          // before this clip's original start by the same delta, so the gap
+          // between them and the trimmed clip's new start stays constant
+          // instead of opening/closing.
+          if (trimState.rippleMode && isSameLane(clip) && clip.startTime <= trimState.originalStartTime + 0.001) {
+            return { ...clip, startTime: Math.max(0, clip.startTime + appliedDelta) };
+          }
+          return clip;
+        });
       }
+
       // Right handle only changes trimmedEnd (duration) - startTime (the
       // left edge) stays fixed. Snap against the clip's absolute end time,
       // then convert back to a trimmedEnd delta.
-      const newEnd = Math.min(clip.duration || effectiveTimelineDuration, Math.max(trimState.originalEnd + deltaTime, clip.trimmedStart + 0.5));
-      const absoluteEnd = clip.startTime + (newEnd - clip.trimmedStart);
-      const snappedAbsoluteEnd = snapTime(absoluteEnd, clip.id);
+      const newEnd = Math.min(trimmedClip.duration || effectiveTimelineDuration, Math.max(trimState.originalEnd + deltaTime, trimmedClip.trimmedStart + 0.5));
+      const absoluteEnd = trimmedClip.startTime + (newEnd - trimmedClip.trimmedStart);
+      const snappedAbsoluteEnd = snapTime(absoluteEnd, trimmedClip.id);
       const snappedEnd = newEnd + (snappedAbsoluteEnd - absoluteEnd);
-      return { ...clip, trimmedEnd: snappedEnd };
-    }));
+      const originalAbsoluteEnd = trimState.originalStartTime + (trimState.originalEnd - trimState.originalStart);
+      const rippleDelta = snappedAbsoluteEnd - originalAbsoluteEnd;
+      return prev.map((clip) => {
+        if (clip.id === trimState.clipId) {
+          return { ...clip, trimmedEnd: snappedEnd };
+        }
+        // Ripple mode: shift every downstream same-lane clip (started at or
+        // after this clip's original end) by the same delta the trim
+        // introduced, so gaps/adjacency after it are preserved.
+        if (trimState.rippleMode && isSameLane(clip) && clip.startTime >= originalAbsoluteEnd - 0.001) {
+          return { ...clip, startTime: Math.max(0, clip.startTime + rippleDelta) };
+        }
+        return clip;
+      });
+    });
   };
 
   const handleTrimDragEnd = () => {
@@ -1707,41 +1815,13 @@ function App() {
     audioFileInputRef.current?.click();
   };
 
-  // Mirrors handleEditorUpload's metadata-probe-then-append pattern, but for
-  // the independent audio track: standalone clips (music/voiceover) get
-  // appended after whatever audio clips already exist, sequentially, same
-  // positioning rule as the text track (see handleAddTextClip above).
+  // Standalone clips (music/voiceover) added via the audio track's own
+  // "+ Add audio" button - same addAudioFileToTimeline helper the main
+  // Import button now also routes audio files through.
   const handleAudioUpload = (event) => {
     const file = event.target.files[0];
     if (!file) return;
-
-    const url = URL.createObjectURL(file);
-    const tempAudio = document.createElement('audio');
-    tempAudio.preload = 'metadata';
-    tempAudio.src = url;
-
-    tempAudio.onloadedmetadata = () => {
-      const duration = tempAudio.duration;
-      if (!Number.isFinite(duration) || duration <= 0) return;
-
-      const laneZeroEnd = editorAudioClips
-        .filter((clip) => (clip.trackIndex || 0) === 0)
-        .reduce((max, clip) => Math.max(max, clip.startTime + clipDuration(clip)), 0);
-      const clip = createAudioClip({
-        sourceId: createSourceId(),
-        file,
-        url,
-        trackIndex: 0,
-        startTime: laneZeroEnd,
-        trimmedStart: 0,
-        trimmedEnd: duration,
-      });
-      commitEditorTimeline((prev) => [...prev, clip]);
-      setSelectedClipId(clip.id);
-      setSelectedClipIds([clip.id]);
-    };
-
-    tempAudio.load();
+    addAudioFileToTimeline(file);
     if (audioFileInputRef.current) audioFileInputRef.current.value = '';
   };
 
@@ -1755,29 +1835,31 @@ function App() {
 
   const handleDuplicateSelected = () => {
     if (!selectedClipIds.length || !editorTimeline.length) return;
-    commitEditorTimeline((prev) => {
-      const additions = [];
-      const newTimeline = [...prev];
-      selectedClipIds.forEach((id) => {
-        const index = newTimeline.findIndex((c) => c.id === id);
-        if (index >= 0) {
-          const original = newTimeline[index];
-          // Placed right after the original on the same lane - trimmedStart/
-          // trimmedEnd (the source range) are unchanged, only startTime moves.
-          const duplicate = {
-            ...original,
-            id: `${Date.now()}-${index}`,
-            startTime: original.startTime + clipDuration(original),
-          };
-          additions.push(duplicate);
-        }
+    // Ids are generated once, up front, and reused for both the timeline
+    // splice and the post-duplicate selection - previously these were two
+    // separately-generated id sets that never matched, so duplicates were
+    // spliced in correctly but never ended up selected.
+    const additions = [];
+    selectedClipIds.forEach((id, idx) => {
+      const original = editorTimeline.find((c) => c.id === id);
+      if (!original) return;
+      // Placed right after the original on the same lane - trimmedStart/
+      // trimmedEnd (the source range) are unchanged, only startTime moves.
+      additions.push({
+        ...original,
+        id: `${Date.now()}-${idx}-${Math.random().toString(16).slice(2, 8)}`,
+        startTime: original.startTime + clipDuration(original),
       });
-      if (!additions.length) return prev;
+    });
+    if (!additions.length) return;
+    commitEditorTimeline((prev) => {
+      const newTimeline = [...prev];
       const insertAt = Math.max(0, newTimeline.length - 1);
       newTimeline.splice(insertAt + 1, 0, ...additions);
       return newTimeline;
     });
-    setSelectedClipIds((prev) => prev.map((id, idx) => `${Date.now()}-${idx}`));
+    setSelectedClipIds(additions.map((clip) => clip.id));
+    setSelectedClipId(additions[0].id);
   };
 
   const handleCopySelected = () => {
@@ -1924,14 +2006,27 @@ function App() {
         event.preventDefault();
         const step = shift ? 1 : 1 / 30;
         const delta = key === 'arrowleft' ? -step : step;
-        handleEditorSeek(editorPlayhead + delta);
+        // Functional update, not handleEditorSeek(editorPlayhead + delta):
+        // rapid/held keypresses can fire multiple keydowns before React
+        // re-renders and refreshes this closure's editorPlayhead, so reading
+        // it directly would make every event compute the same "old + one
+        // step" result and collapse into a single net nudge instead of
+        // accumulating.
+        setEditorPlayhead((prev) => Math.max(0, Math.min(prev + delta, editorTotalDuration || 0)));
         return;
       }
     };
 
     window.addEventListener('keydown', handleKeyDown);
     return () => window.removeEventListener('keydown', handleKeyDown);
-  }, [activeTab, editorTimeline, selectedClipIds, selectedClipId, editorActiveClipIndex, editorPlayhead, trackMeta]);
+    // undo/redo must be explicit deps, not just editorTimeline: a trim or
+    // overlay-move gesture pushes its history entry in a separate update
+    // AFTER the drag's last setEditorTimeline call (see handleTrimDragEnd),
+    // so editorTimeline alone doesn't change when that history push
+    // happens - without undo/redo listed here, this closure would keep
+    // calling a stale undo/redo bound to the history state from before that
+    // gesture, silently no-op-ing Ctrl+Z right after a trim.
+  }, [activeTab, editorTimeline, selectedClipIds, selectedClipId, editorActiveClipIndex, editorPlayhead, trackMeta, undo, redo]);
 
   // Playback itself (advancing the playhead frame-by-frame, deciding which
   // clip is active, drawing to the canvas) is owned by useTimelinePlayer
@@ -2047,6 +2142,14 @@ function App() {
   const handleEditorExport = async () => {
     if (!editorLaneZeroVideoClips.length) {
       setErrorText('Add at least one clip to the base video track before exporting.');
+      return;
+    }
+    // The export payload below already drops hidden lanes' clips entirely
+    // (see exportableTimeline) - checking this up front means a hidden base
+    // track fails with a clear message here instead of silently exporting
+    // an empty/black video and only surfacing a confusing backend error.
+    if (trackMeta?.video?.[0]?.hidden) {
+      setErrorText('Unhide the base video track before exporting.');
       return;
     }
 

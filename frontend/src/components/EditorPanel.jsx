@@ -1,4 +1,4 @@
-import { useRef } from 'react';
+import { useMemo, useRef } from 'react';
 import './EditorWorkspace.css';
 
 const EditorIcon = ({ children }) => <svg viewBox="0 0 24 24" aria-hidden="true" fill="none" stroke="currentColor" strokeWidth="1.7" strokeLinecap="round" strokeLinejoin="round">{children}</svg>;
@@ -31,7 +31,22 @@ function EditorPanel({
   bannerVisible, onDismissBanner, timeline, selectedClipId, selectedClip, onSelectClip, onImportClick, onUpload, fileInputRef,
   canvasRef, isPlaying, currentTime, videoDuration, onTogglePlayback, onSeek, onMoveOverlay, onMoveOverlayEnd,
 }) {
-  const mediaClips = timeline.filter((clip) => clip.type === 'video' || !clip.type);
+  // One card per unique imported SOURCE, not one per timeline clip - the
+  // timeline can reference the same source many times (split, duplicate,
+  // freeze-frame all add clip entries without importing anything new), so
+  // filtering timeline directly used to make split/duplicate look like a
+  // fresh import: a second card for the same file would appear immediately.
+  // Dedup key falls back to clip.id only for a legacy clip somehow missing
+  // sourceId, so it still renders instead of silently vanishing.
+  const mediaClips = useMemo(() => {
+    const bySource = new Map();
+    timeline.forEach((clip) => {
+      if (clip.type !== 'video' && clip.type) return;
+      const key = clip.sourceId || clip.id;
+      if (!bySource.has(key)) bySource.set(key, clip);
+    });
+    return [...bySource.values()];
+  }, [timeline]);
   const hasContent = timeline.length > 0;
   const pct = videoDuration ? (currentTime / videoDuration) * 100 : 0;
   const overlayDragRef = useRef(null);
@@ -89,9 +104,9 @@ function EditorPanel({
       <aside className="editor-media-library">
         <div className="editor-library-tabs"><button type="button" className="is-active">Media</button><button type="button">Library</button></div>
         <div className="editor-library-toolbar"><strong>Local</strong><button type="button" onClick={onImportClick}>+ Import</button></div>
-        <input ref={fileInputRef} type="file" accept="video/*" onChange={onUpload} className="sr-only-input" />
+        <input ref={fileInputRef} type="file" accept="video/*,audio/*" onChange={onUpload} className="sr-only-input" />
 
-        {mediaClips.length ? <div className="editor-media-grid">{mediaClips.map((clip, index) => <button type="button" key={clip.id} className={selectedClipId === clip.id ? 'is-active' : ''} onClick={() => onSelectClip?.(clip.id)}><div className="editor-media-thumb"><video src={clip.url} muted preload="metadata"/><span>{(clip.trimmedEnd - clip.trimmedStart).toFixed(1)}s</span></div><strong>{clip.file?.name || `Clip ${index + 1}`}</strong><small>Video · Added</small></button>)}</div> : <button type="button" className="editor-library-empty" onClick={onImportClick}><span><EditorIcon><path d="M12 16V4m0 0L8 8m4-4 4 4"/><path d="M5 15v4h14v-4"/></EditorIcon></span><strong>Import media</strong><small>Video files from your device</small></button>}
+        {mediaClips.length ? <div className="editor-media-grid">{mediaClips.map((clip, index) => <button type="button" key={clip.id} className={selectedClipId === clip.id ? 'is-active' : ''} onClick={() => onSelectClip?.(clip.id)}><div className="editor-media-thumb"><video src={clip.url} muted preload="metadata"/><span>{(clip.trimmedEnd - clip.trimmedStart).toFixed(1)}s</span></div><strong>{clip.file?.name || `Clip ${index + 1}`}</strong><small>Video · Added</small></button>)}</div> : <button type="button" className="editor-library-empty" onClick={onImportClick}><span><EditorIcon><path d="M12 16V4m0 0L8 8m4-4 4 4"/><path d="M5 15v4h14v-4"/></EditorIcon></span><strong>Import media</strong><small>Video or audio files from your device</small></button>}
       </aside>
 
       <section className="editor-canvas-area">

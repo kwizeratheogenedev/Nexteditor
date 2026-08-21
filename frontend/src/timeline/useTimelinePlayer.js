@@ -1,4 +1,4 @@
-import { useCallback, useEffect, useRef } from 'react';
+import { useCallback, useEffect, useMemo, useRef } from 'react';
 import { resolveKeyframedValue } from './keyframes';
 import { resolveActiveInLane, clipDuration, laneTotalDuration } from './transitions';
 import { hasSpeedCurve, sourceTimeForOutputElapsed } from './speedCurve';
@@ -208,26 +208,34 @@ export function useTimelinePlayer({ timeline, currentTime, isPlaying, onTimeUpda
     isPlayingRef.current = isPlaying;
   }, [isPlaying]);
 
-  // Adjustment layers (M13) live on video lanes for z-order (see
-  // createAdjustmentClip) - grouped/drawn alongside real video clips here.
-  const videoClips = timeline.filter((clip) => clip.type === 'video' || clip.type === 'adjustment' || !clip.type);
-  const audioTrackClips = timeline.filter((clip) => clip.type === 'audio');
-  const textClips = timeline.filter((clip) => clip.type === 'text');
-  // A disabled clip (M11) still occupies its slot on the timeline - it just
-  // renders nothing - so duration math below stays on the unfiltered arrays
-  // and only the lane-building used for actually drawing/playing excludes
-  // disabled clips.
-  const videoLanes = groupLanes(videoClips.filter((clip) => clip.enabled !== false));
-  const audioLanes = groupLanes(audioTrackClips.filter((clip) => clip.enabled !== false));
-  const textLanes = groupLanes(textClips.filter((clip) => clip.enabled !== false));
-  // The program's overall length is still lane 0's alone (matches the
-  // backend, which only chains lane 0 into "the program" - see
-  // backend/services/filterGraph/index.js); other lanes can run
-  // shorter/longer without affecting playback bounds. Adjustment layers
-  // never define the program length, same reasoning that already excludes
-  // this from being driven by anything but real base video.
-  const laneZeroVideoClips = videoClips.filter((clip) => (clip.trackIndex || 0) === 0 && clip.type !== 'adjustment');
-  const videoDuration = laneTotalDuration(laneZeroVideoClips, clipDuration);
+  // Memoized against `timeline` so drawFrame (below) only gets a new
+  // identity when the timeline itself actually changes - without this,
+  // every App re-render (e.g. from an unrelated state update elsewhere in
+  // the tree) rebuilds these arrays, which cascades into the redraw and
+  // play/pause-sync effects re-firing for no reason.
+  const { videoClips, audioTrackClips, textClips, videoLanes, audioLanes, textLanes, laneZeroVideoClips, videoDuration } = useMemo(() => {
+    // Adjustment layers (M13) live on video lanes for z-order (see
+    // createAdjustmentClip) - grouped/drawn alongside real video clips here.
+    const videoClips = timeline.filter((clip) => clip.type === 'video' || clip.type === 'adjustment' || !clip.type);
+    const audioTrackClips = timeline.filter((clip) => clip.type === 'audio');
+    const textClips = timeline.filter((clip) => clip.type === 'text');
+    // A disabled clip (M11) still occupies its slot on the timeline - it
+    // just renders nothing - so duration math below stays on the
+    // unfiltered arrays and only the lane-building used for actually
+    // drawing/playing excludes disabled clips.
+    const videoLanes = groupLanes(videoClips.filter((clip) => clip.enabled !== false));
+    const audioLanes = groupLanes(audioTrackClips.filter((clip) => clip.enabled !== false));
+    const textLanes = groupLanes(textClips.filter((clip) => clip.enabled !== false));
+    // The program's overall length is still lane 0's alone (matches the
+    // backend, which only chains lane 0 into "the program" - see
+    // backend/services/filterGraph/index.js); other lanes can run
+    // shorter/longer without affecting playback bounds. Adjustment layers
+    // never define the program length, same reasoning that already
+    // excludes this from being driven by anything but real base video.
+    const laneZeroVideoClips = videoClips.filter((clip) => (clip.trackIndex || 0) === 0 && clip.type !== 'adjustment');
+    const videoDuration = laneTotalDuration(laneZeroVideoClips, clipDuration);
+    return { videoClips, audioTrackClips, textClips, videoLanes, audioLanes, textLanes, laneZeroVideoClips, videoDuration };
+  }, [timeline]);
 
   // Lazily-created singleton AudioContext shared by every pooled video/audio
   // element's Web Audio graph. Created on first use rather than at mount so

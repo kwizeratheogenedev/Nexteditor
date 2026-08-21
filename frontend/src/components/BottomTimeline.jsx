@@ -1,25 +1,57 @@
-import { useRef, useState } from 'react';
+import { useEffect, useRef, useState } from 'react';
+import { getWaveformForClip, sliceWaveform } from '../timeline/waveform';
+import { getThumbnailStripForClip, framesForTrimWindow } from '../timeline/thumbnails';
+import TimelineMinimap from './TimelineMinimap';
+
+function HoverScrubPreview({ preview }) {
+  if (!preview) return null;
+  return (
+    <div className="timeline-hover-preview" style={{ left: `${preview.x}px`, top: `${preview.y}px` }}>
+      <img src={preview.dataUrl} alt="" />
+    </div>
+  );
+}
 
 // Pixels-per-second at 100% zoom - shared with App.jsx's drag/trim math
 // (imported there) so screen deltas and stored time deltas agree.
 export const PX_PER_SECOND = 24;
 
-function formatTime(seconds) {
-  const safe = Number(seconds) || 0;
-  const mins = Math.floor(safe / 60);
-  const secs = Math.floor(safe % 60);
-  return `${mins}:${String(secs).padStart(2, '0')}`;
+// Auto-switches to H:MM:SS once the value crosses an hour (matches CapCut -
+// a short clip's timeline never shows a leading "0:", but a multi-hour
+// project doesn't wrap/misread as raw minutes past 60). `decimals` renders
+// a fractional-seconds tail (e.g. "0:01.5") for ruler labels at a zoom level
+// fine enough that whole-second labels would otherwise repeat.
+function formatTime(seconds, decimals = 0) {
+  const safe = Math.max(0, Number(seconds) || 0);
+  const hours = Math.floor(safe / 3600);
+  const mins = Math.floor((safe % 3600) / 60);
+  const secs = safe % 60;
+  const secsStr = decimals > 0
+    ? secs.toFixed(decimals).padStart(3 + decimals, '0')
+    : String(Math.floor(secs)).padStart(2, '0');
+  return hours > 0 ? `${hours}:${String(mins).padStart(2, '0')}:${secsStr}` : `${mins}:${secsStr}`;
 }
 
-function getRulerConfig(totalDuration, zoom) {
-  const safe = Math.max(Number(totalDuration) || 0, 10);
-  const targetMarkerCount = Math.max(4, Math.min(30, Math.round(12 * (zoom / 100))));
-  const rawInterval = safe / targetMarkerCount;
-  const niceIntervals = [1, 2, 5, 10, 15, 30, 60, 120, 180, 300, 600];
-  let step = niceIntervals[niceIntervals.length - 1];
-  for (const ni of niceIntervals) {
-    if (ni >= rawInterval) {
-      step = ni;
+// CapCut-style ruler: the tick interval is chosen purely from the current
+// zoom level (pxPerSecond), not from total duration - a 5-second clip and a
+// 2-hour timeline use the exact same rule, picking the smallest "nice"
+// interval whose ticks land at least MIN_TICK_PX_GAP apart on screen. That
+// means zooming in on a short clip reveals sub-second ticks, and zooming
+// out on a long project collapses down to minute/hour ticks - the interval
+// tracks pixel density, not how long the footage happens to be.
+const NICE_TICK_INTERVALS_SECONDS = [
+  0.1, 0.2, 0.5, 1, 2, 5, 10, 15, 30,
+  60, 2 * 60, 5 * 60, 10 * 60, 15 * 60, 30 * 60,
+  3600, 2 * 3600, 5 * 3600, 10 * 3600,
+];
+const MIN_TICK_PX_GAP = 70;
+
+function getRulerConfig(totalDuration, pxPerSecond) {
+  const safe = Math.max(0, Number(totalDuration) || 0);
+  let step = NICE_TICK_INTERVALS_SECONDS[NICE_TICK_INTERVALS_SECONDS.length - 1];
+  for (const interval of NICE_TICK_INTERVALS_SECONDS) {
+    if (interval * pxPerSecond >= MIN_TICK_PX_GAP) {
+      step = interval;
       break;
     }
   }
@@ -30,7 +62,7 @@ function getRulerConfig(totalDuration, zoom) {
   if (markers[markers.length - 1] !== safe && safe > 0) {
     markers.push(safe);
   }
-  return { step, markers, max: safe };
+  return { step, markers, max: safe, decimals: step < 1 ? 1 : 0 };
 }
 
 function TrackIcon({ type }) {
@@ -43,15 +75,16 @@ function TrackIcon({ type }) {
   return <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"><rect x="2" y="2" width="20" height="20" rx="2.18" ry="2.18"/><line x1="7" y1="2" x2="7" y2="22"/><line x1="17" y1="2" x2="17" y2="22"/><line x1="2" y1="12" x2="22" y2="12"/><line x1="2" y1="7" x2="7" y2="7"/><line x1="2" y1="17" x2="7" y2="17"/><line x1="17" y1="17" x2="22" y2="17"/><line x1="17" y1="7" x2="22" y2="7"/></svg>;
 }
 
-// Exported so App.jsx's drag handler can hit-test a vertical drag delta
-// against the same row height used here.
 export const LANE_ROW_HEIGHT = 44;
 const LANE_ROW_HEIGHT_EXPANDED = 72;
 const ADD_TRACK_ROW_HEIGHT = 28;
 
 // Height of a lane's row, kept identical between the label column and the
-// track-surface column so the two side-by-side lists stay aligned.
-function laneHeight(expanded) {
+// track-surface column so the two side-by-side lists stay aligned. Exported
+// so App.jsx's vertical clip-drag math can use the same per-type row height
+// (a type's lanes are expanded/collapsed as a group, so one height covers
+// every lane of that type) instead of assuming the collapsed 44px always.
+export function laneHeight(expanded) {
   return expanded ? LANE_ROW_HEIGHT_EXPANDED : LANE_ROW_HEIGHT;
 }
 
@@ -95,12 +128,12 @@ function TrackLabel({
         <span className="timeline-track-name" title={onRename ? 'Double-click to rename' : undefined} onDoubleClick={startEditing}>{label}</span>
       )}
       <div className="track-mini-actions">
-        {onAddClip && <button type="button" className="track-action" title={`Add ${type}`} onClick={onAddClip}>+</button>}
-        {onMoveUp && <button type="button" className="track-action" title="Move track up" disabled={!canMoveUp} onClick={onMoveUp}>↑</button>}
-        {onMoveDown && <button type="button" className="track-action" title="Move track down" disabled={!canMoveDown} onClick={onMoveDown}>↓</button>}
-        <button type="button" className={`track-action ${hidden ? 'is-active' : ''}`} title={type === 'audio' ? 'Mute track' : 'Hide track'} onClick={onToggleHidden}><span className="track-dot"/></button>
-        <button type="button" className={`track-action ${locked ? 'is-active' : ''}`} title="Lock track" onClick={onToggleLock}><span className="track-lock">⌑</span></button>
-        {onRemove && <button type="button" className="track-action" title="Remove track" disabled={!canRemove} onClick={onRemove}>✕</button>}
+        {onAddClip && <button type="button" className="track-action" title={`Add ${type}`} aria-label={`Add ${type}`} onClick={onAddClip}>+</button>}
+        {onMoveUp && <button type="button" className="track-action" title="Move track up" aria-label="Move track up" disabled={!canMoveUp} onClick={onMoveUp}>↑</button>}
+        {onMoveDown && <button type="button" className="track-action" title="Move track down" aria-label="Move track down" disabled={!canMoveDown} onClick={onMoveDown}>↓</button>}
+        <button type="button" className={`track-action ${hidden ? 'is-active' : ''}`} title={type === 'audio' ? 'Mute track' : 'Hide track'} aria-label={type === 'audio' ? 'Mute track' : 'Hide track'} onClick={onToggleHidden}><span className="track-dot"/></button>
+        <button type="button" className={`track-action ${locked ? 'is-active' : ''}`} title="Lock track" aria-label="Lock track" onClick={onToggleLock}><span className="track-lock">⌑</span></button>
+        {onRemove && <button type="button" className="track-action" title="Remove track" aria-label="Remove track" disabled={!canRemove} onClick={onRemove}>✕</button>}
       </div>
     </div>
   );
@@ -164,20 +197,130 @@ function MarkerTick({ marker, pxPerSecond, onJump, onRemove }) {
   );
 }
 
+// Renders the clip's real audio peaks (decoded once per source, see
+// timeline/waveform.js) as a bar canvas, re-sliced whenever the clip's trim
+// window or rendered width changes. Silently renders nothing if decoding
+// fails (e.g. an unreachable remote source) - the clip block itself still
+// works fine without a waveform.
+function ClipWaveform({ clip, width, height }) {
+  const canvasRef = useRef(null);
+  const [waveform, setWaveform] = useState(null);
+
+  useEffect(() => {
+    let cancelled = false;
+    getWaveformForClip(clip).then((result) => {
+      if (!cancelled) setWaveform(result);
+    });
+    return () => { cancelled = true; };
+    // sourceId identifies the underlying source file - only a new source
+    // needs a fresh decode, not every trim/duplicate of the same one.
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [clip.sourceId]);
+
+  useEffect(() => {
+    const canvas = canvasRef.current;
+    if (!canvas || !waveform) return;
+    const dpr = window.devicePixelRatio || 1;
+    const bucketCount = Math.max(1, Math.round(width));
+    canvas.width = bucketCount * dpr;
+    canvas.height = height * dpr;
+    const ctx = canvas.getContext('2d');
+    ctx.scale(dpr, dpr);
+    ctx.clearRect(0, 0, bucketCount, height);
+    const peaks = sliceWaveform(waveform, clip.trimmedStart || 0, clip.trimmedEnd ?? waveform.duration, bucketCount);
+    ctx.fillStyle = 'rgba(34, 197, 94, 0.75)'; // matches --clip-audio green token
+    const mid = height / 2;
+    for (let i = 0; i < bucketCount; i += 1) {
+      const amp = Math.min(1, peaks[i] * 3.2); // peaks are usually well under 1.0 - scale up for visibility
+      const barHeight = Math.max(1, amp * mid);
+      ctx.fillRect(i, mid - barHeight, 1, barHeight * 2);
+    }
+  }, [waveform, width, height, clip.trimmedStart, clip.trimmedEnd]);
+
+  return <canvas ref={canvasRef} className="timeline-waveform-canvas" style={{ width: `${width}px`, height: `${height}px` }} />;
+}
+
+// Renders evenly-spaced representative frames (decoded once per source, see
+// timeline/thumbnails.js) as a filmstrip background behind a video clip's
+// label - purely decorative, capped in density so it doesn't render more
+// cells than the clip's on-screen width can usefully show.
+function ClipFilmstrip({ clip, width, height }) {
+  const [strip, setStrip] = useState(null);
+
+  useEffect(() => {
+    let cancelled = false;
+    getThumbnailStripForClip(clip).then((result) => {
+      if (!cancelled) setStrip(result);
+    });
+    return () => { cancelled = true; };
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [clip.sourceId]);
+
+  if (!strip) return null;
+  const trimmedStart = clip.trimmedStart || 0;
+  const trimmedEnd = clip.trimmedEnd ?? strip.duration;
+  const available = framesForTrimWindow(strip, trimmedStart, trimmedEnd);
+  if (!available.length) return null;
+
+  const cellCount = Math.max(1, Math.min(available.length, Math.floor(width / 80)));
+  const cellWidth = width / cellCount;
+  const cells = Array.from({ length: cellCount }, (_, i) => {
+    const targetTime = trimmedStart + ((i + 0.5) / cellCount) * (trimmedEnd - trimmedStart);
+    let nearest = available[0];
+    let bestDelta = Infinity;
+    available.forEach((frame) => {
+      const delta = Math.abs(frame.time - targetTime);
+      if (delta < bestDelta) {
+        bestDelta = delta;
+        nearest = frame;
+      }
+    });
+    return nearest;
+  });
+
+  return (
+    <div className="timeline-clip-filmstrip" style={{ width: `${width}px`, height: `${height}px` }}>
+      {cells.map((frame, i) => (
+        <div
+          key={`${frame.time}-${i}`}
+          className="timeline-clip-filmstrip-cell"
+          style={{ width: `${cellWidth}px`, backgroundImage: `url(${frame.dataUrl})` }}
+        />
+      ))}
+    </div>
+  );
+}
+
+// A custom clip.color override (set via RightPanel's "Clip color" swatches)
+// replaces the type-based background/border - null falls through to
+// whatever the .timeline-clip-{type} CSS class already draws, matching the
+// same low-alpha look those classes already use.
+function clipColorStyle(hex) {
+  if (!hex) return {};
+  const r = parseInt(hex.slice(1, 3), 16);
+  const g = parseInt(hex.slice(3, 5), 16);
+  const b = parseInt(hex.slice(5, 7), 16);
+  return {
+    background: `rgba(${r}, ${g}, ${b}, 0.22)`,
+    borderColor: `rgba(${r}, ${g}, ${b}, 0.6)`,
+  };
+}
+
 function ClipBlock({ clip, pxPerSecond, isSelected, isMultiSelected, locked, onSelect, onDragStart, onTrimStart, onTrimEnd }) {
   const left = clip.startTime * pxPerSecond;
   const width = Math.max(40, clip.duration * pxPerSecond);
   return (
     <div
       className={`timeline-clip timeline-clip-${clip.type} ${isSelected ? 'timeline-clip-selected' : ''} ${isMultiSelected ? 'timeline-clip-multi-selected' : ''} ${locked ? 'timeline-clip-locked' : ''} ${clip.enabled === false ? 'timeline-clip-disabled' : ''} ${clip.groupId ? 'timeline-clip-grouped' : ''}`}
-      style={{ position: 'absolute', left: `${left}px`, width: `${width}px`, top: 0, bottom: 0 }}
+      style={{ position: 'absolute', left: `${left}px`, width: `${width}px`, top: 0, bottom: 0, ...clipColorStyle(clip.color) }}
       title={[clip.label, clip.enabled === false && '(disabled)', clip.reversed && '(reversed)', clip.frozen && '(frozen)'].filter(Boolean).join(' ')}
       onClick={(e) => { e.stopPropagation(); onSelect?.(clip.id, e); }}
       onMouseDown={(e) => { if (!locked) onDragStart?.(e, clip.id); }}
       onContextMenu={(e) => e.stopPropagation()}
     >
       <span className="timeline-clip-handle timeline-clip-handle-left" onMouseDown={(e) => { e.stopPropagation(); if (!locked) onTrimStart?.(e, clip.id, 'left'); }} />
-      {clip.type === 'audio' && <span className="timeline-waveform">▂▅▃▆▄▇▃▅</span>}
+      {clip.type === 'audio' && <ClipWaveform clip={clip} width={width} height={LANE_ROW_HEIGHT} />}
+      {clip.type === 'video' && <ClipFilmstrip clip={clip} width={width} height={LANE_ROW_HEIGHT} />}
       <span className="timeline-clip-label">{clip.label}</span>
       <span className="timeline-clip-duration">{formatTime(clip.duration)}</span>
       <span className="timeline-clip-handle timeline-clip-handle-right" onMouseDown={(e) => { e.stopPropagation(); if (!locked) onTrimEnd?.(e, clip.id, 'right'); }} />
@@ -217,7 +360,7 @@ function TrackRow({
           onTrimEnd={onTrimEnd}
         />
       )) : onPlaceholderClick ? (
-        <button type="button" className="timeline-placeholder timeline-placeholder-button" onClick={onPlaceholderClick} style={{ position: 'absolute', left: 0, top: 0, bottom: 0 }}>
+        <button type="button" className="timeline-placeholder timeline-placeholder-button" onClick={(e) => { e.stopPropagation(); onPlaceholderClick(e); }} style={{ position: 'absolute', left: 0, top: 0, bottom: 0 }}>
           <span className="timeline-placeholder-icon">+</span>
           <span className="timeline-placeholder-text">{placeholder}</span>
         </button>
@@ -316,9 +459,9 @@ function BottomTimeline({
   onRippleDelete, insertMode, onInsertModeToggle, onGapContextMenu, onGroupSelected, onUngroupSelected, onFreezeFrame, onAddAdjustmentLayer,
   markers, onAddMarker, onRemoveMarker, onRenameMarker, onJumpToMarker,
 }) {
-  const ruler = getRulerConfig(totalDuration, zoom);
-  const duration = ruler.max;
   const pxPerSecond = PX_PER_SECOND * (zoom / 100);
+  const ruler = getRulerConfig(totalDuration, pxPerSecond);
+  const duration = ruler.max;
   const totalWidth = Math.max(1100, duration * pxPerSecond);
   const playheadLeft = `${currentTime * pxPerSecond}px`;
   const minToolbar = 42;
@@ -358,8 +501,72 @@ function BottomTimeline({
   // index.css) but must stay vertically aligned once there are enough
   // lanes to scroll, so mirror scrollTop from the surface onto the labels.
   const labelsRef = useRef(null);
+  const trackSurfaceRef = useRef(null);
+  // Ruler ticks are absolutely positioned at marker*pxPerSecond inside a
+  // track the same width as the scrollable content (totalWidth), so they
+  // line up with actual clip positions below - shifted via a direct style
+  // mutation on scroll (like labelsRef's scrollTop mirror above) rather
+  // than React state, so scrolling doesn't force a re-render per tick.
+  const rulerTrackRef = useRef(null);
   const handleSurfaceScroll = (e) => {
     if (labelsRef.current) labelsRef.current.scrollTop = e.currentTarget.scrollTop;
+    if (rulerTrackRef.current) rulerTrackRef.current.style.transform = `translateX(${-e.currentTarget.scrollLeft}px)`;
+  };
+
+  // Floating frame preview on hover - separate from click-to-seek, never
+  // moves the playhead. Throttled and skipped entirely while any mouse
+  // button is held (e.buttons !== 0) so it doesn't fire during an active
+  // clip drag/trim/playhead-drag gesture, and reuses the already-cached
+  // thumbnail strip from ClipFilmstrip (see timeline/thumbnails.js) instead
+  // of extracting new frames.
+  const [hoverPreview, setHoverPreview] = useState(null);
+  const hoverThrottleRef = useRef(0);
+  const handleSurfaceMouseMove = (e) => {
+    if (e.buttons !== 0) {
+      if (hoverPreview) setHoverPreview(null);
+      return;
+    }
+    const now = performance.now();
+    if (now - hoverThrottleRef.current < 80) return;
+    hoverThrottleRef.current = now;
+
+    const rect = e.currentTarget.getBoundingClientRect();
+    const hoverTime = Math.max(0, (e.clientX - rect.left + e.currentTarget.scrollLeft) / pxPerSecond);
+    const clip = tracks.video.flat().find((c) => hoverTime >= c.startTime && hoverTime <= c.startTime + c.duration);
+    if (!clip) {
+      setHoverPreview(null);
+      return;
+    }
+    const clipLocalTime = (clip.trimmedStart || 0) + (hoverTime - clip.startTime);
+    const cursorX = e.clientX;
+    const cursorY = e.clientY;
+    getThumbnailStripForClip(clip).then((strip) => {
+      if (!strip?.frames?.length) return;
+      let nearest = strip.frames[0];
+      let bestDelta = Infinity;
+      strip.frames.forEach((frame) => {
+        const delta = Math.abs(frame.time - clipLocalTime);
+        if (delta < bestDelta) {
+          bestDelta = delta;
+          nearest = frame;
+        }
+      });
+      setHoverPreview({ x: cursorX, y: cursorY, dataUrl: nearest.dataUrl });
+    });
+  };
+  const handleSurfaceMouseLeave = () => setHoverPreview(null);
+
+  // Picks the zoom % that makes the actual content duration exactly fill
+  // the visible track-surface width, so the whole timeline is visible with
+  // no horizontal scroll - based on totalDuration (real content length),
+  // not the padded/rounded `duration` (ruler.max) used for drawing tick
+  // marks, so a short project doesn't get zoomed in on the ruler's
+  // artificial minimum width.
+  const handleFitToWindow = () => {
+    const visibleWidth = trackSurfaceRef.current?.clientWidth;
+    if (!visibleWidth || !totalDuration) return;
+    const fitZoom = (visibleWidth / totalDuration / PX_PER_SECOND) * 100;
+    onZoomChange(Math.max(10, Math.min(400, Math.floor(fitZoom))));
   };
 
   return (
@@ -392,6 +599,7 @@ function BottomTimeline({
         </div>
         <div className="timeline-toolbar-spacer"/>
         <div className="timeline-zoom-controls">
+          <button type="button" className="timeline-action-button" title="Fit the whole timeline to the visible width" onClick={handleFitToWindow}>Fit</button>
           <button type="button" className="timeline-action-button" onClick={() => onZoomChange(Math.max(10, zoom - 10))}>−</button>
           <input aria-label="Timeline zoom" type="range" min="10" max="400" value={zoom} onChange={(event) => onZoomChange(Number(event.target.value))}/>
           <button type="button" className="timeline-action-button" onClick={() => onZoomChange(Math.min(400, zoom + 10))}>+</button>
@@ -404,9 +612,18 @@ function BottomTimeline({
           ))}
         </div>
       )}
+      <TimelineMinimap tracks={tracks} duration={duration} totalWidth={totalWidth} trackSurfaceRef={trackSurfaceRef} />
       <div className="timeline-ruler">
         <div className="timeline-ruler-offset"><span>{laneCount} tracks · {formatTime(duration)}</span></div>
-        <div className="timeline-ruler-markers">{ruler.markers.map((marker)=><span key={marker}>{formatTime(marker)}</span>)}</div>
+        <div className="timeline-ruler-markers">
+          <div className="timeline-ruler-markers-track" ref={rulerTrackRef} style={{ width: `${totalWidth}px` }}>
+            {ruler.markers.map((marker) => (
+              <span key={marker} className="timeline-ruler-tick" style={{ left: `${marker * pxPerSecond}px` }}>
+                {formatTime(marker, ruler.decimals)}
+              </span>
+            ))}
+          </div>
+        </div>
       </div>
       <div className="timeline-tracks">
         <div className="timeline-track-labels" ref={labelsRef}>
@@ -416,10 +633,13 @@ function BottomTimeline({
         </div>
         <div
           className="timeline-track-surface"
+          ref={trackSurfaceRef}
           onScroll={handleSurfaceScroll}
+          onMouseMove={handleSurfaceMouseMove}
+          onMouseLeave={handleSurfaceMouseLeave}
           onClick={(e) => {
             const rect = e.currentTarget.getBoundingClientRect();
-            onSeek(Math.max(0, (e.clientX - rect.left) / pxPerSecond));
+            onSeek(Math.max(0, (e.clientX - rect.left + e.currentTarget.scrollLeft) / pxPerSecond));
           }}
         >
           <div
@@ -438,6 +658,7 @@ function BottomTimeline({
           <LaneRows type="audio" lanes={tracks.audio} expanded={expandedTracks.audio} placeholder="Add audio" trackState={trackState?.audio} onPlaceholderClick={onAddAudioClip} onGapContextMenu={onGapContextMenu} {...laneListProps} />
         </div>
       </div>
+      <HoverScrubPreview preview={hoverPreview} />
     </section>
   );
 }
