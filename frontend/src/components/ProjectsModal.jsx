@@ -72,7 +72,7 @@ export default function ProjectsModal({ onClose, onResume }) {
           <button type="button" onClick={onClose} style={{ background: 'none', color: 'var(--text-secondary)', fontSize: 18, cursor: 'pointer' }}>&times;</button>
         </div>
 
-        {error && <div style={{ color: '#ff8a8a', fontSize: 13, marginBottom: 12 }}>{error}</div>}
+        {error && <div style={{ color: 'var(--danger)', fontSize: 13, marginBottom: 12 }}>{error}</div>}
 
         {!projects && !error && <div style={{ color: 'var(--text-secondary)', fontSize: 14 }}>Loading...</div>}
         {projects && projects.length === 0 && (

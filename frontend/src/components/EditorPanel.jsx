@@ -129,11 +129,11 @@ function EditorPanel({
 
       {mediaClips.length > 0 && (
         <div style={{ position:'absolute', bottom: 8, left: '50%', transform:'translateX(-50%)', display:'flex', alignItems:'center', gap:10, padding:'6px 12px', background:'rgba(0,0,0,.7)', borderRadius:10, backdropFilter:'blur(8px)', border:'1px solid rgba(255,255,255,.08)' }}>
-          <button onClick={onTogglePlayback} style={{ width:32, height:32, borderRadius:8, background:'#7c3aed', border:'none', color:'#fff', cursor:'pointer', display:'flex', alignItems:'center', justifyContent:'center' }}>
+          <button onClick={onTogglePlayback} style={{ width:32, height:32, borderRadius:8, background:'var(--accent-violet)', border:'none', color:'#fff', cursor:'pointer', display:'flex', alignItems:'center', justifyContent:'center' }}>
             <div style={{ width:14, height:14 }}>{isPlaying ? <EditorIcon><rect x="6" y="4" width="4" height="16"/><rect x="14" y="4" width="4" height="16"/></EditorIcon> : <EditorIcon><polygon points="6,3 18,12 6,21"/></EditorIcon>}</div>
           </button>
           <div style={{ width:120, height:3, background:'rgba(255,255,255,.15)', borderRadius:99, cursor:'pointer', position:'relative' }} onClick={handleSeek}>
-            <div style={{ position:'absolute', left:0, top:0, bottom:0, background:'#7c3aed', width:`${pct}%`, borderRadius:99 }} />
+            <div style={{ position:'absolute', left:0, top:0, bottom:0, background:'var(--accent-violet)', width:`${pct}%`, borderRadius:99 }} />
             <div style={{ position:'absolute', left:`${pct}%`, top:'50%', width:8, height:8, borderRadius:'50%', background:'#fff', transform:'translate(-50%,-50%)', boxShadow:'0 0 4px rgba(0,0,0,.4)' }} />
           </div>
           <span style={{ fontSize:10, color:'rgba(255,255,255,.7)', minWidth:64, textAlign:'center', fontVariantNumeric:'tabular-nums' }}>{formatSeconds(currentTime)}s / {formatSeconds(videoDuration)}s</span>

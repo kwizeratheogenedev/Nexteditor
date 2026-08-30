@@ -1,5 +1,6 @@
 import { useState } from 'react';
 import { useAuth } from '../context/AuthContext.jsx';
+import ThemeToggle from './ThemeToggle.jsx';
 
 function TopBar({ activeTab, onExport, exporting = false, exportProgress = 0, projectName, currentProjectId, projectSyncStatus, onSaveProject, onOpenProjects, canvasSize }) {
   const { user, logout } = useAuth();
@@ -47,7 +48,7 @@ function TopBar({ activeTab, onExport, exporting = false, exportProgress = 0, pr
             ) : (
               <small>{syncLabel}</small>
             )}
-            {saveError && <small style={{ color: '#ff8a8a', marginLeft: 8 }}>{saveError}</small>}
+            {saveError && <small style={{ color: 'var(--danger)', marginLeft: 8 }}>{saveError}</small>}
           </div>
         )}
       </div>
@@ -63,6 +64,7 @@ function TopBar({ activeTab, onExport, exporting = false, exportProgress = 0, pr
             </button>
           </>
         )}
+        <ThemeToggle />
         {user && (
           <span className="topbar-pill" title={user.email} style={{ display: 'flex', alignItems: 'center', gap: 8, cursor: 'pointer' }} onClick={handleLogout}>
             {user.name || user.email}

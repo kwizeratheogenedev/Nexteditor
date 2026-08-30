@@ -1,4 +1,5 @@
 import { Link } from 'react-router-dom';
+import ThemeToggle from '../components/ThemeToggle.jsx';
 import './pages.css';
 
 const FEATURES = [
@@ -33,6 +34,7 @@ export default function LandingPage() {
           <Link to="/pricing">Pricing</Link>
           <Link to="/login">Log in</Link>
           <Link to="/signup" className="btn btn-primary">Start editing free</Link>
+          <ThemeToggle />
         </div>
       </nav>
 

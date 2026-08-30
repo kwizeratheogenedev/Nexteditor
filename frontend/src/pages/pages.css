@@ -2,7 +2,7 @@
   height: 100%;
   width: 100%;
   overflow-y: auto;
-  background: linear-gradient(180deg, #0b0b10 0%, #09090f 100%);
+  background: linear-gradient(180deg, var(--panel-surface-0) 0%, var(--panel-surface-0) 100%);
   color: var(--text-primary);
 }
 
@@ -14,9 +14,9 @@
   align-items: center;
   justify-content: space-between;
   padding: 16px 32px;
-  background: rgba(10, 10, 12, 0.85);
+  background: var(--bg-surface);
   backdrop-filter: blur(12px);
-  border-bottom: 1px solid rgba(255, 255, 255, 0.06);
+  border-bottom: 1px solid var(--border-light);
 }
 
 .marketing-nav-links {
@@ -56,11 +56,11 @@
 
 .btn-primary {
   background: var(--accent);
-  color: #06121a;
+  color: var(--panel-surface-0);
 }
 
 .btn-primary:hover {
-  background: #33d4ff;
+  background: var(--accent-hover);
 }
 
 .btn-ghost {
@@ -242,7 +242,7 @@
   display: flex;
   align-items: center;
   justify-content: center;
-  background: linear-gradient(180deg, #0b0b10 0%, #09090f 100%);
+  background: linear-gradient(180deg, var(--panel-surface-0) 0%, var(--panel-surface-0) 100%);
   padding: 32px;
 }
 
@@ -295,7 +295,7 @@
 .auth-error {
   background: rgba(255, 80, 80, 0.1);
   border: 1px solid rgba(255, 80, 80, 0.3);
-  color: #ff8a8a;
+  color: var(--danger);
   font-size: 13px;
   padding: 10px 12px;
   border-radius: var(--radius-sm);

@@ -72,7 +72,7 @@ export default function JobsResumeBanner() {
             </div>
           )}
           {job.status === 'error' && (
-            <div style={{ color: '#ff8a8a', marginTop: 4 }}>Failed: {job.error || 'Unknown error'}</div>
+            <div style={{ color: 'var(--danger)', marginTop: 4 }}>Failed: {job.error || 'Unknown error'}</div>
           )}
         </div>
       ))}

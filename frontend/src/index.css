@@ -31,6 +31,90 @@
   --radius-sm: 4px;
   --radius-md: 6px;
   --radius-lg: 8px;
+
+  /* Panel tokens - cover the near-black/purple palette used by the Editor/
+     Captions/Shorts panel stylesheets (previously ~180 near-duplicate hex
+     literals with drift, e.g. #292830/#292831/#2a2930 all meant "raised
+     surface gray"). Dark values here are the most common hex already found
+     in each cluster, so switching to [data-theme="dark"] (the default)
+     renders pixel-identical to before this token set existed. */
+  --panel-surface-0: #0d0d11;
+  --panel-surface-1: #17171d;
+  --panel-surface-2: #1d1c22;
+  --panel-surface-3: #24232a;
+  --panel-surface-4: #292830;
+  --panel-surface-5: #333139;
+  --panel-border: #2a2932;
+  --panel-border-strong: #3a3842;
+  --panel-text-1: #eeeaf2;
+  --panel-text-2: #98959f;
+  --panel-text-3: #6e6c76;
+  --accent-purple: #8b7cf6;
+  --accent-purple-strong: #7868df;
+  --accent-purple-soft: #2c2840;
+  --accent-purple-light: #c2b8f0;
+  --accent-hover: #33d4ff;
+  --success: #69d5a3;
+  --danger: #ff8a8a;
+  --warning: #fbbf24;
+
+  /* MontageTab.jsx's own semantic badge colors (video/audio/info pills,
+     each a solid-fill or tinted-background + matching light-text pair) -
+     kept invariant across themes like --accent/--success/--danger since a
+     colored badge with its own background reads fine regardless of overall
+     page theme. Only --info-light (used as bare link text with no
+     background of its own) actually needs a theme-specific value - see the
+     light override block below. */
+  --accent-violet: #7c3aed;
+  --accent-violet-light: #c4b5fd;
+  --accent-pink: #db2777;
+  --accent-pink-light: #f9a8d4;
+  --info: #2563eb;
+  --info-dark: #1e3a8a;
+  --info-light: #93c5fd;
+}
+
+/* Light theme - only neutrals (surfaces/borders/text) and their tinted
+   backgrounds flip; brand/semantic colors (--accent, --accent-purple,
+   --success, --danger) stay identical in both themes. Applied via a
+   `data-theme` attribute on <html> set by ThemeContext (see
+   context/ThemeContext.jsx), not prefers-color-scheme, since this is an
+   explicit user toggle rather than following the OS setting. */
+:root[data-theme="light"] {
+  --bg-shell: #f5f5f7;
+  --bg-surface: #ffffff;
+  --bg-raised: #f0f0f2;
+  --bg-hover: #e8e8ec;
+  --bg-active: #dcdce2;
+  --border: #dcdce0;
+  --border-light: #e8e8ec;
+  --text-primary: #1a1a1f;
+  --text-secondary: #55545e;
+  --text-muted: #8a8894;
+
+  --panel-surface-0: #ffffff;
+  --panel-surface-1: #f7f7f9;
+  --panel-surface-2: #ffffff;
+  --panel-surface-3: #eeeef1;
+  --panel-surface-4: #e4e3ea;
+  --panel-surface-5: #d6d5de;
+  --panel-border: #e0dfe6;
+  --panel-border-strong: #cac9d4;
+  --panel-text-1: #1c1b22;
+  --panel-text-2: #5b5964;
+  --panel-text-3: #8b8994;
+  --accent-purple-soft: #ece9fb;
+  --info-light: #1d4ed8;
+
+  --clip-video-bg: #dce8f7;
+  --clip-video-border: #a9c9ea;
+  --clip-video-text: #1a4a78;
+  --clip-audio-bg: #dcefdc;
+  --clip-audio-border: #a8d6a8;
+  --clip-audio-text: #1a5c1a;
+  --clip-text-bg: #f5e8d6;
+  --clip-text-border: #d9b98a;
+  --clip-text-text: #7a4e1a;
 }
 
 /* Base styles */
@@ -64,7 +148,7 @@ body {
   display: flex;
   flex: 1;
   overflow: hidden;
-  background: linear-gradient(180deg, #0b0b10 0%, #09090f 100%);
+  background: linear-gradient(180deg, var(--panel-surface-0) 0%, var(--panel-surface-0) 100%);
 }
 
 button,
@@ -95,8 +179,8 @@ input[type="range"] {
   gap: 16px;
   min-height: var(--topbar-h);
   padding: 0 18px;
-  background: rgba(10, 10, 12, 0.98);
-  border-bottom: 1px solid rgba(255,255,255,0.04);
+  background: var(--bg-surface);
+  border-bottom: 1px solid var(--border-light);
   backdrop-filter: blur(12px);
 }
 
@@ -117,7 +201,7 @@ input[type="range"] {
 }
 
 .brand-mark-primary {
-  color: #ffffff;
+  color: var(--text-primary);
 }
 
 .brand-mark-accent {
@@ -193,7 +277,7 @@ input[type="range"] {
   padding: 0 18px;
   border-radius: 999px;
   background: var(--accent);
-  color: #04131a;
+  color: var(--panel-surface-0);
   font-weight: 700;
   box-shadow: 0 12px 30px rgba(0, 200, 255, 0.14);
 }
@@ -203,7 +287,7 @@ input[type="range"] {
 .submit-btn:hover,
 .fetch-button:hover {
   transform: translateY(-1px);
-  background: #33d5ff;
+  background: var(--accent-hover);
 }
 
 .left-sidebar {
@@ -214,8 +298,8 @@ input[type="range"] {
   align-items: center;
   gap: 10px;
   padding: 16px 10px;
-  background: rgba(13, 13, 18, 0.96);
-  border-right: 1px solid rgba(255,255,255,0.04);
+  background: var(--bg-surface);
+  border-right: 1px solid var(--border-light);
   box-shadow: inset -1px 0 0 rgba(255,255,255,0.02);
 }
 
@@ -246,7 +330,7 @@ input[type="range"] {
 
 .tool-button.is-active {
   background: rgba(124, 58, 237, 0.16);
-  color: #d8d6ff;
+  color: var(--panel-text-1);
   box-shadow: 0 0 0 1px rgba(124, 58, 237, 0.22), 0 12px 20px rgba(124, 58, 237, 0.08);
 }
 
@@ -270,7 +354,7 @@ input[type="range"] {
   min-width: 0;
   display: flex;
   flex-direction: column;
-  background: linear-gradient(180deg, #121216 0%, #0f1014 100%);
+  background: linear-gradient(180deg, var(--bg-shell) 0%, var(--bg-shell) 100%);
   padding: 18px 18px 8px;
 }
 
@@ -280,8 +364,8 @@ input[type="range"] {
   flex-direction: column;
   padding: 18px;
   border-radius: 28px;
-  border: 1px solid rgba(255,255,255,0.04);
-  background: rgba(11, 11, 16, 0.92);
+  border: 1px solid var(--border-light);
+  background: var(--bg-surface);
   box-shadow: inset 0 1px 0 rgba(255,255,255,0.03), 0 0 0 1px rgba(255,255,255,0.01);
   overflow: hidden;
 }
@@ -308,7 +392,7 @@ input[type="range"] {
   min-height: 260px;
   border-radius: 18px;
   border: 1px solid var(--border);
-  background: radial-gradient(circle at top, #1d1d1d 0%, #111111 78%);
+  background: radial-gradient(circle at top, var(--border-light) 0%, var(--bg-shell) 78%);
   overflow: hidden;
   display: flex;
   align-items: center;
@@ -346,7 +430,7 @@ input[type="range"] {
 .mode-panel-host {
   border-radius: 18px;
   border: 1px solid var(--border);
-  background: rgba(26, 26, 26, 0.92);
+  background: var(--bg-surface);
   overflow: auto;
 }
 
@@ -563,7 +647,7 @@ input[type="color"] {
 
 .keyframe-toggle.is-active {
   background: var(--accent);
-  color: #04131a;
+  color: var(--panel-surface-0);
   border-color: var(--accent);
 }
 
@@ -648,7 +732,7 @@ input[type="color"] {
   display: block;
   height: 100%;
   border-radius: inherit;
-  background: linear-gradient(90deg, #00a9e0 0%, #49d8ff 100%);
+  background: linear-gradient(90deg, var(--accent) 0%, var(--accent-hover) 100%);
 }
 
 .shorts-strip {
@@ -733,7 +817,7 @@ input[type="color"] {
 .progress-track-fill {
   display: block;
   height: 100%;
-  background: linear-gradient(90deg, var(--accent) 0%, #73e3ff 100%);
+  background: linear-gradient(90deg, var(--accent) 0%, var(--info-light) 100%);
   border-radius: inherit;
 }
 
@@ -766,6 +850,17 @@ input[type="color"] {
   overflow: hidden;
   font-size: 11px;
   color: var(--timeline-text);
+}
+
+/* Only the neutral surface/text tokens flip - the lane-identity colors
+   (accent/playhead/video/audio/text-type) stay the same saturated hues in
+   both themes, same reasoning as --accent/--success/--danger above. */
+:root[data-theme="light"] .timeline-shell {
+  --timeline-bg: #f5f5f7;
+  --timeline-surface: #ffffff;
+  --timeline-border: #dcdce0;
+  --timeline-track: #eeeef1;
+  --timeline-text: #5b5964;
 }
 
 .timeline-resize-handle {
@@ -836,7 +931,7 @@ input[type="color"] {
   padding: 4px 8px;
   border-radius: 6px;
   background: var(--timeline-accent-dim);
-  color: #a78bfa;
+  color: var(--accent-purple);
   font-size: 10px;
   font-weight: 600;
   letter-spacing: 0.02em;
@@ -846,12 +941,12 @@ input[type="color"] {
   width: 6px;
   height: 6px;
   border-radius: 50%;
-  background: #a78bfa;
+  background: var(--accent-purple);
   box-shadow: 0 0 0 1px rgba(167, 139, 250, 0.35);
 }
 
 .timeline-magnet-active {
-  background: #22c55e;
+  background: var(--success);
   box-shadow: 0 0 0 1px rgba(34, 197, 94, 0.4);
 }
 
@@ -891,7 +986,7 @@ input[type="color"] {
 }
 
 .timeline-gap-menu {
-  background: var(--bg-elevated, #1c1c22);
+  background: var(--bg-elevated, var(--panel-surface-2));
   border: 1px solid var(--border);
   border-radius: 8px;
   box-shadow: 0 8px 24px rgba(0,0,0,0.35);
@@ -938,7 +1033,7 @@ input[type="color"] {
 .timeline-marker-chip-label {
   background: transparent;
   border: none;
-  color: #fbbf24;
+  color: var(--warning);
   font-size: 10px;
   font-weight: 600;
   cursor: pointer;
@@ -965,7 +1060,7 @@ input[type="color"] {
   border-radius: 999px;
   border: none;
   background: transparent;
-  color: #fbbf24;
+  color: var(--warning);
   font-size: 9px;
   cursor: pointer;
   display: inline-flex;
@@ -996,7 +1091,7 @@ input[type="color"] {
   height: 0;
   border-style: solid;
   border-width: 6px 0 6px 8px;
-  border-color: transparent transparent transparent #fbbf24;
+  border-color: transparent transparent transparent var(--warning);
 }
 
 .timeline-ruler {
@@ -1235,7 +1330,7 @@ input[type="color"] {
 .timeline-clip-video {
   background: var(--timeline-video-bg);
   border: 1px solid var(--timeline-video-border);
-  color: #93c5fd;
+  color: var(--info-light);
 }
 
 .timeline-clip-video:hover {
@@ -1246,7 +1341,7 @@ input[type="color"] {
 .timeline-clip-audio {
   background: var(--timeline-audio-bg);
   border: 1px solid var(--timeline-audio-border);
-  color: #86efac;
+  color: var(--success);
 }
 
 .timeline-clip-audio:hover {
@@ -1257,7 +1352,7 @@ input[type="color"] {
 .timeline-clip-text {
   background: var(--timeline-text-bg);
   border: 1px solid var(--timeline-text-border);
-  color: #fcd34d;
+  color: var(--warning);
 }
 
 .timeline-clip-text:hover {
@@ -1268,7 +1363,7 @@ input[type="color"] {
 .timeline-clip-adjustment {
   background: rgba(236, 72, 153, 0.16);
   border: 1px dashed rgba(236, 72, 153, 0.6);
-  color: #f9a8d4;
+  color: var(--accent-pink-light);
 }
 
 .timeline-clip-adjustment:hover {
@@ -1277,12 +1372,12 @@ input[type="color"] {
 }
 
 .timeline-clip-selected {
-  border-color: #a78bfa !important;
+  border-color: var(--accent-purple) !important;
   box-shadow: 0 0 0 1px rgba(167, 139, 250, 0.35), 0 4px 16px rgba(167, 139, 250, 0.18) !important;
 }
 
 .timeline-clip-multi-selected {
-  border-color: #c4b5fd !important;
+  border-color: var(--accent-violet-light) !important;
   box-shadow: 0 0 0 1px rgba(196, 181, 253, 0.35), 0 4px 16px rgba(196, 181, 253, 0.18) !important;
 }
 
@@ -1397,7 +1492,7 @@ input[type="color"] {
   z-index: 50;
   border-radius: 6px;
   overflow: hidden;
-  border: 1px solid var(--timeline-accent, #7c3aed);
+  border: 1px solid var(--timeline-accent, var(--accent-violet));
   box-shadow: 0 6px 20px rgba(0, 0, 0, 0.45);
 }
 
@@ -1434,7 +1529,7 @@ input[type="color"] {
   top: 0;
   bottom: 0;
   background: rgba(167, 139, 250, 0.18);
-  border: 1px solid var(--timeline-playhead, #a78bfa);
+  border: 1px solid var(--timeline-playhead, var(--accent-purple));
   border-radius: 3px;
   pointer-events: none;
 }
@@ -1494,9 +1589,9 @@ input[type="color"] {
   transform: translateX(-50%);
   padding: 2px 6px;
   border-radius: 4px;
-  background: #1c1926;
+  background: var(--panel-surface-2);
   border: 1px solid rgba(167, 139, 250, 0.35);
-  color: #e9e7f0;
+  color: var(--panel-text-1);
   font-size: 9px;
   white-space: nowrap;
   font-variant-numeric: tabular-nums;
@@ -1562,6 +1657,9 @@ input[type="color"] {
   max-width: min(440px, calc(100vw - 36px));
   padding: 14px 16px;
   border-radius: 14px;
+  /* Deliberately theme-invariant, unlike the rest of the app - an error
+     toast stays high-contrast dark-red/white regardless of light/dark mode
+     so it can't blend into a light background and lose urgency. */
   background: rgba(114, 24, 24, 0.96);
   border: 1px solid rgba(255, 107, 107, 0.32);
   color: #ffd9d9;
@@ -1716,16 +1814,16 @@ input[type="color"] {
 .caption-result-card { display: flex; align-items: center; gap: 10px; width: 100%; padding: 11px; border: 1px solid rgba(105, 213, 163, .22); border-radius: 10px; background: rgba(105, 213, 163, .07); }
 .caption-result-card > div { display: flex; min-width: 0; flex: 1; flex-direction: column; gap: 3px; }
 .caption-result-card strong { font-size: 11px; }
-.caption-result-card small { color: #7f8d87; font-size: 9px; }
-.caption-result-card a { padding: 6px 9px; border-radius: 7px; background: #2b473b; color: #8be0b7; font-size: 10px; text-decoration: none; }
+.caption-result-card small { color: var(--text-secondary); font-size: 9px; }
+.caption-result-card a { padding: 6px 9px; border-radius: 7px; background: var(--panel-border-strong); color: var(--success); font-size: 10px; text-decoration: none; }
 .caption-preview-actions { display: flex; align-items: center; gap: 10px; }
-.caption-preview-toggle { display: flex; padding: 3px; border: 1px solid #302e39; border-radius: 8px; background: #111116; }
-.caption-preview-toggle button { padding: 5px 8px; border-radius: 5px; background: transparent; color: #777681; font-size: 9px; cursor: pointer; }
-.caption-preview-toggle button.is-active { background: #302b45; color: #c9c3ff; }
-.editor-project-title { display: flex; align-items: center; gap: 7px; margin-left: 14px; padding-left: 14px; border-left: 1px solid #2d2b33; color: #696771; font-size: 9px; }
-.editor-project-title i { color: #414048; font-style: normal; }
-.editor-project-title strong { color: #d8d5dd; font-size: 10px; }
-.editor-project-title small { margin-left: 4px; padding: 3px 6px; border-radius: 4px; background: #202027; color: #6f6c77; font-size: 7px; }
+.caption-preview-toggle { display: flex; padding: 3px; border: 1px solid var(--panel-surface-5); border-radius: 8px; background: var(--bg-shell); }
+.caption-preview-toggle button { padding: 5px 8px; border-radius: 5px; background: transparent; color: var(--panel-text-3); font-size: 9px; cursor: pointer; }
+.caption-preview-toggle button.is-active { background: var(--accent-purple-soft); color: var(--accent-violet-light); }
+.editor-project-title { display: flex; align-items: center; gap: 7px; margin-left: 14px; padding-left: 14px; border-left: 1px solid var(--panel-border); color: var(--panel-text-3); font-size: 9px; }
+.editor-project-title i { color: var(--panel-border-strong); font-style: normal; }
+.editor-project-title strong { color: var(--text-primary); font-size: 10px; }
+.editor-project-title small { margin-left: 4px; padding: 3px 6px; border-radius: 4px; background: var(--bg-raised); color: var(--panel-text-3); font-size: 7px; }
 .timeline-clip-trim { position: absolute; top: 0; bottom: 0; width: 6px; cursor: col-resize; z-index: 2; }
 .timeline-clip-trim-left { left: 0; background: linear-gradient(90deg, rgba(124,58,237,.6), transparent); }
 .timeline-clip-trim-right { right: 0; background: linear-gradient(270deg, rgba(124,58,237,.6), transparent); }

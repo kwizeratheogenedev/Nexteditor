@@ -2,6 +2,7 @@ import { useEffect, useRef, useState } from 'react';
 import { Link, useNavigate, useSearchParams } from 'react-router-dom';
 import { useAuth } from '../context/AuthContext.jsx';
 import { API_ENDPOINTS } from '../config.js';
+import ThemeToggle from '../components/ThemeToggle.jsx';
 import './pages.css';
 
 const FREE_FEATURES = [
@@ -103,7 +104,7 @@ function MomoUpgradeCard({ onSuccess }) {
         {state === 'requesting' ? 'Starting...' : state === 'pending' ? 'Waiting for approval...' : 'Pay with MTN MoMo'}
       </button>
       {message && (
-        <div style={{ fontSize: 13, marginTop: 8, color: state === 'error' ? '#ff8a8a' : 'var(--text-secondary)' }}>
+        <div style={{ fontSize: 13, marginTop: 8, color: state === 'error' ? 'var(--danger)' : 'var(--text-secondary)' }}>
           {message}
         </div>
       )}
@@ -134,7 +135,7 @@ function CardUpgradeButton() {
       <button type="button" className="btn btn-ghost btn-block" onClick={handleClick} disabled={busy}>
         {busy ? 'Starting...' : 'Pay with card'}
       </button>
-      {error && <div style={{ fontSize: 13, marginTop: 8, color: '#ff8a8a' }}>{error}</div>}
+      {error && <div style={{ fontSize: 13, marginTop: 8, color: 'var(--danger)' }}>{error}</div>}
     </div>
   );
 }
@@ -188,6 +189,7 @@ export default function PricingPage() {
               <Link to="/signup" className="btn btn-primary">Start editing free</Link>
             </>
           )}
+          <ThemeToggle />
         </div>
       </nav>
 
