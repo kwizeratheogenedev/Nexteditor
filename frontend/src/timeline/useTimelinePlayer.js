@@ -3,10 +3,13 @@ import { resolveKeyframedValue } from './keyframes';
 import { resolveActiveInLane, clipDuration, laneTotalDuration } from './transitions';
 import { hasSpeedCurve, sourceTimeForOutputElapsed } from './speedCurve';
 
-// Matches the fixed 1080p/16:9 canvas the backend exporter renders to
-// (see backend/routes/exportTimeline.js CANVAS) so the live preview and the
-// exported file agree on framing.
-export const CANVAS_SIZE = { width: 1920, height: 1080 };
+// Default canvas size (matches the pre-schema-v4 fixed 1080p/16:9 canvas) -
+// used only as a fallback when no canvasSize is supplied. The real value
+// comes from the project's own canvasSize (see usePersistedEditorState.js's
+// defaultCanvasSize) and must agree with whatever the backend exporter
+// renders to (see backend/routes/exportTimeline.js resolveCanvas) so the
+// live preview and the exported file always frame identically.
+const FALLBACK_CANVAS_SIZE = { width: 1920, height: 1080 };
 
 // Groups a media type's clips by trackIndex into lanes, sorted ascending -
 // for video this ordering IS the z-order (lane 0 = background, drawn
@@ -181,7 +184,8 @@ function resolveClipGain(clip, outputLocalTime, clipDuration) {
 // stack in z-order for real picture-in-picture/overlays, audio lanes all
 // mix together, text lanes all draw. Only lane 0's video defines the
 // program's overall length (matches the backend export).
-export function useTimelinePlayer({ timeline, currentTime, isPlaying, onTimeUpdate, onEnded, onClipDurationUpdate, canvasRef, trackMeta }) {
+export function useTimelinePlayer({ timeline, currentTime, isPlaying, onTimeUpdate, onEnded, onClipDurationUpdate, canvasRef, trackMeta, canvasSize }) {
+  const activeCanvasSize = canvasSize || FALLBACK_CANVAS_SIZE;
   const videoPoolRef = useRef(new Map());
   const audioPoolRef = useRef(new Map());
   const videoGainNodesRef = useRef(new Map());
@@ -400,14 +404,27 @@ export function useTimelinePlayer({ timeline, currentTime, isPlaying, onTimeUpda
     const vw = el.videoWidth || canvas.width;
     const vh = el.videoHeight || canvas.height;
     if (vw > 0 && vh > 0 && el.readyState >= 2) {
-      const fitScale = Math.min(canvas.width / vw, canvas.height / vh);
+      // 'cover' scales up to fill the canvas (cropping overflow) instead of
+      // 'contain'-fitting inside it with letterbox/pillarbox bars - mirrors
+      // backend/services/filterGraph/effects/transform.js's isCover branch.
+      const isCover = activeCanvasSize.fitMode === 'cover';
+      const fitScale = isCover ? Math.max(canvas.width / vw, canvas.height / vh) : Math.min(canvas.width / vw, canvas.height / vh);
       const drawW = vw * fitScale * Math.abs(scaleX);
       const drawH = vh * fitScale * Math.abs(scaleY);
 
       ctx.save();
+      if (isCover) {
+        ctx.beginPath();
+        ctx.rect(0, 0, canvas.width, canvas.height);
+        ctx.clip();
+      }
       ctx.globalAlpha = combinedAlpha;
       ctx.filter = cssFilterForClip(clip);
-      ctx.translate(canvas.width / 2 + posX, canvas.height / 2 + posY);
+      // posX/posY are a percent of half the canvas dimension (0=center,
+      // +/-100=edge of frame) - see backend/services/filterGraph/effects/
+      // transform.js's overlay x/y expressions for the mirrored export-side
+      // formula, which must stay identical to this one.
+      ctx.translate(canvas.width / 2 + (posX * canvas.width) / 200, canvas.height / 2 + (posY * canvas.height) / 200);
       ctx.rotate((rotation * Math.PI) / 180);
       ctx.scale(scaleX < 0 ? -1 : 1, scaleY < 0 ? -1 : 1);
       try {
@@ -423,7 +440,7 @@ export function useTimelinePlayer({ timeline, currentTime, isPlaying, onTimeUpda
       drawVignette(ctx, canvas, vignetteIntensity);
       ctx.restore();
     }
-  }, [getVideoElement, onClipDurationUpdate]);
+  }, [getVideoElement, onClipDurationUpdate, activeCanvasSize]);
 
   // Adjustment layers (M13) carry no media of their own - they apply their
   // color/vignette filters to everything already drawn below them in the
@@ -509,8 +526,8 @@ export function useTimelinePlayer({ timeline, currentTime, isPlaying, onTimeUpda
   const drawFrame = useCallback((time) => {
     const canvas = canvasRef.current;
     if (!canvas) return;
-    if (canvas.width !== CANVAS_SIZE.width) canvas.width = CANVAS_SIZE.width;
-    if (canvas.height !== CANVAS_SIZE.height) canvas.height = CANVAS_SIZE.height;
+    if (canvas.width !== activeCanvasSize.width) canvas.width = activeCanvasSize.width;
+    if (canvas.height !== activeCanvasSize.height) canvas.height = activeCanvasSize.height;
     const ctx = canvas.getContext('2d');
 
     ctx.save();
@@ -543,7 +560,7 @@ export function useTimelinePlayer({ timeline, currentTime, isPlaying, onTimeUpda
 
     ctx.restore();
     updateAudioGains(time);
-  }, [videoLanes, textLanes, drawVideoEntry, applyAdjustmentLayer, updateAudioGains, canvasRef, trackMeta]);
+  }, [videoLanes, textLanes, drawVideoEntry, applyAdjustmentLayer, updateAudioGains, canvasRef, trackMeta, activeCanvasSize]);
 
   useEffect(() => {
     drawFrameRef.current = drawFrame;

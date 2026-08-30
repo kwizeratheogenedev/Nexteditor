@@ -4,11 +4,22 @@ import { useAuth } from '../context/AuthContext.jsx';
 import { API_ENDPOINTS } from '../config.js';
 
 const STORAGE_PREFIX = 'nexeditor_editor_';
-const SCHEMA_VERSION = 3;
+const SCHEMA_VERSION = 4;
 const PROJECT_ID_KEY = `${STORAGE_PREFIX}projectId`;
 
 function createEmptyTimeline() {
   return [];
+}
+
+// Project-level output frame - defaults match the fixed 1920x1080/16:9/30fps
+// canvas every project was hardcoded to before schema v4, so an existing
+// project's export/preview framing doesn't change just from loading it.
+// `fitMode` governs how a source clip whose native aspect ratio differs from
+// the canvas gets composited: 'contain' letterboxes/pillarboxes (black bars),
+// 'cover' crops to fill - see backend/services/filterGraph/effects/
+// transform.js for the export-side equivalent of both.
+function defaultCanvasSize() {
+  return { width: 1920, height: 1080, fps: 30, aspectRatioId: '16:9', resolutionId: '1080p', fitMode: 'contain' };
 }
 
 // One entry per lane, per media type - lane count is just this array's
@@ -197,12 +208,37 @@ function migrateV2ToV3(clips) {
   });
 }
 
+// A v3 (or earlier) project predates variable canvas size entirely, so its
+// clip.transform.x/y (and their keyframe tracks) were always authored as raw
+// PIXEL offsets tuned against the fixed 1920x1080 canvas every project used
+// to be locked to - see backend/services/filterGraph/effects/transform.js
+// for the export-side mirror of this same conversion. From schema v4 on,
+// transform.x/y is instead a PERCENT of half the canvas's own width/height
+// (0 = center, +/-100 = edge of frame), so overlay/PiP positions stay
+// visually correct across any aspect ratio/resolution instead of only ever
+// making sense on a 1920-wide canvas. Dividing an old raw-pixel value by
+// 9.6 (=1920/200) or 5.4 (=1080/200) round-trips exactly for any project
+// still on the default canvas - nothing visually jumps on load.
+function migrateV3ToV4(clips) {
+  const scalePoints = (points, divisor) => (points || []).map((p) => ({ ...p, value: p.value / divisor }));
+  return clips.map((clip) => {
+    const t = clip.transform || {};
+    const kf = clip.keyframes || {};
+    return {
+      ...clip,
+      transform: { ...t, x: (t.x || 0) / 9.6, y: (t.y || 0) / 5.4 },
+      keyframes: { ...kf, x: scalePoints(kf.x, 9.6), y: scalePoints(kf.y, 5.4) },
+    };
+  });
+}
+
 export function usePersistedEditorState() {
   const [timeline, setTimeline] = useState(() => createEmptyTimeline());
   const [playhead, setPlayhead] = useState(0);
   const [activeClipIndex, setActiveClipIndex] = useState(0);
   const [isPlaying, setIsPlaying] = useState(false);
   const [zoom, setZoom] = useState(100);
+  const [canvasSize, setCanvasSize] = useState(() => defaultCanvasSize());
   const [bannerVisible, setBannerVisible] = useState(true);
   const [selectedClipId, setSelectedClipId] = useState(null);
   const [selectedClipIds, setSelectedClipIds] = useState([]);
@@ -250,14 +286,21 @@ export function usePersistedEditorState() {
         const parsed = JSON.parse(stored);
         // v1 (the old, buggy array-spread format) never actually restored
         // correctly, so there's no real data to salvage from it - treated as
-        // unrecoverable. v2 is a valid format missing only trackIndex/
-        // startTime (position was implicit) - migrateV2ToV3 backfills those
-        // from the exact old accumulation math, below.
-        if (!parsed || !Array.isArray(parsed.clips) || parsed.clips.length === 0 || (parsed.version !== 2 && parsed.version !== SCHEMA_VERSION)) {
+        // unrecoverable. v2 is missing trackIndex/startTime (migrateV2ToV3
+        // backfills them); v3 is missing canvas-relative transform.x/y
+        // (migrateV3ToV4 rescales them) and has no canvasSize field at all.
+        // Note: an empty `clips` array is NOT a reason to bail out here - the
+        // save effect below writes canvasSize/zoom/trackMeta/etc. regardless
+        // of clip count (e.g. picking an aspect ratio before importing any
+        // media), so a 0-clip save is a legitimate, fully-formed state that
+        // still needs those fields restored.
+        if (!parsed || !Array.isArray(parsed.clips) || ![2, 3, SCHEMA_VERSION].includes(parsed.version)) {
           if (!cancelled) setRestored(true);
           return;
         }
-        const clipsToRestore = parsed.version === 2 ? migrateV2ToV3(parsed.clips) : parsed.clips;
+        let clipsToRestore = parsed.clips;
+        if (parsed.version === 2) clipsToRestore = migrateV2ToV3(clipsToRestore);
+        if (parsed.version === 2 || parsed.version === 3) clipsToRestore = migrateV3ToV4(clipsToRestore);
 
         // Multiple clips (e.g. both halves of a split) can share the same
         // underlying source file - fetch and create a blob URL for each
@@ -284,6 +327,9 @@ export function usePersistedEditorState() {
           setPlayhead(parsed.playhead || 0);
           setActiveClipIndex(parsed.activeClipIndex || 0);
           setZoom(parsed.zoom || 100);
+          // v3 and earlier have no canvasSize at all - they were always the
+          // fixed 1920x1080 canvas, so the default already matches them.
+          setCanvasSize(parsed.canvasSize || defaultCanvasSize());
           setBannerVisible(parsed.bannerVisible !== false);
           setSelectedClipId(parsed.selectedClipId || null);
           setSelectedClipIds(Array.isArray(parsed.selectedClipIds) ? parsed.selectedClipIds : []);
@@ -329,6 +375,7 @@ export function usePersistedEditorState() {
           playhead,
           activeClipIndex,
           zoom,
+          canvasSize,
           bannerVisible,
           selectedClipId,
           selectedClipIds,
@@ -370,7 +417,7 @@ export function usePersistedEditorState() {
     }, 100);
 
     return () => clearTimeout(timer);
-  }, [restored, timeline, playhead, activeClipIndex, zoom, bannerVisible, selectedClipId, selectedClipIds, expandedTracks, snapEnabled, autoFollowPlayhead, insertMode, trackMeta, markers]);
+  }, [restored, timeline, playhead, activeClipIndex, zoom, canvasSize, bannerVisible, selectedClipId, selectedClipIds, expandedTracks, snapEnabled, autoFollowPlayhead, insertMode, trackMeta, markers]);
 
   // Backend sync - only runs once a project has been explicitly saved to the
   // account (currentProjectId set) and the user is signed in. Longer debounce
@@ -392,6 +439,7 @@ export function usePersistedEditorState() {
           playhead,
           activeClipIndex,
           zoom,
+          canvasSize,
           bannerVisible,
           selectedClipId,
           selectedClipIds,
@@ -417,7 +465,7 @@ export function usePersistedEditorState() {
     }, 3000);
 
     return () => clearTimeout(timer);
-  }, [restored, user, currentProjectId, projectName, timeline, playhead, activeClipIndex, zoom, bannerVisible, selectedClipId, selectedClipIds, expandedTracks, snapEnabled, autoFollowPlayhead, insertMode, trackMeta, markers]);
+  }, [restored, user, currentProjectId, projectName, timeline, playhead, activeClipIndex, zoom, canvasSize, bannerVisible, selectedClipId, selectedClipIds, expandedTracks, snapEnabled, autoFollowPlayhead, insertMode, trackMeta, markers]);
 
   useEffect(() => {
     try {
@@ -441,6 +489,7 @@ export function usePersistedEditorState() {
       playhead,
       activeClipIndex,
       zoom,
+      canvasSize,
       bannerVisible,
       selectedClipId,
       selectedClipIds,
@@ -467,7 +516,7 @@ export function usePersistedEditorState() {
     setProjectName(payload.project.name);
     setSyncStatus('saved');
     return payload.project;
-  }, [timeline, playhead, activeClipIndex, zoom, bannerVisible, selectedClipId, selectedClipIds, expandedTracks, snapEnabled, autoFollowPlayhead, insertMode, trackMeta, markers]);
+  }, [timeline, playhead, activeClipIndex, zoom, canvasSize, bannerVisible, selectedClipId, selectedClipIds, expandedTracks, snapEnabled, autoFollowPlayhead, insertMode, trackMeta, markers]);
 
   // Loads a project previously saved to the account (e.g. picked from the
   // "My Projects" list) and replaces the live timeline with it. Local source
@@ -480,10 +529,15 @@ export function usePersistedEditorState() {
     const payload = await res.json();
     if (!res.ok) throw new Error(payload.error || 'Failed to load project.');
     const parsed = payload.project.data;
+    // A project saved before schema v4 existed has raw-pixel transform.x/y
+    // and no canvasSize - same migration the mount-time restore effect
+    // applies (v2 has no separate migration path here since v2 was never
+    // written to the backend; only ever the localStorage-only mount path).
+    const clipsToRestore = parsed.version === 3 ? migrateV3ToV4(parsed.clips || []) : (parsed.clips || []);
 
     const sourceCache = new Map();
     const restoredClips = [];
-    for (const clip of parsed.clips || []) {
+    for (const clip of clipsToRestore) {
       let resolved = clip.sourceId ? sourceCache.get(clip.sourceId) : null;
       if (!resolved && clip.sourceId) {
         const file = await getPersistedFile(`${STORAGE_PREFIX}source_${clip.sourceId}`);
@@ -497,6 +551,7 @@ export function usePersistedEditorState() {
     setPlayhead(parsed.playhead || 0);
     setActiveClipIndex(parsed.activeClipIndex || 0);
     setZoom(parsed.zoom || 100);
+    setCanvasSize(parsed.canvasSize || defaultCanvasSize());
     setBannerVisible(parsed.bannerVisible !== false);
     setSelectedClipId(parsed.selectedClipId || null);
     setSelectedClipIds(Array.isArray(parsed.selectedClipIds) ? parsed.selectedClipIds : []);
@@ -524,6 +579,7 @@ export function usePersistedEditorState() {
     setActiveClipIndex(0);
     setIsPlaying(false);
     setZoom(100);
+    setCanvasSize(defaultCanvasSize());
     setBannerVisible(true);
     setSelectedClipId(null);
     setSelectedClipIds([]);
@@ -632,6 +688,8 @@ export function usePersistedEditorState() {
     setIsPlaying,
     zoom,
     setZoom,
+    canvasSize,
+    setCanvasSize,
     bannerVisible,
     setBannerVisible,
     selectedClipId,

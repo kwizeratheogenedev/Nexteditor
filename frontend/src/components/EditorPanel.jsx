@@ -1,5 +1,6 @@
-import { useMemo, useRef } from 'react';
+import { useMemo, useRef, useState } from 'react';
 import './EditorWorkspace.css';
+import CanvasSettingsMenu from './CanvasSettingsMenu';
 
 const EditorIcon = ({ children }) => <svg viewBox="0 0 24 24" aria-hidden="true" fill="none" stroke="currentColor" strokeWidth="1.7" strokeLinecap="round" strokeLinejoin="round">{children}</svg>;
 
@@ -8,9 +9,11 @@ function formatSeconds(value) {
 }
 
 // Maps a client (mouse) position to canvas-internal pixel coordinates,
-// accounting for the canvas's own resolution (1920x1080, fixed - see
-// timeline/useTimelinePlayer.js CANVAS_SIZE) being displayed at a
-// different, letterboxed CSS size via object-fit:contain.
+// accounting for the canvas's own resolution (the project's canvasSize,
+// which can be any aspect ratio/resolution since schema v4 - see
+// usePersistedEditorState.js) being displayed at a different, letterboxed
+// CSS size via object-fit:contain. Reads canvasEl.width/height live, so it
+// already works for any canvas size without needing the size passed in.
 function getCanvasContentRect(canvasEl) {
   const rect = canvasEl.getBoundingClientRect();
   const canvasAspect = canvasEl.width / canvasEl.height;
@@ -30,7 +33,9 @@ function getCanvasContentRect(canvasEl) {
 function EditorPanel({
   bannerVisible, onDismissBanner, timeline, selectedClipId, selectedClip, onSelectClip, onImportClick, onUpload, fileInputRef,
   canvasRef, isPlaying, currentTime, videoDuration, onTogglePlayback, onSeek, onMoveOverlay, onMoveOverlayEnd,
+  canvasSize, onCanvasSizeChange,
 }) {
+  const [canvasSettingsOpen, setCanvasSettingsOpen] = useState(false);
   // One card per unique imported SOURCE, not one per timeline clip - the
   // timeline can reference the same source many times (split, duplicate,
   // freeze-frame all add clip entries without importing anything new), so
@@ -70,11 +75,16 @@ function EditorPanel({
     if (!isOverlayClip || !canvasRef.current) return;
     event.preventDefault();
     const content = getCanvasContentRect(canvasRef.current);
-    const scaleX = canvasRef.current.width / content.width;
     overlayDragRef.current = {
       startClientX: event.clientX,
       startClientY: event.clientY,
-      scale: scaleX,
+      // transform.x/y are a percent of half the canvas dimension (schema
+      // v4+) - converting the on-screen CSS-pixel drag delta straight to a
+      // percent delta only needs the content box's own on-screen size, not
+      // the canvas's actual pixel dimensions (the canvas-pixel scale factor
+      // cancels out of the ratio algebraically).
+      contentWidth: content.width,
+      contentHeight: content.height,
       originX: selectedClip.transform?.x || 0,
       originY: selectedClip.transform?.y || 0,
     };
@@ -85,9 +95,9 @@ function EditorPanel({
   const handleOverlayDragMove = (event) => {
     const drag = overlayDragRef.current;
     if (!drag) return;
-    const deltaX = (event.clientX - drag.startClientX) * drag.scale;
-    const deltaY = (event.clientY - drag.startClientY) * drag.scale;
-    onMoveOverlay?.(selectedClipId, drag.originX + deltaX, drag.originY + deltaY);
+    const deltaPercentX = ((event.clientX - drag.startClientX) * 200) / drag.contentWidth;
+    const deltaPercentY = ((event.clientY - drag.startClientY) * 200) / drag.contentHeight;
+    onMoveOverlay?.(selectedClipId, drag.originX + deltaPercentX, drag.originY + deltaPercentY);
   };
 
   const handleOverlayDragEnd = () => {
@@ -110,11 +120,11 @@ function EditorPanel({
       </aside>
 
       <section className="editor-canvas-area">
-        <header className="editor-canvas-toolbar"><div><button type="button" className="is-active">Player</button><button type="button">Preview</button></div><div><span>Fit</span><button type="button">100%</button><button type="button" title="Canvas settings">•••</button></div></header>
+        <header className="editor-canvas-toolbar" style={{ position: 'relative' }}><div><button type="button" className="is-active">Player</button><button type="button">Preview</button></div><div><span>Fit</span><button type="button">100%</button><button type="button" title="Canvas settings" onClick={() => setCanvasSettingsOpen((v) => !v)}>•••</button>{canvasSettingsOpen && <CanvasSettingsMenu canvasSize={canvasSize} onChange={onCanvasSizeChange} onClose={() => setCanvasSettingsOpen(false)} />}</div></header>
         <div className="editor-player-stage">
           {hasContent ? <div className="editor-player-frame"><canvas ref={canvasRef} onMouseDown={handleOverlayDragStart} style={{ width:'100%', height:'100%', objectFit:'contain', cursor: isOverlayClip ? 'move' : 'default' }} /><span className="editor-transform-corner top-left"/><span className="editor-transform-corner top-right"/><span className="editor-transform-corner bottom-left"/><span className="editor-transform-corner bottom-right"/></div> : <div className="editor-canvas-empty"><span><EditorIcon><rect x="3" y="5" width="18" height="14" rx="2"/><path d="m10 9 5 3-5 3z"/></EditorIcon></span><h2>Start creating</h2><p>Import a video to add it to your timeline.</p><button type="button" onClick={onImportClick}>Import media</button></div>}
         </div>
-        <footer className="editor-canvas-footer"><span>Preview quality</span><b>1080p</b><i/><span>Canvas</span><b>16:9</b></footer>
+        <footer className="editor-canvas-footer"><span>Preview quality</span><b>{canvasSize?.resolutionId ? canvasSize.resolutionId : `${canvasSize?.height || 1080}p`}</b><i/><span>Canvas</span><b>{canvasSize?.aspectRatioId || '16:9'}</b></footer>
       </section>
 
       {mediaClips.length > 0 && (

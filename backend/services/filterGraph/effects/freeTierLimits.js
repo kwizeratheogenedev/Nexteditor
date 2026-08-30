@@ -3,8 +3,15 @@
 // (matches the scale+pad pattern already used for montage clips in
 // createMontage.js). Free-tier only - Pro exports skip this entirely.
 export function applyFreeTierWatermark(graph, videoLabel, canvas) {
-  const targetWidth = Math.min(1280, canvas.width);
-  const targetHeight = Math.round(targetWidth * (canvas.height / canvas.width) / 2) * 2;
+  // Capped by the LONG axis, not blindly canvas.width - a vertical 9:16
+  // canvas's width (e.g. 1080) is its SHORT axis, so a width-only check
+  // would let a free-tier vertical export sail through completely uncapped
+  // on height (1920, well past the intended 1280px ceiling) while a
+  // landscape export was correctly capped.
+  const longEdge = Math.max(canvas.width, canvas.height);
+  const scaleFactor = Math.min(1, 1280 / longEdge);
+  const targetWidth = Math.round((canvas.width * scaleFactor) / 2) * 2;
+  const targetHeight = Math.round((canvas.height * scaleFactor) / 2) * 2;
   const out = graph.label('freetier');
   graph.addNode(
     `scale=${targetWidth}:${targetHeight}:force_original_aspect_ratio=decrease,pad=${targetWidth}:${targetHeight}:(ow-iw)/2:(oh-ih)/2,setsar=1,`

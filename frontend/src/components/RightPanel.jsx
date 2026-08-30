@@ -432,10 +432,10 @@ function RightPanel() {
             <PropertyRow label="Rotation" value={`${draft.basic.rotation}°`} keyframeButton={keyframeButtonFor('rotation')}>
               <input disabled={disabled} type="range" min="-180" max="180" value={draft.basic.rotation} onChange={(event) => updateDraftBasic({ rotation: Number(event.target.value) })} onMouseUp={() => commitBasic(draft.basic)} onTouchEnd={() => commitBasic(draft.basic)} onBlur={() => commitBasic(draft.basic)} />
             </PropertyRow>
-            <PropertyRow label="Position X" value={`${Math.round(draft.basic.x)}`} keyframeButton={keyframeButtonFor('x')}>
+            <PropertyRow label="Position X" value={`${Math.round(draft.basic.x)}%`} keyframeButton={keyframeButtonFor('x')}>
               <input disabled={disabled} type="range" min="-100" max="100" value={draft.basic.x} onChange={(event) => updateDraftBasic({ x: Number(event.target.value) })} onMouseUp={() => commitBasic(draft.basic)} onTouchEnd={() => commitBasic(draft.basic)} onBlur={() => commitBasic(draft.basic)} />
             </PropertyRow>
-            <PropertyRow label="Position Y" value={`${Math.round(draft.basic.y)}`} keyframeButton={keyframeButtonFor('y')}>
+            <PropertyRow label="Position Y" value={`${Math.round(draft.basic.y)}%`} keyframeButton={keyframeButtonFor('y')}>
               <input disabled={disabled} type="range" min="-100" max="100" value={draft.basic.y} onChange={(event) => updateDraftBasic({ y: Number(event.target.value) })} onMouseUp={() => commitBasic(draft.basic)} onTouchEnd={() => commitBasic(draft.basic)} onBlur={() => commitBasic(draft.basic)} />
             </PropertyRow>
             <PropertyRow label="Flip" value="">

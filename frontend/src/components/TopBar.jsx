@@ -1,7 +1,7 @@
 import { useState } from 'react';
 import { useAuth } from '../context/AuthContext.jsx';
 
-function TopBar({ activeTab, onExport, exporting = false, exportProgress = 0, projectName, currentProjectId, projectSyncStatus, onSaveProject, onOpenProjects }) {
+function TopBar({ activeTab, onExport, exporting = false, exportProgress = 0, projectName, currentProjectId, projectSyncStatus, onSaveProject, onOpenProjects, canvasSize }) {
   const { user, logout } = useAuth();
   const [saveError, setSaveError] = useState('');
   const [saving, setSaving] = useState(false);
@@ -56,8 +56,8 @@ function TopBar({ activeTab, onExport, exporting = false, exportProgress = 0, pr
         <span className="topbar-pill">{activeTab === 'editor' ? 'Editor Mode' : activeTab === 'media' ? 'Montage Mode' : activeTab === 'shorts' ? 'Shorts Mode' : 'Captions Mode'}</span>
         {activeTab === 'editor' && (
           <>
-            <span className="topbar-pill">1080p</span>
-            <span className="topbar-pill">16:9</span>
+            <span className="topbar-pill">{canvasSize?.resolutionId || `${canvasSize?.height || 1080}p`}</span>
+            <span className="topbar-pill">{canvasSize?.aspectRatioId || '16:9'}</span>
             <button type="button" className="topbar-export" disabled={exporting} onClick={onExport}>
               {exporting ? `Exporting ${Math.round(exportProgress)}%` : 'Export'}
             </button>

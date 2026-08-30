@@ -49,13 +49,19 @@ export function applyVideoTransform(graph, inputLabel, clip, canvas, outputDurat
     current = out;
   }
 
+  // fitMode 'cover' crops to fill the target box (no black bars) instead of
+  // 'contain'-style letterbox/pillarbox padding - see canvasPresets.js's
+  // defaultFitModeFor (any non-16:9 canvas defaults to cover, matching
+  // CapCut's own vertical-reformat default and this repo's existing
+  // extractShorts.js/reformatShort.js precedent for the same crop pattern).
+  const isCover = canvas.fitMode === 'cover';
+
   if (!transparent && !hasScale && !hasRotation && !hasOpacity && !hasPosition) {
     const out = graph.label('fit');
-    graph.addNode(
-      `scale=${canvas.width}:${canvas.height}:force_original_aspect_ratio=decrease,pad=${canvas.width}:${canvas.height}:(ow-iw)/2:(oh-ih)/2:color=black,setsar=1`,
-      current,
-      out,
-    );
+    const fitFilter = isCover
+      ? `scale=${canvas.width}:${canvas.height}:force_original_aspect_ratio=increase,crop=${canvas.width}:${canvas.height},setsar=1`
+      : `scale=${canvas.width}:${canvas.height}:force_original_aspect_ratio=decrease,pad=${canvas.width}:${canvas.height}:(ow-iw)/2:(oh-ih)/2:color=black,setsar=1`;
+    graph.addNode(fitFilter, current, out);
     return out;
   }
 
@@ -63,7 +69,10 @@ export function applyVideoTransform(graph, inputLabel, clip, canvas, outputDurat
   const scaledW = Math.max(2, Math.round(canvas.width * magnitude));
   const scaledH = Math.max(2, Math.round(canvas.height * magnitude));
   const scaleOut = graph.label('scale');
-  graph.addNode(`scale=${scaledW}:${scaledH}:force_original_aspect_ratio=decrease`, current, scaleOut);
+  const scaleFilter = isCover
+    ? `scale=${scaledW}:${scaledH}:force_original_aspect_ratio=increase,crop=${scaledW}:${scaledH}`
+    : `scale=${scaledW}:${scaledH}:force_original_aspect_ratio=decrease`;
+  graph.addNode(scaleFilter, current, scaleOut);
   current = scaleOut;
 
   if (hasRotation) {
@@ -108,8 +117,17 @@ export function applyVideoTransform(graph, inputLabel, clip, canvas, outputDurat
     : `color=c=black:s=${canvas.width}x${canvas.height}:r=${canvas.fps}:d=${outputDuration}`;
   graph.addNode(bgSpec, [], bgLabel);
   const overlayOut = graph.label('composited');
-  const xExpr = xKeyframed ? buildKeyframeExpr(kf.x) : String(Math.round(posX));
-  const yExpr = yKeyframed ? buildKeyframeExpr(kf.y) : String(Math.round(posY));
+  // posX/posY are a percent of half the canvas dimension (0=center,
+  // +/-100=edge of frame, schema v4+) - must stay identical to the preview
+  // formula in frontend/src/timeline/useTimelinePlayer.js's drawVideoEntry
+  // (ctx.translate call), or a positioned/keyframed overlay would land in a
+  // different spot in the exported file than what the user saw while editing.
+  const xExpr = xKeyframed
+    ? `(${buildKeyframeExpr(kf.x)})*${canvas.width}/200`
+    : String(Math.round((posX * canvas.width) / 200));
+  const yExpr = yKeyframed
+    ? `(${buildKeyframeExpr(kf.y)})*${canvas.height}/200`
+    : String(Math.round((posY * canvas.height) / 200));
   graph.addNode(
     `overlay=x='(W-w)/2+${xExpr}':y='(H-h)/2+${yExpr}':format=auto,setsar=1`,
     [bgLabel, current],

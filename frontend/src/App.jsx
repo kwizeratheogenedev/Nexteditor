@@ -105,6 +105,8 @@ function App() {
     setEditorActiveClipIndex,
     timelineZoom,
     setTimelineZoom,
+    editorCanvasSize,
+    setEditorCanvasSize,
     editorVideo,
     loadVideoInEditor,
     clearEditorState,
@@ -2064,6 +2066,7 @@ function App() {
     onClipDurationUpdate: handleEditorClipDurationUpdate,
     canvasRef: editorCanvasRef,
     trackMeta,
+    canvasSize: editorCanvasSize,
   });
 
   const handlePreviewPlayPause = () => {
@@ -2234,6 +2237,16 @@ function App() {
 
     formData.append('timeline', JSON.stringify(timelinePayload));
     formData.append('projectName', 'nexeditor-export');
+    // Sent as preset ids (aspectRatioId/resolutionId), not raw pixel
+    // width/height - the backend re-derives real dimensions from its own
+    // allow-list (see exportTimeline.js's resolveCanvas), so there's no
+    // arbitrary client-supplied size to validate.
+    formData.append('canvasSize', JSON.stringify({
+      aspectRatioId: editorCanvasSize?.aspectRatioId,
+      resolutionId: editorCanvasSize?.resolutionId,
+      fps: editorCanvasSize?.fps,
+      fitMode: editorCanvasSize?.fitMode,
+    }));
 
     try {
       const jobId = globalThis.crypto?.randomUUID?.() || `${Date.now()}-${Math.random().toString(16).slice(2)}`;
@@ -2404,6 +2417,7 @@ function App() {
         projectSyncStatus={projectSyncStatus}
         onSaveProject={saveProjectToAccount}
         onOpenProjects={() => setProjectsModalOpen(true)}
+        canvasSize={editorCanvasSize}
       />
       <EditorStateProvider timelineValue={editorTimelineContextValue} playbackValue={editorPlaybackContextValue}>
       <div id="main-area">
@@ -2458,6 +2472,8 @@ function App() {
               clip.id === clipId ? { ...clip, transform: { ...clip.transform, x, y } } : clip
             ))),
             onMoveOverlayEnd: () => pushEditorHistory(editorTimelineRef.current),
+            canvasSize: editorCanvasSize,
+            onCanvasSizeChange: setEditorCanvasSize,
           }}
       />
         {activeTab === 'editor' && <RightPanel />}

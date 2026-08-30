@@ -17,10 +17,50 @@ const router = express.Router();
 const uploadsDir = path.resolve(process.cwd(), 'uploads');
 const clipsDir = path.resolve(process.cwd(), 'clips');
 
-// Fixed for M1 - matches the "1080p / 16:9" canvas already shown in the
-// Editor tab's player footer. Becomes a per-project setting once the UI
-// exposes canvas/aspect controls.
-const CANVAS = { width: 1920, height: 1080, fps: 30 };
+// Mirrors frontend/src/timeline/canvasPresets.js's ASPECT_RATIOS/
+// RESOLUTIONS/FPS_OPTIONS - keep both in sync if a preset is ever added or
+// removed. The server never reads a client-sent width/height directly, only
+// these preset ids, so there's no arbitrary-resolution input to validate.
+const ALLOWED_ASPECTS = { '16:9': 16 / 9, '9:16': 9 / 16, '1:1': 1, '4:5': 4 / 5 };
+const ALLOWED_LONG_EDGES = { '720p': 1280, '1080p': 1920, '4k': 3840 };
+const PRO_ONLY_RESOLUTIONS = new Set(['4k']);
+const ALLOWED_FPS = new Set([24, 30, 60]);
+const DEFAULT_CANVAS_SIZE = { aspectRatioId: '16:9', resolutionId: '1080p', fps: 30, fitMode: 'contain' };
+
+// Builds the real {width, height, fps, fitMode} the filter graph renders to,
+// from the client's requested preset ids - rejects (rather than silently
+// clamping) an unrecognized id or a free user requesting a Pro-only
+// resolution, before any rendering starts.
+function resolveCanvas(rawCanvasSize, userIsPro) {
+  let requested;
+  try {
+    requested = JSON.parse(rawCanvasSize || '');
+  } catch {
+    requested = DEFAULT_CANVAS_SIZE;
+  }
+  const aspectRatioId = requested.aspectRatioId || DEFAULT_CANVAS_SIZE.aspectRatioId;
+  const resolutionId = requested.resolutionId || DEFAULT_CANVAS_SIZE.resolutionId;
+  const fps = requested.fps || DEFAULT_CANVAS_SIZE.fps;
+  const fitMode = requested.fitMode === 'cover' ? 'cover' : 'contain';
+
+  const ratio = ALLOWED_ASPECTS[aspectRatioId];
+  const longEdge = ALLOWED_LONG_EDGES[resolutionId];
+  if (!ratio || !longEdge || !ALLOWED_FPS.has(fps)) {
+    const error = new Error('Invalid canvas settings.');
+    error.code = 'INVALID_CANVAS';
+    throw error;
+  }
+  if (PRO_ONLY_RESOLUTIONS.has(resolutionId) && !userIsPro) {
+    const error = new Error('4K exports are a Pro feature. Choose 720p or 1080p, or upgrade to export in 4K.');
+    error.code = 'UPGRADE_REQUIRED';
+    throw error;
+  }
+
+  const toEven = (n) => Math.round(n / 2) * 2;
+  const width = ratio >= 1 ? toEven(longEdge) : toEven(longEdge * ratio);
+  const height = ratio >= 1 ? toEven(longEdge / ratio) : toEven(longEdge);
+  return { width, height, fps, fitMode };
+}
 
 const progressByJob = new Map();
 
@@ -115,6 +155,11 @@ router.post('/', requireAuth, upload.any(), async (req, res) => {
     const laneZeroVideoClips = clips.filter((clip) => (clip.type === 'video' || !clip.type) && (clip.trackIndex || 0) === 0);
     const totalDuration = laneTotalDuration(laneZeroVideoClips, clipOutputDuration);
     const userIsPro = isPro(req.user);
+    // resolveCanvas itself throws UPGRADE_REQUIRED for a free user
+    // requesting 4K - checked here, before buildEditorExportGraph/runFFmpeg,
+    // so that rejection happens immediately instead of after paying for a
+    // full-cost render that freeTierLimits.js would only downscale anyway.
+    const CANVAS = resolveCanvas(req.body.canvasSize, userIsPro);
 
     if (!userIsPro && totalDuration > FREE_EXPORT_MAX_SECONDS) {
       const error = new Error(`Free plan exports are limited to ${FREE_EXPORT_MAX_SECONDS / 60} minutes. Upgrade to Pro for longer exports.`);
