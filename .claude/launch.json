@@ -10,7 +10,7 @@
     {
       "name": "nexeditor-backend",
       "runtimeExecutable": "npm",
-      "runtimeArgs": ["--prefix", "backend", "run", "start"],
+      "runtimeArgs": ["--prefix", "backend", "run", "dev"],
       "port": 3000
     }
   ]

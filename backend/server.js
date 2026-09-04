@@ -27,7 +27,12 @@ import { connectDB } from './db.js';
 const __filename = fileURLToPath(import.meta.url);
 const __dirname = path.dirname(__filename);
 const app = express();
-const port = 3000;
+// Hosting platforms (Render, Fly.io, etc.) assign the listen port via PORT
+// and expect the app to bind exactly to it - only fall back to auto-picking
+// a free port (see the EADDRINUSE retry in startServer) when PORT wasn't
+// explicitly given, i.e. local dev.
+const explicitPort = process.env.PORT ? Number(process.env.PORT) : null;
+const port = explicitPort || 3000;
 const ALLOWED_ORIGINS = (process.env.CORS_ORIGIN || 'http://localhost:5173,http://127.0.0.1:5173')
   .split(',')
   .map((value) => value.trim())
@@ -63,6 +68,11 @@ app.use(cors({
 app.use(cookieParser());
 app.use(express.json());
 app.use('/clips', express.static(clipsDir));
+
+// Used by hosting platforms for restart/zero-downtime-deploy health checks.
+app.get('/health', (req, res) => {
+  res.status(200).json({ status: 'ok' });
+});
 
 app.use('/api/convert', convertRouter);
 app.use('/api/burn-subtitles', burnSubtitlesRouter);
@@ -146,7 +156,7 @@ function startServer(p, attempts = 0,hos ='0.0.0.0') {
       console.log(`Video processing backend is listening on port ${p}`);
     })
     .once('error', (err) => {
-      if (err && err.code === 'EADDRINUSE' && attempts < 5) {
+      if (err && err.code === 'EADDRINUSE' && !explicitPort && attempts < 5) {
         console.warn(`Port ${p} is in use, trying port ${p + 1}...`);
         try { serverInstance.close(); } catch (_e) {}
         setTimeout(() => startServer(p + 1, attempts + 1), 400);
