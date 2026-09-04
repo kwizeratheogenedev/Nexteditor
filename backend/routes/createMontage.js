@@ -20,7 +20,9 @@ const uploadsDir = path.resolve(__dirname, '..', 'uploads');
 const clipsDir = path.resolve(__dirname, '..', 'clips');
 const MIN_CLIP_DURATION = 3;
 const MAX_CLIP_DURATION = 4;
-const SKIP_INPUT_VIDEO_SECONDS = 40;
+const DEFAULT_SKIP_INPUT_VIDEO_SECONDS = 40;
+const MAX_SKIP_INPUT_VIDEO_SECONDS = 600;
+const MAX_MONTAGE_OUTPUT_SECONDS = 120;
 
 // Configure multer for video and audio uploads
 const storage = multer.diskStorage({
@@ -112,6 +114,12 @@ function parseBoolean(value, defaultValue = false) {
   return defaultValue;
 }
 
+function parseSkipSeconds(value) {
+  const parsed = Number(value);
+  if (!Number.isFinite(parsed) || parsed < 0) return DEFAULT_SKIP_INPUT_VIDEO_SECONDS;
+  return Math.min(parsed, MAX_SKIP_INPUT_VIDEO_SECONDS);
+}
+
 function pickClipDuration(remainingDuration, syncMode, tempoSensitivity) {
   if (remainingDuration <= MIN_CLIP_DURATION) {
     return remainingDuration;
@@ -180,6 +188,7 @@ function buildClipArgs(inputFile, startTime, clipDuration, outputFile, { beautyS
     'scale=1280:720:force_original_aspect_ratio=decrease',
     'pad=1280:720:(ow-iw)/2:(oh-ih)/2',
     'setsar=1',
+    'fps=30',
   ];
 
   if (beautyStyle === 'cinematic') {
@@ -196,9 +205,6 @@ function buildClipArgs(inputFile, startTime, clipDuration, outputFile, { beautyS
   if (contrastPolish) {
     filters.push('eq=contrast=1.06:gamma=1.02');
   }
-  if (smoothTransitions) {
-    filters.push('fps=30');
-  }
   if (enhanceMotion) {
     filters.push('unsharp=luma_msize_x=5:luma_msize_y=5:luma_amount=0.5');
   }
@@ -206,14 +212,15 @@ function buildClipArgs(inputFile, startTime, clipDuration, outputFile, { beautyS
   const filterChain = filters.join(',');
 
   return [
-    '-ss', String(startTime),
     '-i', inputFile,
+    '-ss', String(startTime),
     '-t', String(clipDuration),
     '-vf', filterChain,
     '-an',
     '-c:v', 'libx264',
     '-preset', quality.preset,
     '-crf', quality.crf,
+    '-pix_fmt', 'yuv420p',
     '-y',
     outputFile,
   ];
@@ -350,10 +357,17 @@ router.post('/', optionalAuth, upload.any(), async (req, res) => {
     const outputPath = path.join(outputDir, outputFileName);
     const downloadName = outputFileName;
 
-    const [audioDuration, ...videoDurations] = await Promise.all([
+    const [rawAudioDuration, ...videoDurations] = await Promise.all([
       probeDuration(mergedAudioPath),
       ...videoFiles.map((videoPath) => probeDuration(videoPath)),
     ]);
+    // Cap the montage's own output length independently of how long the
+    // uploaded audio track is - the clip plan below walks down from
+    // audioDuration to 0, and the final merge trims to `-t audioDuration`,
+    // so clamping this one value here is enough to cap both the number of
+    // clips generated and the render length. Uploading a full song no
+    // longer means an equally long (and equally slow) montage.
+    const audioDuration = Math.min(rawAudioDuration, MAX_MONTAGE_OUTPUT_SECONDS);
 
     emitToClient(jobId, socketId, 'montage-progress', { percent: 5, currentTime: 'Analyzing source media...' });
     if (ownerId) upsertJob(ownerId, { jobId, progress: 5, message: 'Analyzing source media...' });
@@ -367,6 +381,7 @@ router.post('/', optionalAuth, upload.any(), async (req, res) => {
     const smoothTransitions = parseBoolean(req.body.smoothTransitions, true);
     const contrastPolish = parseBoolean(req.body.contrastPolish, true);
     const videoQuality = req.body.videoQuality || 'high';
+    const skipInputVideoSeconds = parseSkipSeconds(req.body.skipStartSeconds);
 
     const clipPlan = [];
     const usedRangesByPath = new Map();
@@ -378,7 +393,7 @@ router.post('/', optionalAuth, upload.any(), async (req, res) => {
       const videoDuration = videoDurations[sourceIndex];
       const rangeKey = videoFiles[sourceIndex];
       const usedRanges = usedRangesByPath.get(rangeKey) || [];
-      const startTime = pickRandomStart(videoDuration, clipDuration, usedRanges, SKIP_INPUT_VIDEO_SECONDS);
+      const startTime = pickRandomStart(videoDuration, clipDuration, usedRanges, skipInputVideoSeconds);
       usedRangesByPath.set(rangeKey, usedRanges);
 
       clipPlan.push({
