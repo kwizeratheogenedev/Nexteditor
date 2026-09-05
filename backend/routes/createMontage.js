@@ -211,8 +211,18 @@ function buildClipArgs(inputFile, startTime, clipDuration, outputFile, { beautyS
   const filterChain = filters.join(',');
 
   return [
-    '-i', inputFile,
+    // -ss before -i is fast input-side seeking (the demuxer jumps straight
+    // to the nearest keyframe); -ss after -i forces ffmpeg to decode every
+    // frame from position 0 up to startTime first. A prior change flipped
+    // this to "accurate" output-side seeking, which meant every one of the
+    // ~100+ clips in a montage re-decoded from the start of its source
+    // video (up to 600s of skipped intro, or any random offset elsewhere in
+    // the file) before it could even begin cutting - the actual cause of
+    // renders taking far longer than before. These are randomly-sampled
+    // background clips, not frame-precise edits, so snapping to the nearest
+    // keyframe is imperceptible and worth the massive speedup.
     '-ss', String(startTime),
+    '-i', inputFile,
     '-t', String(clipDuration),
     '-vf', filterChain,
     '-an',
