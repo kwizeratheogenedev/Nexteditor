@@ -1350,6 +1350,19 @@ export default function MontageTab({ loadVideoInEditor, onError, onShurfer, onRe
   const setVideo1 = useCallback((u) => updateVideo(1, u), [updateVideo]);
   const setVideo2 = useCallback((u) => updateVideo(2, u), [updateVideo]);
 
+  // Clip generation runs several ffmpeg processes concurrently (pLimit on
+  // the backend), so their progress events don't arrive in percent order -
+  // a later clip can report a higher percent before an earlier, still-
+  // running clip's own lower-percent update lands. The bar's percent was
+  // already guarded against moving backward (Math.max below), but the
+  // stage text and time estimates were being overwritten unconditionally,
+  // so a stale "Preparing clip 30/35..." from a lagging clip could land
+  // after the bar had already moved on to merging, pairing a high percent
+  // with a description of an earlier stage. Gate every field on this same
+  // ref so a stale/out-of-order event is dropped in full rather than
+  // partially applied.
+  const maxProgressRef = useRef(0);
+
   useEffect(() => {
     if (!socket) return;
     const onProg = (p) => {
@@ -1367,15 +1380,22 @@ export default function MontageTab({ loadVideoInEditor, onError, onShurfer, onRe
           duration: p.result.duration || 0,
           size: p.result.size || 0,
         });
+        maxProgressRef.current = 100;
         setMergeStatus('success');
         setMergeProgress(100);
         setMergeStageText('Complete');
         return;
       }
+      // Concurrent clip generation can deliver this event out of order (see
+      // the ref's own comment above) - drop it whole rather than only
+      // clamping the percent, so a lagging clip's stale text can never
+      // pair with an already-higher percent.
+      const incomingPercent = p?.percent || 0;
+      if (incomingPercent < maxProgressRef.current) return;
+      maxProgressRef.current = incomingPercent;
+
       setHasRealProgress(true);
-      // Never let a real update (or the fake ticker below) move the bar
-      // backward - both write the same value independently and can race.
-      setMergeProgress((current) => Math.max(current, p?.percent || 0));
+      setMergeProgress(incomingPercent);
       setLastProgressUpdate(Date.now());
       setMergeStageText(p?.currentTime || '');
       setMergeTotalEstimatedTime(typeof p?.totalEstimatedTime === 'number' ? p.totalEstimatedTime : 0);
@@ -1431,14 +1451,19 @@ export default function MontageTab({ loadVideoInEditor, onError, onShurfer, onRe
             duration: status.result.duration || 0,
             size: status.result.size || 0,
           });
+          maxProgressRef.current = 100;
           setMergeStatus('success');
           setMergeProgress(100);
           setMergeStageText('Complete');
           return;
         }
-        if (status.percent > 0) {
+        // Same stale-event guard as the socket handler above (shared ref) -
+        // the backend's progressByJob entry this polls is itself just the
+        // latest of several concurrent clips' writes, so it can regress too.
+        if (status.percent > 0 && status.percent >= maxProgressRef.current) {
+          maxProgressRef.current = status.percent;
           setHasRealProgress(true);
-          setMergeProgress((current) => Math.max(current, status.percent));
+          setMergeProgress(status.percent);
           setLastProgressUpdate(Date.now());
           if (status.currentTime) setMergeStageText(status.currentTime);
         }
@@ -1454,29 +1479,29 @@ export default function MontageTab({ loadVideoInEditor, onError, onShurfer, onRe
     }
 
     const timer = window.setInterval(() => {
+      // Only creep forward during a genuine stall (no real backend update
+      // for 5s+, e.g. during the initial probe/analysis phase before the
+      // first clip event arrives) - this used to nudge the bar forward on
+      // every tick regardless of whether real updates were flowing, which
+      // raced it to 99% within ~90s no matter how long the actual render
+      // took. Real montages (2-minute cap, dozens of clips) routinely run
+      // longer than that, so the bar would sit pinned at 99% - detached
+      // from the real percent - for most of the render while the stage
+      // text (driven by real events) correctly kept crawling through
+      // "Preparing clip N/M". Gating this on the stall check keeps the
+      // displayed percent equal to the real percent whenever real updates
+      // are actually arriving, so percent and text always describe the
+      // same moment.
+      if (Date.now() - lastProgressUpdate <= 5000) {
+        return;
+      }
       setMergeProgress((current) => {
         if (current >= 99) {
           return current;
         }
-        if (Date.now() - lastProgressUpdate > 5000 && current < 92) {
-          return current + 0.8;
-        }
-        if (Date.now() - lastProgressUpdate > 5000 && current >= 92) {
-          return current + 0.35;
-        }
-        if (current < 8) {
-          return current + 2;
-        }
-        if (current < 35) {
-          return current + 1.5;
-        }
-        if (current < 70) {
-          return current + 1;
-        }
-        if (current < 92) {
-          return current + 0.5;
-        }
-        return current + 0.2;
+        const next = current < 92 ? current + 0.8 : current + 0.35;
+        maxProgressRef.current = Math.max(maxProgressRef.current, next);
+        return next;
       });
       setMergeStageText((current) => current || 'Preparing montage...');
     }, 700);
@@ -1502,6 +1527,7 @@ export default function MontageTab({ loadVideoInEditor, onError, onShurfer, onRe
     setMergeStageText('Preparing upload...');
     setMergeError('');
     setHasRealProgress(false);
+    maxProgressRef.current = 0;
 
     const fd = new FormData();
     videos.forEach((v, i) => {
