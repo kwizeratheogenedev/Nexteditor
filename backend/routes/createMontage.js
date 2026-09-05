@@ -22,7 +22,6 @@ const MIN_CLIP_DURATION = 3;
 const MAX_CLIP_DURATION = 4;
 const DEFAULT_SKIP_INPUT_VIDEO_SECONDS = 40;
 const MAX_SKIP_INPUT_VIDEO_SECONDS = 600;
-const MAX_MONTAGE_OUTPUT_SECONDS = 120;
 
 // Configure multer for video and audio uploads
 const storage = multer.diskStorage({
@@ -357,17 +356,12 @@ router.post('/', optionalAuth, upload.any(), async (req, res) => {
     const outputPath = path.join(outputDir, outputFileName);
     const downloadName = outputFileName;
 
-    const [rawAudioDuration, ...videoDurations] = await Promise.all([
+    // The montage always runs the full length of the audio track - an
+    // 8-minute song produces an 8-minute video, not a truncated one.
+    const [audioDuration, ...videoDurations] = await Promise.all([
       probeDuration(mergedAudioPath),
       ...videoFiles.map((videoPath) => probeDuration(videoPath)),
     ]);
-    // Cap the montage's own output length independently of how long the
-    // uploaded audio track is - the clip plan below walks down from
-    // audioDuration to 0, and the final merge trims to `-t audioDuration`,
-    // so clamping this one value here is enough to cap both the number of
-    // clips generated and the render length. Uploading a full song no
-    // longer means an equally long (and equally slow) montage.
-    const audioDuration = Math.min(rawAudioDuration, MAX_MONTAGE_OUTPUT_SECONDS);
 
     emitToClient(jobId, socketId, 'montage-progress', { percent: 5, currentTime: 'Analyzing source media...' });
     if (ownerId) upsertJob(ownerId, { jobId, progress: 5, message: 'Analyzing source media...' });
@@ -408,7 +402,14 @@ router.post('/', optionalAuth, upload.any(), async (req, res) => {
 
     emitToClient(jobId, socketId, 'montage-progress', { percent: 10, currentTime: 'Creating random clips...' });
 
-    const clipLimit = pLimit(Math.max(2, Math.min(4, (os.cpus() || []).length || 4)));
+    // One core held back for the event loop/other requests; the rest run
+    // clip encodes in parallel - was hardcoded to at most 4 regardless of
+    // how many cores the machine actually has, which left real hardware
+    // idle and slowed renders for no reason (output length/quality are
+    // unaffected either way, this only changes how many clips render at
+    // the same time).
+    const cpuCount = (os.cpus() || []).length || 4;
+    const clipLimit = pLimit(Math.max(2, cpuCount - 1));
     let completedClips = 0;
     const totalClips = clipPlan.length;
     const clipRangeStart = 10;
