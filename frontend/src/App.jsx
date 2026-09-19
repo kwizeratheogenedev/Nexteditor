@@ -3,9 +3,15 @@ import API_BASE_URL, { API_ENDPOINTS } from './config';
 import { useSocket } from './context/SocketContext';
 import { EditorStateProvider } from './context/EditorStateContext';
 import { useMediaState } from './hooks/useMediaState';
-import { createSourceId, normalizeClip, createTextClip, createAudioClip, createAdjustmentClip } from './hooks/usePersistedEditorState';
+import { createSourceId, normalizeClip, createTextClip, createAudioClip, createAdjustmentClip, createImageClip } from './hooks/usePersistedEditorState';
 import { useTimelinePlayer } from './timeline/useTimelinePlayer';
 import { clipDuration, laneTotalDuration } from './timeline/transitions';
+import { isVideoLikeClip, laneTypeForClip } from './timeline/clipKinds';
+import { applyMotionPreset, DEFAULT_IMAGE_MOTION_PRESET_ID } from './timeline/motionPresets';
+import { buildLongMixTimeline } from './timeline/longMix';
+import { buildExportFormData, postExportRequest, pollExportProgress, downloadExportResult, exportResultStatus, exportResultUrl } from './timeline/exportRequest';
+import { usePersistedLongMixState } from './hooks/usePersistedLongMixState';
+import { buildCanvasSize } from './timeline/canvasPresets';
 import TopBar from './components/TopBar';
 import LeftSidebar from './components/LeftSidebar';
 import CenterPanel from './components/CenterPanel';
@@ -16,7 +22,17 @@ import JobsResumeBanner from './components/JobsResumeBanner';
 import MontageTab from './components/MontageTab';
 import BottomTimeline, { PX_PER_SECOND, laneHeight } from './components/BottomTimeline';
 
-const VALID_TABS = ['media', 'captions', 'shorts', 'editor'];
+const VALID_TABS = ['media', 'captions', 'shorts', 'longmix', 'editor'];
+
+// A long mix is a music video, not motion footage - 30fps is plenty and
+// halves the render time against 60. The user picks the frame size in the
+// panel; the frame rate isn't worth a control of its own here.
+const LONGMIX_FPS = 30;
+
+// How long a still image stays on screen when it's dropped onto the
+// timeline by hand - an image has no duration of its own, so this is just a
+// starting point to drag out or trim back like any other clip.
+const DEFAULT_IMAGE_CLIP_SECONDS = 5;
 
 function revokeObjectUrlIfNeeded(url) {
   if (typeof url === 'string' && url.startsWith('blob:')) {
@@ -149,6 +165,28 @@ function App() {
 
   const [projectsModalOpen, setProjectsModalOpen] = useState(false);
 
+  // LongMix Studio (the songs/scenes/settings the wizard is collecting, and
+  // whatever render is or was in flight) - persisted across a reload or
+  // navigating away, same as the Editor and Montage tabs already are (see
+  // hooks/usePersistedLongMixState.js), since a mix here can legitimately
+  // take hours and losing the wizard's picks - or the render itself - to an
+  // accidental refresh is exactly the bad UX this exists to avoid.
+  const {
+    songs: longMixSongs,
+    setSongs: setLongMixSongs,
+    scenes: longMixScenes,
+    setScenes: setLongMixScenes,
+    settings: longMixSettings,
+    setSettings: setLongMixSettings,
+    building: longMixBuilding,
+    setBuilding: setLongMixBuilding,
+    jobId: longMixJobId,
+    setJobId: setLongMixJobId,
+    result: longMixResult,
+    setResult: setLongMixResult,
+    restored: longMixRestored,
+  } = usePersistedLongMixState();
+
   const video1Ref = useRef(null);
   const video2Ref = useRef(null);
   const video3Ref = useRef(null);
@@ -213,7 +251,7 @@ function App() {
     commitEditorTimeline((prev) => {
       const survivors = [];
       prev.forEach((clip) => {
-        const clipType = clip.type || 'video';
+        const clipType = laneTypeForClip(clip);
         if (clipType !== type) {
           survivors.push(clip);
           return;
@@ -237,7 +275,7 @@ function App() {
     const targetIndex = laneIndex + direction;
     if (targetIndex < 0 || targetIndex >= trackMeta[type].length) return;
     commitEditorTimeline((prev) => prev.map((clip) => {
-      const clipType = clip.type || 'video';
+      const clipType = laneTypeForClip(clip);
       if (clipType !== type) return clip;
       const idx = clip.trackIndex || 0;
       if (idx === laneIndex) return { ...clip, trackIndex: targetIndex };
@@ -255,7 +293,7 @@ function App() {
   // createAdjustmentClip) so they're grouped/rendered alongside real video
   // clips here.
   const editorVideoClips = useMemo(
-    () => editorTimeline.filter((clip) => clip.type === 'video' || clip.type === 'adjustment' || !clip.type),
+    () => editorTimeline.filter((clip) => isVideoLikeClip(clip) || clip.type === 'adjustment'),
     [editorTimeline],
   );
 
@@ -1171,7 +1209,7 @@ function App() {
         // clip can be freely dragged elsewhere (including onto a different
         // lane) afterward.
         const laneZeroEnd = previous
-          .filter((clip) => (clip.type === 'video' || !clip.type) && (clip.trackIndex || 0) === 0)
+          .filter((clip) => isVideoLikeClip(clip) && (clip.trackIndex || 0) === 0)
           .reduce((max, clip) => Math.max(max, clip.startTime + (clip.trimmedEnd - clip.trimmedStart) / (clip.speed || 1)), 0);
         return [
           ...previous,
@@ -1205,10 +1243,43 @@ function App() {
     tempVideo.load();
   };
 
-  // The main Import button accepts both video and audio now - route by the
-  // picked file's actual type instead of assuming everything is video, so
-  // an audio file lands on the audio track automatically instead of being
-  // probed with a <video> element and dropped onto the video track.
+  // A still image has no metadata to probe and no source duration to
+  // respect - it goes straight onto the video track at a default length the
+  // user can trim or extend like anything else. It lands with a slow camera
+  // move already keyframed on (see timeline/motionPresets.js), because an
+  // untouched still on a timeline otherwise reads as a frozen video; the
+  // move is ordinary keyframes, so "None" in the inspector's Animate row
+  // removes it.
+  const addImageFileToTimeline = (file) => {
+    const url = URL.createObjectURL(file);
+    commitEditorTimeline((previous) => {
+      const laneZeroEnd = previous
+        .filter((clip) => isVideoLikeClip(clip) && (clip.trackIndex || 0) === 0)
+        .reduce((max, clip) => Math.max(max, clip.startTime + clipDuration(clip)), 0);
+      return [
+        ...previous,
+        createImageClip({
+          sourceId: createSourceId(),
+          file,
+          url,
+          trackIndex: 0,
+          startTime: laneZeroEnd,
+          duration: DEFAULT_IMAGE_CLIP_SECONDS,
+          motionKeyframes: applyMotionPreset(
+            { x: [], y: [], rotation: [], opacity: [], volume: [], speed: [], scaleX: [], scaleY: [] },
+            DEFAULT_IMAGE_MOTION_PRESET_ID,
+            DEFAULT_IMAGE_CLIP_SECONDS,
+          ),
+        }),
+      ];
+    });
+  };
+
+  // The main Import button accepts video, audio and images now - route by
+  // the picked file's actual type instead of assuming everything is video,
+  // so an audio file lands on the audio track and an image becomes a still
+  // clip instead of being probed with a <video> element that would never
+  // report a duration for it.
   const handleEditorUpload = (event) => {
     const file = event.target.files[0];
     if (!file) {
@@ -1216,6 +1287,8 @@ function App() {
     }
     if (file.type.startsWith('audio/')) {
       addAudioFileToTimeline(file);
+    } else if (file.type.startsWith('image/')) {
+      addImageFileToTimeline(file);
     } else {
       addVideoFileToTimeline(file);
     }
@@ -1265,7 +1338,7 @@ function App() {
   // Adjustment layers (M13) render inside video lanes (see
   // createAdjustmentClip) so a locked/hidden video lane's trackMeta is what
   // actually governs them, not a nonexistent 'adjustment' bucket.
-  const trackMetaTypeFor = (clip) => (clip.type === 'adjustment' ? 'video' : (clip.type || 'video'));
+  const trackMetaTypeFor = (clip) => laneTypeForClip(clip);
   const isClipLocked = (clip) => Boolean(trackMeta[trackMetaTypeFor(clip)]?.[clip.trackIndex || 0]?.locked);
 
   // Freeze frame: like Split, but the new gap between the two halves is
@@ -1285,7 +1358,7 @@ function App() {
     const localOutputTime = editorPlayhead - clipToSplit.startTime;
     const splitPoint = clipToSplit.trimmedStart + localOutputTime * (clipToSplit.speed || 1);
     const freezeStartTime = clipToSplit.startTime + localOutputTime;
-    const laneType = clipToSplit.type || 'video';
+    const laneType = laneTypeForClip(clipToSplit);
     const laneIndex = clipToSplit.trackIndex || 0;
 
     const leftClip = { ...clipToSplit, trimmedEnd: splitPoint, transitionOut: null };
@@ -1311,7 +1384,7 @@ function App() {
     const rest = editorTimeline
       .filter((clip) => clip.id !== clipToSplit.id)
       .map((clip) => (
-        (clip.type || 'video') === laneType && (clip.trackIndex || 0) === laneIndex && clip.startTime >= freezeStartTime
+        laneTypeForClip(clip) === laneType && (clip.trackIndex || 0) === laneIndex && clip.startTime >= freezeStartTime
           ? { ...clip, startTime: clip.startTime + FREEZE_FRAME_DURATION }
           : clip
       ));
@@ -1365,13 +1438,13 @@ function App() {
     const deletedClips = editorTimeline.filter((clip) => idsToDelete.has(clip.id));
     const survivors = editorTimeline.filter((clip) => !idsToDelete.has(clip.id));
     const nextTimeline = survivors.map((clip) => {
-      const clipType = clip.type || 'video';
+      const clipType = laneTypeForClip(clip);
       const clipLane = clip.trackIndex || 0;
       // Only clips deleted from the SAME lane (type + trackIndex) affect
       // this survivor - shift left by the combined duration of every
       // deleted clip on that lane that started before it.
       const shift = deletedClips.reduce((sum, deleted) => {
-        const deletedType = deleted.type || 'video';
+        const deletedType = laneTypeForClip(deleted);
         const deletedLane = deleted.trackIndex || 0;
         if (deletedType !== clipType || deletedLane !== clipLane) return sum;
         return deleted.startTime < clip.startTime ? sum + clipDuration(deleted) : sum;
@@ -1394,7 +1467,7 @@ function App() {
   // right-click-a-gap affordance rather than a general clip context menu.
   const handleGapContextMenu = (e, type, laneIndex, time) => {
     const laneClips = editorTimeline
-      .filter((clip) => (clip.type || 'video') === type && (clip.trackIndex || 0) === laneIndex)
+      .filter((clip) => laneTypeForClip(clip) === type && (clip.trackIndex || 0) === laneIndex)
       .sort((a, b) => a.startTime - b.startTime);
 
     let prevEnd = 0;
@@ -1414,7 +1487,7 @@ function App() {
     if (!gapMenu) return;
     const { type, laneIndex, gapStart, gapSize } = gapMenu;
     commitEditorTimeline((prev) => prev.map((clip) => {
-      const clipType = clip.type || 'video';
+      const clipType = laneTypeForClip(clip);
       const clipLane = clip.trackIndex || 0;
       if (clipType !== type || clipLane !== laneIndex || clip.startTime < gapStart) return clip;
       return { ...clip, startTime: Math.max(0, clip.startTime - gapSize) };
@@ -1457,7 +1530,7 @@ function App() {
       // closing a gap - captured once at gesture start, same convention
       // handleClipDragEnd already uses for insert-mode's Alt override.
       rippleMode: e.altKey,
-      laneType: clip.type || 'video',
+      laneType: laneTypeForClip(clip),
       laneIndex: clip.trackIndex || 0,
     });
     setSelectedClipId(clipId);
@@ -1477,7 +1550,7 @@ function App() {
       originalEnd: clip.trimmedEnd,
       originalStartTime: clip.startTime,
       rippleMode: e.altKey,
-      laneType: clip.type || 'video',
+      laneType: laneTypeForClip(clip),
       laneIndex: clip.trackIndex || 0,
     });
     setSelectedClipId(clipId);
@@ -1552,7 +1625,10 @@ function App() {
     const originals = new Map(
       editorTimeline
         .filter((clip) => targetIds.includes(clip.id))
-        .map((clip) => [clip.id, { startTime: clip.startTime, trackIndex: clip.trackIndex || 0, type: clip.type || 'video' }]),
+        // `type` here is the clip's LANE group (images and adjustment
+        // layers both ride the video lanes), which is what every
+        // same-lane comparison below actually means.
+        .map((clip) => [clip.id, { startTime: clip.startTime, trackIndex: clip.trackIndex || 0, type: laneTypeForClip(clip) }]),
     );
     setDragState({
       active: true,
@@ -1619,10 +1695,9 @@ function App() {
         if (!original) return;
         const newStartTime = Math.max(0, original.startTime + deltaTime);
         const snappedStart = snapTime(newStartTime, clip.id);
-        // trackMeta keys adjustment layers under 'video' (they share video's
-        // lane stack for z-order) - same mapping trackMetaTypeFor/isClipLocked
-        // use elsewhere.
-        const metaType = original.type === 'adjustment' ? 'video' : (original.type || 'video');
+        // original.type is already the lane group (see the originals
+        // snapshot above), which is exactly how trackMeta is keyed.
+        const metaType = original.type;
         // A type's lanes expand/collapse as one group (expandedTracks is
         // per-type, not per-lane), so this single row height is valid for
         // every lane of that type - no need to walk individual row offsets.
@@ -1651,7 +1726,7 @@ function App() {
         // duration, opening up room instead of letting them overlap.
         moves.forEach((move) => {
           next = next.map((clip) => (
-            !moves.has(clip.id) && (clip.type || 'video') === move.type && (clip.trackIndex || 0) === move.trackIndex && clip.startTime >= move.startTime
+            !moves.has(clip.id) && laneTypeForClip(clip) === move.type && (clip.trackIndex || 0) === move.trackIndex && clip.startTime >= move.startTime
               ? { ...clip, startTime: clip.startTime + move.duration }
               : clip
           ));
@@ -1668,7 +1743,7 @@ function App() {
     const deltaX = e.clientX - trimState.startX;
     const zoom = timelineZoom / 100;
     const deltaTime = deltaX / (PX_PER_SECOND * zoom);
-    const isSameLane = (clip) => (clip.type || 'video') === trimState.laneType && (clip.trackIndex || 0) === trimState.laneIndex;
+    const isSameLane = (clip) => laneTypeForClip(clip) === trimState.laneType && (clip.trackIndex || 0) === trimState.laneIndex;
 
     setEditorTimeline((prev) => {
       const trimmedClip = prev.find((clip) => clip.id === trimState.clipId);
@@ -2160,10 +2235,6 @@ function App() {
     setErrorText(null);
     setProgress({ percent: 0, currentTime: 'Preparing export...' });
 
-    const formData = new FormData();
-    const seenSources = new Set();
-    let missingSourceClipId = null;
-
     // Hidden (video/text) or muted (audio) lanes are skipped entirely so the
     // export matches what the preview actually shows/plays - no backend
     // changes needed, the filter graph never sees clips on those lanes.
@@ -2174,60 +2245,12 @@ function App() {
     // [startTime, endTime), so the disabled span still "takes up time" in
     // the export without the backend needing to know about `enabled` at all.
     const exportableTimeline = editorTimeline.filter((clip) => {
-      const type = clip.type || 'video';
+      const type = laneTypeForClip(clip);
       const laneIndex = clip.trackIndex || 0;
       return !trackMeta?.[type]?.[laneIndex]?.hidden && clip.enabled !== false;
     });
 
-    const timelinePayload = exportableTimeline.map((clip) => {
-      const clipFields = {
-        id: clip.id,
-        type: clip.type || 'video',
-        trackIndex: clip.trackIndex || 0,
-        startTime: clip.startTime,
-        trimmedStart: clip.trimmedStart,
-        trimmedEnd: clip.trimmedEnd,
-      };
-
-      if (clip.type === 'text') {
-        return { ...clipFields, text: clip.text };
-      }
-
-      // Adjustment layers (M13) carry no source media at all - only their
-      // filters (color/vignette) matter, same shortcut text clips take.
-      if (clip.type === 'adjustment') {
-        return { ...clipFields, filters: clip.filters };
-      }
-
-      Object.assign(clipFields, {
-        sourceId: clip.sourceId,
-        transform: clip.transform,
-        keyframes: clip.keyframes,
-        filters: clip.filters,
-        speed: clip.speed,
-        volume: clip.volume,
-        muted: clip.muted,
-        audioFade: clip.audioFade,
-        transitionOut: clip.transitionOut,
-      });
-
-      const isRemote = !(clip.file instanceof File) && typeof clip.url === 'string' && clip.url.includes('/clips/');
-      if (isRemote) {
-        return { ...clipFields, sourceKind: 'remote', remoteFileName: clip.url.split('/clips/').pop() };
-      }
-
-      if (clip.file instanceof File) {
-        if (!seenSources.has(clip.sourceId)) {
-          seenSources.add(clip.sourceId);
-          formData.append(`source_${clip.sourceId}`, clip.file);
-        }
-      } else {
-        missingSourceClipId = clip.id;
-      }
-
-      return { ...clipFields, sourceKind: 'upload' };
-    });
-
+    const { formData, missingSourceClipId } = buildExportFormData(exportableTimeline, editorCanvasSize, 'nexeditor-export');
     if (missingSourceClipId) {
       setErrorText('One of your clips is missing its video file - try re-importing it.');
       setProcessing(false);
@@ -2235,64 +2258,16 @@ function App() {
       return;
     }
 
-    formData.append('timeline', JSON.stringify(timelinePayload));
-    formData.append('projectName', 'nexeditor-export');
-    // Sent as preset ids (aspectRatioId/resolutionId), not raw pixel
-    // width/height - the backend re-derives real dimensions from its own
-    // allow-list (see exportTimeline.js's resolveCanvas), so there's no
-    // arbitrary client-supplied size to validate.
-    formData.append('canvasSize', JSON.stringify({
-      aspectRatioId: editorCanvasSize?.aspectRatioId,
-      resolutionId: editorCanvasSize?.resolutionId,
-      fps: editorCanvasSize?.fps,
-      fitMode: editorCanvasSize?.fitMode,
-    }));
-
     try {
-      const jobId = globalThis.crypto?.randomUUID?.() || `${Date.now()}-${Math.random().toString(16).slice(2)}`;
-      const data = await new Promise((resolve, reject) => {
-        const request = new XMLHttpRequest();
-        let progressTimer;
-        request.open('POST', `${API_BASE_URL}/api/editor/export`);
-        request.responseType = 'json';
-        request.withCredentials = true;
-        if (socketId) request.setRequestHeader('X-Socket-Id', socketId);
-        request.setRequestHeader('X-Job-Id', jobId);
-        request.upload.onprogress = (event) => {
-          if (!event.lengthComputable || activeTabRef.current !== 'editor') return;
-          const percent = Math.max(1, Math.min(5, (event.loaded / event.total) * 5));
-          setProgress({ percent, currentTime: `Uploading clips ${Math.round((event.loaded / event.total) * 100)}%...` });
-        };
-        progressTimer = setInterval(async () => {
-          try {
-            const response = await fetch(`${API_BASE_URL}/api/editor/export/progress/${jobId}`, { cache: 'no-store' });
-            if (!response.ok || activeTabRef.current !== 'editor') return;
-            const status = await response.json();
-            if (status.percent > 0) setProgress(status);
-          } catch { /* socket progress remains available */ }
-        }, 750);
-        request.onerror = () => {
-          clearInterval(progressTimer);
-          reject(new Error('Unable to reach the export server.'));
-        };
-        request.onload = () => {
-          clearInterval(progressTimer);
-          if (request.status >= 200 && request.status < 300) {
-            resolve(request.response);
-            return;
-          }
-          reject(new Error(request.response?.error || `Export failed (${request.status})`));
-        };
-        request.send(formData);
+      const { promise } = postExportRequest({
+        formData,
+        socketId,
+        onProgress: setProgress,
+        isStillCurrent: () => activeTabRef.current === 'editor',
       });
-
+      const data = await promise;
       setProgress({ percent: 100, currentTime: 'Export complete' });
-      const link = document.createElement('a');
-      link.href = `${API_BASE_URL}${data.filePath}`;
-      link.download = data.downloadName || data.fileName;
-      document.body.appendChild(link);
-      link.click();
-      link.remove();
+      await downloadExportResult(data);
     } catch (error) {
       console.error('Editor export failed:', error);
       setErrorText(error.message || 'Failed to export the timeline.');
@@ -2301,6 +2276,173 @@ function App() {
       setProcessing(false);
     }
   };
+
+  // LongMix Studio renders on the server and hands back a finished video,
+  // the same shape as Shorts or Captions - the editor is somewhere the user
+  // can go afterwards, not somewhere they have to go first. The assembled
+  // clips are kept in state so "Open in editor" can hand the exact same
+  // timeline over for hand-editing, and so the chapter list describes the
+  // very clips that were rendered.
+  const handleLongMixCreate = async () => {
+    if (!longMixSongs.length || !longMixScenes.length || longMixBuilding) return;
+
+    let assembled;
+    try {
+      assembled = buildLongMixTimeline(longMixSongs, longMixScenes, longMixSettings);
+    } catch (error) {
+      console.error('LongMix assembly failed:', error);
+      setErrorText(error.message || 'Could not build the mix from those files.');
+      return;
+    }
+
+    const canvasSize = buildCanvasSize({
+      aspectRatioId: longMixSettings.aspectRatioId,
+      resolutionId: longMixSettings.resolutionId,
+      fps: LONGMIX_FPS,
+    });
+    const { formData, missingSourceClipId } = buildExportFormData(assembled.clips, canvasSize, 'longmix');
+    if (missingSourceClipId) {
+      setErrorText('One of the songs or scenes is missing its file - re-add it and try again.');
+      return;
+    }
+    // The server renders a long mix from this compact description (songs in
+    // the order they're listed, real durations measured there) with its own
+    // fast pipeline - the clips above only carry the files and back the
+    // "Open in editor" hand-off.
+    formData.append('longMix', JSON.stringify({
+      songs: longMixSongs.map((song) => ({ sourceId: song.sourceId, title: song.title, duration: song.duration })),
+      scenes: longMixScenes.map((scene) => ({ sourceId: scene.sourceId, kind: scene.kind, duration: scene.duration })),
+      settings: {
+        crossfade: longMixSettings.crossfade,
+        sceneMode: longMixSettings.sceneMode,
+        sceneIntervalMinutes: longMixSettings.sceneIntervalMinutes,
+        motionPresetId: longMixSettings.motionPresetId,
+        targetMinutes: longMixSettings.targetMinutes,
+        fps: longMixSettings.fps,
+      },
+    }));
+
+    setLongMixBuilding(true);
+    setLongMixResult(null);
+    setErrorText(null);
+    setProgress({ percent: 0, currentTime: 'Preparing your mix...' });
+
+    const { jobId, promise } = postExportRequest({
+      formData,
+      socketId,
+      onProgress: setProgress,
+      isStillCurrent: () => activeTabRef.current === 'longmix',
+    });
+    // Persisted right away, not just once it resolves - the render is
+    // already running server-side by this point (see exportTimeline.js's
+    // early 202), so this is what a reload mid-render resumes from (see the
+    // resume effect below).
+    setLongMixJobId(jobId);
+
+    try {
+      const data = await promise;
+      setProgress({ percent: 100, currentTime: 'Your mix is ready' });
+      setLongMixResult(data);
+    } catch (error) {
+      console.error('LongMix render failed:', error);
+      setErrorText(error.message || 'Failed to render the mix.');
+      setProgress({ percent: 0, currentTime: '' });
+    } finally {
+      setLongMixBuilding(false);
+    }
+  };
+
+  // A jobId still marked `building` after restore means a render was
+  // actually still running (or had already finished) on the server when
+  // this reloaded - the connection dying doesn't kill it (see
+  // exportTimeline.js's early 202). Reattach to it instead of leaving the
+  // wizard stuck on a spinner nothing is ever going to resolve.
+  useEffect(() => {
+    if (!longMixRestored || !longMixBuilding || !longMixJobId) return;
+    let cancelled = false;
+    setProgress({ percent: 0, currentTime: 'Reconnecting to your mix...' });
+    pollExportProgress({
+      jobId: longMixJobId,
+      onProgress: setProgress,
+      isStillCurrent: () => !cancelled && activeTabRef.current === 'longmix',
+    }).then((data) => {
+      if (cancelled) return;
+      setProgress({ percent: 100, currentTime: 'Your mix is ready' });
+      setLongMixResult(data);
+      setLongMixBuilding(false);
+    }).catch((error) => {
+      if (cancelled) return;
+      console.error('LongMix render failed:', error);
+      setErrorText(error.message || 'Failed to render the mix.');
+      setProgress({ percent: 0, currentTime: '' });
+      setLongMixBuilding(false);
+    });
+    return () => {
+      cancelled = true;
+    };
+    // Only ever fires off the restore itself, not on every render.
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [longMixRestored]);
+
+  // A finished mix restored from a previous session may have aged out of the
+  // server's retention window - drop it up front rather than showing a player
+  // and a Download button that lead nowhere.
+  useEffect(() => {
+    if (!longMixRestored || !longMixResult) return;
+    let cancelled = false;
+    exportResultStatus(longMixResult).then((status) => {
+      if (!cancelled && status === 'expired') setLongMixResult(null);
+    });
+    return () => {
+      cancelled = true;
+    };
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [longMixRestored]);
+
+  // Hands the mix to the editor for hand-editing. The clips are rebuilt here
+  // from the songs/scenes/settings (a pure function of them - nothing to
+  // persist), using the song lengths the server measured while rendering so
+  // the editor's timeline lines up with the file that came back. Lane counts
+  // are grown to fit first: songs need two audio lanes to crossfade across
+  // (see longMix.js SONG_LANES) and a lane with no trackMeta entry wouldn't
+  // render a row. It replaces whatever is on the timeline - a long mix
+  // defines the whole project - and goes through commitEditorTimeline, so one
+  // Undo puts the previous timeline back.
+  const handleLongMixOpenInEditor = () => {
+    if (!longMixSongs.length || !longMixScenes.length) return;
+    const measured = longMixResult?.songDurations || {};
+    const longMixClips = buildLongMixTimeline(
+      longMixSongs.map((song) => ({ ...song, duration: measured[song.sourceId] || song.duration })),
+      longMixScenes,
+      longMixSettings,
+    ).clips;
+    const audioLanesNeeded = longMixClips.reduce((max, clip) => (clip.type === 'audio' ? Math.max(max, (clip.trackIndex || 0) + 1) : max), 1);
+    setTrackMeta((prev) => {
+      const grow = (lanes, needed) => (lanes.length >= needed
+        ? lanes
+        : [...lanes, ...Array.from({ length: needed - lanes.length }, () => ({ locked: false, hidden: false, name: null }))]);
+      return { ...prev, video: grow(prev.video, 1), audio: grow(prev.audio, audioLanesNeeded) };
+    });
+    setEditorCanvasSize(buildCanvasSize({
+      aspectRatioId: longMixSettings.aspectRatioId,
+      resolutionId: longMixSettings.resolutionId,
+      fps: LONGMIX_FPS,
+    }));
+    commitEditorTimeline(longMixClips);
+    setSelectedClipId(null);
+    setSelectedClipIds([]);
+    setEditorPlayhead(0);
+    setActiveTab('editor');
+  };
+
+  // Chapters come from the server's own layout of the finished file (they
+  // travel in the render result, so they also survive a reload), which is
+  // what keeps the timestamps from drifting from the video that comes back.
+  const longMixChapters = useMemo(
+    () => (longMixResult?.chapters || []).map((chapter, index) => ({ id: index, ...chapter })),
+    [longMixResult],
+  );
+  const longMixRuntime = longMixResult?.duration || 0;
 
   const triggerExport = () => {
     if (activeTab === 'media') {
@@ -2311,6 +2453,8 @@ function App() {
       handleShortsConvert();
     } else if (activeTab === 'editor') {
       handleEditorExport();
+    } else if (activeTab === 'longmix') {
+      handleLongMixCreate();
     }
   };
 
@@ -2386,6 +2530,37 @@ function App() {
     onReformat: handleReformat,
   };
 
+  const longMixProps = {
+    songs: longMixSongs,
+    setSongs: setLongMixSongs,
+    scenes: longMixScenes,
+    setScenes: setLongMixScenes,
+    settings: longMixSettings,
+    setSettings: setLongMixSettings,
+    onCreate: handleLongMixCreate,
+    building: longMixBuilding,
+    progress: progress?.percent || 0,
+    progressText: progress?.currentTime || '',
+    result: longMixResult,
+    resultUrl: exportResultUrl(longMixResult),
+    onDownload: async () => {
+      if (!longMixResult) return;
+      try {
+        await downloadExportResult(longMixResult);
+      } catch (error) {
+        setErrorText(error.message);
+        // Only a file the server confirmed is gone is dropped (back to
+        // "Create the video"); a server that just couldn't be reached keeps
+        // the result so the click can be retried.
+        if (error.expired) setLongMixResult(null);
+      }
+    },
+    chapters: longMixChapters,
+    runtime: longMixRuntime,
+    onOpenEditor: handleLongMixOpenInEditor,
+    onError: setErrorText,
+  };
+
   const editorTimelineContextValue = useMemo(() => ({
     timeline: editorTimeline,
     selectedClipId,
@@ -2427,6 +2602,7 @@ function App() {
           mediaProps={mediaProps}
           captionsProps={captionsProps}
           shortsProps={shortsProps}
+          longMixProps={longMixProps}
           resultUrl={resultUrl}
           shortsResults={shortsResults}
           selectedShortId={selectedShortId}

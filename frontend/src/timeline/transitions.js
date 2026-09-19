@@ -19,6 +19,31 @@ import { hasSpeedCurve, speedCurveOutputDuration } from './speedCurve.js';
 
 const ADJACENCY_EPSILON = 0.05;
 
+// The picker in RightPanel and the ffmpeg `xfade` filter selection in
+// backend/services/filterGraph/effects/transition.js must both draw from
+// this same id list - ids are sent to the backend as clip.transitionOut.type
+// and matched there against its own copy of this whitelist (untrusted project
+// JSON reaching an ffmpeg filtergraph string, so the backend never trusts an
+// id it doesn't recognize). Every id here is a real ffmpeg xfade transition
+// name, stable since ffmpeg 4.3 (avoid newer-only names like 'zoomin' - not
+// guaranteed present in every ffmpeg-static build).
+export const TRANSITION_TYPES = [
+  { id: 'fade', label: 'Fade' },
+  { id: 'fadeblack', label: 'Fade to Black' },
+  { id: 'dissolve', label: 'Dissolve' },
+  { id: 'wipeleft', label: 'Wipe Left' },
+  { id: 'wiperight', label: 'Wipe Right' },
+  { id: 'slideleft', label: 'Slide Left' },
+  { id: 'slideright', label: 'Slide Right' },
+  { id: 'circleopen', label: 'Circle Open' },
+  { id: 'circleclose', label: 'Circle Close' },
+  { id: 'pixelize', label: 'Pixelize' },
+];
+const TRANSITION_TYPE_IDS = new Set(TRANSITION_TYPES.map((t) => t.id));
+export function isKnownTransitionType(type) {
+  return TRANSITION_TYPE_IDS.has(type);
+}
+
 export function clipDuration(clip) {
   if (hasSpeedCurve(clip)) return Math.max(0, speedCurveOutputDuration(clip));
   return Math.max(0, (clip.trimmedEnd - clip.trimmedStart) / (clip.speed || 1));

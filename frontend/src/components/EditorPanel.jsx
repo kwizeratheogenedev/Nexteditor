@@ -1,6 +1,7 @@
 import { useMemo, useRef, useState } from 'react';
 import './EditorWorkspace.css';
 import CanvasSettingsMenu from './CanvasSettingsMenu';
+import { isVideoLikeClip, isImageClip } from '../timeline/clipKinds';
 
 const EditorIcon = ({ children }) => <svg viewBox="0 0 24 24" aria-hidden="true" fill="none" stroke="currentColor" strokeWidth="1.7" strokeLinecap="round" strokeLinejoin="round">{children}</svg>;
 
@@ -36,6 +37,16 @@ function EditorPanel({
   canvasSize, onCanvasSizeChange,
 }) {
   const [canvasSettingsOpen, setCanvasSettingsOpen] = useState(false);
+  // 'player' shows the editable view (drag handles on the selected overlay
+  // clip, click-to-reposition); 'preview' is a clean look at the actual
+  // composited frame with no edit chrome - useful for judging how a shot
+  // really looks without selection UI in the way.
+  const [viewMode, setViewMode] = useState('player');
+  // 'fit' scales the canvas to the available stage (previous/default
+  // behavior); '100' shows it at its true pixel size (canvasSize.width x
+  // height) inside a scrollable stage, matching CapCut/Premiere-style
+  // Fit vs 100% zoom presets.
+  const [zoomMode, setZoomMode] = useState('fit');
   // One card per unique imported SOURCE, not one per timeline clip - the
   // timeline can reference the same source many times (split, duplicate,
   // freeze-frame all add clip entries without importing anything new), so
@@ -46,7 +57,9 @@ function EditorPanel({
   const mediaClips = useMemo(() => {
     const bySource = new Map();
     timeline.forEach((clip) => {
-      if (clip.type !== 'video' && clip.type) return;
+      // Images are media in this panel exactly as video clips are - see
+      // timeline/clipKinds.js.
+      if (!isVideoLikeClip(clip)) return;
       const key = clip.sourceId || clip.id;
       if (!bySource.has(key)) bySource.set(key, clip);
     });
@@ -61,8 +74,9 @@ function EditorPanel({
   // mean anything. Reposition-by-dragging is the CapCut-familiar way to
   // place picture-in-picture content; this writes straight to the same
   // transform.x/y RightPanel's Position sliders already use, so both stay
-  // in sync automatically.
-  const isOverlayClip = selectedClip && (selectedClip.type === 'video' || !selectedClip.type) && (selectedClip.trackIndex || 0) > 0;
+  // in sync automatically. Gated to 'player' mode - 'preview' is meant to
+  // show the clean composite with no edit chrome, drag handles included.
+  const isOverlayClip = viewMode === 'player' && selectedClip && isVideoLikeClip(selectedClip) && (selectedClip.trackIndex || 0) > 0;
 
   const handleSeek = (event) => {
     if (!videoDuration) return;
@@ -112,17 +126,51 @@ function EditorPanel({
       {bannerVisible && <div className="editor-notice"><span><b>Local project</b> Changes stay in this browser session.</span><button type="button" onClick={onDismissBanner}>×</button></div>}
 
       <aside className="editor-media-library">
-        <div className="editor-library-tabs"><button type="button" className="is-active">Media</button><button type="button">Library</button></div>
+        {/* Only "Media" (locally imported clips) exists - no stock-media
+            library is wired up, so there's nothing a second tab would
+            switch to. A dead "Library" button that didn't do anything used
+            to sit here; removed rather than left as a non-functional
+            click target. */}
+        <div className="editor-library-tabs"><button type="button" className="is-active">Media</button></div>
         <div className="editor-library-toolbar"><strong>Local</strong><button type="button" onClick={onImportClick}>+ Import</button></div>
-        <input ref={fileInputRef} type="file" accept="video/*,audio/*" onChange={onUpload} className="sr-only-input" />
+        <input ref={fileInputRef} type="file" accept="video/*,audio/*,image/*" onChange={onUpload} className="sr-only-input" />
 
-        {mediaClips.length ? <div className="editor-media-grid">{mediaClips.map((clip, index) => <button type="button" key={clip.id} className={selectedClipId === clip.id ? 'is-active' : ''} onClick={() => onSelectClip?.(clip.id)}><div className="editor-media-thumb"><video src={clip.url} muted preload="metadata"/><span>{(clip.trimmedEnd - clip.trimmedStart).toFixed(1)}s</span></div><strong>{clip.file?.name || `Clip ${index + 1}`}</strong><small>Video · Added</small></button>)}</div> : <button type="button" className="editor-library-empty" onClick={onImportClick}><span><EditorIcon><path d="M12 16V4m0 0L8 8m4-4 4 4"/><path d="M5 15v4h14v-4"/></EditorIcon></span><strong>Import media</strong><small>Video or audio files from your device</small></button>}
+        {mediaClips.length ? <div className="editor-media-grid">{mediaClips.map((clip, index) => <button type="button" key={clip.id} className={selectedClipId === clip.id ? 'is-active' : ''} onClick={() => onSelectClip?.(clip.id)}><div className="editor-media-thumb">{isImageClip(clip) ? <img src={clip.url} alt="" style={{ width: '100%', height: '100%', objectFit: 'cover' }} /> : <video src={clip.url} muted preload="metadata"/>}<span>{(clip.trimmedEnd - clip.trimmedStart).toFixed(1)}s</span></div><strong>{clip.file?.name || `Clip ${index + 1}`}</strong><small>{isImageClip(clip) ? 'Image · Added' : 'Video · Added'}</small></button>)}</div> : <button type="button" className="editor-library-empty" onClick={onImportClick}><span><EditorIcon><path d="M12 16V4m0 0L8 8m4-4 4 4"/><path d="M5 15v4h14v-4"/></EditorIcon></span><strong>Import media</strong><small>Video, audio or image files from your device</small></button>}
       </aside>
 
       <section className="editor-canvas-area">
-        <header className="editor-canvas-toolbar" style={{ position: 'relative' }}><div><button type="button" className="is-active">Player</button><button type="button">Preview</button></div><div><span>Fit</span><button type="button">100%</button><button type="button" title="Canvas settings" onClick={() => setCanvasSettingsOpen((v) => !v)}>•••</button>{canvasSettingsOpen && <CanvasSettingsMenu canvasSize={canvasSize} onChange={onCanvasSizeChange} onClose={() => setCanvasSettingsOpen(false)} />}</div></header>
-        <div className="editor-player-stage">
-          {hasContent ? <div className="editor-player-frame"><canvas ref={canvasRef} onMouseDown={handleOverlayDragStart} style={{ width:'100%', height:'100%', objectFit:'contain', cursor: isOverlayClip ? 'move' : 'default' }} /><span className="editor-transform-corner top-left"/><span className="editor-transform-corner top-right"/><span className="editor-transform-corner bottom-left"/><span className="editor-transform-corner bottom-right"/></div> : <div className="editor-canvas-empty"><span><EditorIcon><rect x="3" y="5" width="18" height="14" rx="2"/><path d="m10 9 5 3-5 3z"/></EditorIcon></span><h2>Start creating</h2><p>Import a video to add it to your timeline.</p><button type="button" onClick={onImportClick}>Import media</button></div>}
+        <header className="editor-canvas-toolbar" style={{ position: 'relative' }}>
+          <div>
+            <button type="button" className={viewMode === 'player' ? 'is-active' : ''} onClick={() => setViewMode('player')}>Player</button>
+            <button type="button" className={viewMode === 'preview' ? 'is-active' : ''} onClick={() => setViewMode('preview')} title="Clean view of the composited frame, no selection handles">Preview</button>
+          </div>
+          <div>
+            <button type="button" className={zoomMode === 'fit' ? 'is-active' : ''} onClick={() => setZoomMode('fit')}>Fit</button>
+            <button type="button" className={zoomMode === '100' ? 'is-active' : ''} onClick={() => setZoomMode('100')} title="Show the canvas at its true pixel size">100%</button>
+            <button type="button" title="Canvas settings" onClick={() => setCanvasSettingsOpen((v) => !v)}>•••</button>
+            {canvasSettingsOpen && <CanvasSettingsMenu canvasSize={canvasSize} onChange={onCanvasSizeChange} onClose={() => setCanvasSettingsOpen(false)} />}
+          </div>
+        </header>
+        <div className="editor-player-stage" style={{ overflow: 'auto' }}>
+          {hasContent ? (
+            <div
+              className="editor-player-frame"
+              style={zoomMode === '100' ? { display: 'block', width: canvasSize?.width || 1920, height: canvasSize?.height || 1080, maxWidth: 'none' } : undefined}
+            >
+              <canvas
+                ref={canvasRef}
+                onMouseDown={handleOverlayDragStart}
+                style={zoomMode === '100'
+                  ? { width: canvasSize?.width || 1920, height: canvasSize?.height || 1080, display: 'block', cursor: isOverlayClip ? 'move' : 'default' }
+                  : { width: '100%', height: '100%', objectFit: 'contain', cursor: isOverlayClip ? 'move' : 'default' }}
+              />
+              {viewMode === 'player' && (
+                <>
+                  <span className="editor-transform-corner top-left"/><span className="editor-transform-corner top-right"/><span className="editor-transform-corner bottom-left"/><span className="editor-transform-corner bottom-right"/>
+                </>
+              )}
+            </div>
+          ) : <div className="editor-canvas-empty"><span><EditorIcon><rect x="3" y="5" width="18" height="14" rx="2"/><path d="m10 9 5 3-5 3z"/></EditorIcon></span><h2>Start creating</h2><p>Import a video to add it to your timeline.</p><button type="button" onClick={onImportClick}>Import media</button></div>}
         </div>
         <footer className="editor-canvas-footer"><span>Preview quality</span><b>{canvasSize?.resolutionId ? canvasSize.resolutionId : `${canvasSize?.height || 1080}p`}</b><i/><span>Canvas</span><b>{canvasSize?.aspectRatioId || '16:9'}</b></footer>
       </section>

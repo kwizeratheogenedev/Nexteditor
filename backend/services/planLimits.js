@@ -1,3 +1,5 @@
+import { isOwnerEmail } from './owners.js';
+
 // Free-tier numeric caps (confirmed defaults - see the plan's "Open
 // decisions" section). Easy to retune later since these are just config
 // values, not architecture.
@@ -7,7 +9,14 @@ export const FREE_MONTHLY_EXPORT_LIMIT = 5;
 export const FREE_STORAGE_BYTES_LIMIT = 2 * 1024 * 1024 * 1024;
 const PERIOD_MS = 30 * 24 * 60 * 60 * 1000;
 
+// The single answer to "does this account skip free-tier limits?", used by
+// every gate (export length, monthly export quota, storage, Pro-only
+// resolutions, adjustment layers, project count). Owner accounts - the ones
+// the app is run from, listed in OWNER_EMAILS - are always Pro, checked
+// against the email rather than the stored subscription so no DB state can
+// leave the owner capped.
 export function isPro(user) {
+  if (isOwnerEmail(user?.email)) return true;
   return user?.subscription?.plan === 'pro' && user?.subscription?.status !== 'canceled';
 }
 

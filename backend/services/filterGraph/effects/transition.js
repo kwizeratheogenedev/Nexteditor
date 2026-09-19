@@ -3,6 +3,24 @@ import { silentAudio } from './audio.js';
 
 const ADJACENCY_EPSILON = 0.05;
 
+// clip.transitionOut.type is client-supplied project data (frontend
+// localStorage / a saved Project doc) that lands directly inside an ffmpeg
+// filtergraph string below - only ever pass through a value from this
+// whitelist, anything else (missing, tampered, or from an older/newer build)
+// falls back to 'fade' rather than being interpolated raw into the filter.
+// Mirrors frontend/src/timeline/transitions.js's TRANSITION_TYPES ids; keep
+// both lists in sync. Every id here is a real ffmpeg xfade transition name,
+// stable since ffmpeg 4.3.
+const XFADE_TRANSITION_TYPES = new Set([
+  'fade', 'fadeblack', 'dissolve',
+  'wipeleft', 'wiperight', 'slideleft', 'slideright',
+  'circleopen', 'circleclose', 'pixelize',
+]);
+
+function resolveXfadeType(type) {
+  return XFADE_TRANSITION_TYPES.has(type) ? type : 'fade';
+}
+
 // A black/silent filler segment for a gap between two lane-0 clips - since
 // M7 clips are freely positioned (absolute startTime) instead of always
 // touching, the base program can now have real gaps that must render as
@@ -57,8 +75,9 @@ export function chainVideoClips(graph, videoClips, videoLabels, audioLabels, cli
 
     if (transitionDuration > 0) {
       const offset = videoAccDuration - transitionDuration;
+      const xfadeType = resolveXfadeType(prevSegment.clip?.transitionOut?.type);
       const vOut = graph.label('xfade');
-      graph.addNode(`xfade=transition=fade:duration=${transitionDuration.toFixed(3)}:offset=${offset.toFixed(3)}`, [videoAcc, segment.video], vOut);
+      graph.addNode(`xfade=transition=${xfadeType}:duration=${transitionDuration.toFixed(3)}:offset=${offset.toFixed(3)}`, [videoAcc, segment.video], vOut);
       videoAcc = vOut;
 
       const aOut = graph.label('axfade');

@@ -306,11 +306,63 @@ function clipColorStyle(hex) {
   };
 }
 
+// A still image's timeline block shows the picture itself, tiled across the
+// block's width so a longer clip reads like the filmstrip a video clip
+// gets. No decode pass needed (unlike waveforms/filmstrips) - the browser
+// already has the bitmap from the same object URL the preview draws.
+function ClipStill({ clip, width, height }) {
+  const source = clip.url || clip.remoteUrl;
+  if (!source) return null;
+  const cellWidth = Math.max(60, Math.min(120, width));
+  return (
+    <div
+      className="timeline-clip-filmstrip"
+      style={{
+        width: `${width}px`,
+        height: `${height}px`,
+        backgroundImage: `url(${source})`,
+        backgroundSize: `${cellWidth}px ${height}px`,
+        backgroundRepeat: 'repeat-x',
+      }}
+    />
+  );
+}
+
+// True once the element has actually been scrolled into view, and it stays
+// true afterward. The waveform/filmstrip/still behind each clip block is
+// the expensive part of a timeline row, and a long-mix project can hold a
+// hundred-plus clips of which only a handful are on screen - so they're
+// only built for blocks the user has actually scrolled to. Deliberately an
+// IntersectionObserver rather than deriving visibility from scroll
+// position: the timeline's horizontal scrolling is handled by direct DOM
+// mutation precisely to avoid a re-render per scroll tick (see
+// handleTrackSurfaceScroll), and reading scrollLeft into React state here
+// would undo that.
+function useInViewport(ref) {
+  // Without IntersectionObserver (an old browser, a test environment)
+  // everything is simply treated as visible from the start - the strips are
+  // an enhancement, never a requirement for the clip block to work.
+  const [visible, setVisible] = useState(() => typeof IntersectionObserver !== 'function');
+  useEffect(() => {
+    const node = ref.current;
+    if (!node || visible) return undefined;
+    const observer = new IntersectionObserver((entries) => {
+      if (entries.some((entry) => entry.isIntersecting)) setVisible(true);
+    }, { rootMargin: '200px' });
+    observer.observe(node);
+    return () => observer.disconnect();
+  }, [ref, visible]);
+  return visible;
+}
+
 function ClipBlock({ clip, pxPerSecond, isSelected, isMultiSelected, locked, onSelect, onDragStart, onTrimStart, onTrimEnd }) {
   const left = clip.startTime * pxPerSecond;
   const width = Math.max(40, clip.duration * pxPerSecond);
+  const blockRef = useRef(null);
+  const inView = useInViewport(blockRef);
   return (
     <div
+      ref={blockRef}
       className={`timeline-clip timeline-clip-${clip.type} ${isSelected ? 'timeline-clip-selected' : ''} ${isMultiSelected ? 'timeline-clip-multi-selected' : ''} ${locked ? 'timeline-clip-locked' : ''} ${clip.enabled === false ? 'timeline-clip-disabled' : ''} ${clip.groupId ? 'timeline-clip-grouped' : ''}`}
       style={{ position: 'absolute', left: `${left}px`, width: `${width}px`, top: 0, bottom: 0, ...clipColorStyle(clip.color) }}
       title={[clip.label, clip.enabled === false && '(disabled)', clip.reversed && '(reversed)', clip.frozen && '(frozen)'].filter(Boolean).join(' ')}
@@ -319,8 +371,9 @@ function ClipBlock({ clip, pxPerSecond, isSelected, isMultiSelected, locked, onS
       onContextMenu={(e) => e.stopPropagation()}
     >
       <span className="timeline-clip-handle timeline-clip-handle-left" onMouseDown={(e) => { e.stopPropagation(); if (!locked) onTrimStart?.(e, clip.id, 'left'); }} />
-      {clip.type === 'audio' && <ClipWaveform clip={clip} width={width} height={LANE_ROW_HEIGHT} />}
-      {clip.type === 'video' && <ClipFilmstrip clip={clip} width={width} height={LANE_ROW_HEIGHT} />}
+      {inView && clip.type === 'audio' && <ClipWaveform clip={clip} width={width} height={LANE_ROW_HEIGHT} />}
+      {inView && clip.type === 'video' && <ClipFilmstrip clip={clip} width={width} height={LANE_ROW_HEIGHT} />}
+      {inView && clip.type === 'image' && <ClipStill clip={clip} width={width} height={LANE_ROW_HEIGHT} />}
       <span className="timeline-clip-label">{clip.label}</span>
       <span className="timeline-clip-duration">{formatTime(clip.duration)}</span>
       <span className="timeline-clip-handle timeline-clip-handle-right" onMouseDown={(e) => { e.stopPropagation(); if (!locked) onTrimEnd?.(e, clip.id, 'right'); }} />

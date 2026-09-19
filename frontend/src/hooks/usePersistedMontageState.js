@@ -84,6 +84,7 @@ export function usePersistedMontageState(sessionId = '') {
   const [colorBoost, setColorBoost] = useState(false);
   const [smoothTransitions, setSmoothTransitions] = useState(true);
   const [contrastPolish, setContrastPolish] = useState(true);
+  const [skipStartSeconds, setSkipStartSeconds] = useState(40);
 
   const [restored, setRestored] = useState(false);
 
@@ -152,6 +153,7 @@ export function usePersistedMontageState(sessionId = '') {
           setColorBoost(processingState.colorBoost || false);
           setSmoothTransitions(processingState.smoothTransitions ?? true);
           setContrastPolish(processingState.contrastPolish ?? true);
+          setSkipStartSeconds(processingState.skipStartSeconds ?? 40);
         }
 
         setRestored(true);
@@ -199,6 +201,7 @@ export function usePersistedMontageState(sessionId = '') {
         colorBoost,
         smoothTransitions,
         contrastPolish,
+        skipStartSeconds,
       };
 
       try {
@@ -209,7 +212,7 @@ export function usePersistedMontageState(sessionId = '') {
     }, 100);
 
     return () => clearTimeout(timer);
-  }, [restored, videos, audio, mergeStatus, mergeProgress, mergeStageText, mergeTotalEstimatedTime, mergeTimeSpent, mergeTimeLeft, mergeError, mergeJobId, outputFile, hasRealProgress, lastProgressUpdate, syncMode, tempoSensitivity, videoQuality, beautyStyle, enhanceMotion, colorBoost, smoothTransitions, contrastPolish]);
+  }, [restored, videos, audio, mergeStatus, mergeProgress, mergeStageText, mergeTotalEstimatedTime, mergeTimeSpent, mergeTimeLeft, mergeError, mergeJobId, outputFile, hasRealProgress, lastProgressUpdate, syncMode, tempoSensitivity, videoQuality, beautyStyle, enhanceMotion, colorBoost, smoothTransitions, contrastPolish, skipStartSeconds]);
 
   const updateVideo = useCallback((index, updater) => {
     setVideos((prev) => {
@@ -241,6 +244,7 @@ export function usePersistedMontageState(sessionId = '') {
     setColorBoost(false);
     setSmoothTransitions(true);
     setContrastPolish(true);
+    setSkipStartSeconds(40);
 
     for (let i = 0; i < 3; i += 1) {
       localStorage.removeItem(`${STORAGE_PREFIX}video_${i}`);
@@ -295,6 +299,8 @@ export function usePersistedMontageState(sessionId = '') {
     setSmoothTransitions,
     contrastPolish,
     setContrastPolish,
+    skipStartSeconds,
+    setSkipStartSeconds,
     clearAll,
     restored,
   };

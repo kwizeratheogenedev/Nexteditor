@@ -1,14 +1,13 @@
 import { buildKeyframeExpr, hasKeyframes } from './keyframeExpr.js';
+import { applyChromaKey } from './chromaKey.js';
 
 // Applies the clip's Basic-tab transform (scale/rotation/flip/position/
 // opacity), animated via keyframes when present. A clip with no meaningful
 // adjustment beyond a possible flip takes a cheap "fit to canvas" path (the
 // same scale+pad pattern already used elsewhere in this codebase); a clip
-// with position/opacity/rotation changes (static or keyframed) is
+// with scale/position/opacity/rotation changes (static or keyframed) is
 // composited onto a canvas-sized background so those adjustments are
-// visible even without another layer to place it against. Scale isn't
-// keyframeable yet - see the note in
-// frontend/src/hooks/usePersistedEditorState.js normalizeClip.
+// visible even without another layer to place it against.
 //
 // `transparent: true` (overlay-lane clips, M8) uses a fully transparent
 // background instead of black and always goes through the full
@@ -32,14 +31,31 @@ export function applyVideoTransform(graph, inputLabel, clip, canvas, outputDurat
   const opacityKeyframed = hasKeyframes(kf, 'opacity');
   const xKeyframed = hasKeyframes(kf, 'x');
   const yKeyframed = hasKeyframes(kf, 'y');
+  const scaleXKeyframed = hasKeyframes(kf, 'scaleX');
+  const scaleYKeyframed = hasKeyframes(kf, 'scaleY');
+  const scaleKeyframed = scaleXKeyframed || scaleYKeyframed;
 
   const hasFlip = scaleX < 0 || scaleY < 0;
-  const hasScale = Math.abs(Math.abs(scaleX) - 1) > 0.001 || Math.abs(Math.abs(scaleY) - 1) > 0.001;
+  const hasScale = scaleKeyframed
+    || Math.abs(Math.abs(scaleX) - 1) > 0.001
+    || Math.abs(Math.abs(scaleY) - 1) > 0.001;
   const hasRotation = rotationKeyframed || Math.abs(rotation) > 0.01;
   const hasOpacity = opacityKeyframed || opacity < 0.999;
   const hasPosition = xKeyframed || yKeyframed || Math.abs(posX) > 0.01 || Math.abs(posY) > 0.01;
+  const hasChromaKey = Boolean((clip.filters || []).find((f) => f.type === 'chromaKey' && f.enabled !== false));
 
   let current = inputLabel;
+  // Applied first, before flip/scale/rotate, so the alpha it produces
+  // survives the rest of this chain and resolves against the real
+  // background at the end (opaque black for lane 0 - nothing behind a
+  // keyed-out pixel to show - or the transparent overlay background for
+  // lane 1+, letting the lane below show through: the actual green-screen
+  // use case). This is also why chroma key always forces the full
+  // compositing path below instead of the cheap fit shortcut, which has no
+  // alpha channel to resolve into.
+  if (hasChromaKey) {
+    current = applyChromaKey(graph, current, clip);
+  }
   if (hasFlip) {
     const flipFilters = [];
     if (scaleX < 0) flipFilters.push('hflip');
@@ -56,7 +72,7 @@ export function applyVideoTransform(graph, inputLabel, clip, canvas, outputDurat
   // extractShorts.js/reformatShort.js precedent for the same crop pattern).
   const isCover = canvas.fitMode === 'cover';
 
-  if (!transparent && !hasScale && !hasRotation && !hasOpacity && !hasPosition) {
+  if (!transparent && !hasScale && !hasRotation && !hasOpacity && !hasPosition && !hasChromaKey) {
     const out = graph.label('fit');
     const fitFilter = isCover
       ? `scale=${canvas.width}:${canvas.height}:force_original_aspect_ratio=increase,crop=${canvas.width}:${canvas.height},setsar=1`
@@ -65,14 +81,54 @@ export function applyVideoTransform(graph, inputLabel, clip, canvas, outputDurat
     return out;
   }
 
-  const magnitude = Math.max(0.05, Math.min(4, Math.abs(scaleX) || 1));
-  const scaledW = Math.max(2, Math.round(canvas.width * magnitude));
-  const scaledH = Math.max(2, Math.round(canvas.height * magnitude));
   const scaleOut = graph.label('scale');
-  const scaleFilter = isCover
-    ? `scale=${scaledW}:${scaledH}:force_original_aspect_ratio=increase,crop=${scaledW}:${scaledH}`
-    : `scale=${scaledW}:${scaledH}:force_original_aspect_ratio=decrease`;
-  graph.addNode(scaleFilter, current, scaleOut);
+  if (scaleKeyframed) {
+    // Keyframed scale (the Ken Burns / pan-zoom case - see the Animate
+    // presets in frontend/src/components/RightPanel.jsx) can't use the
+    // fixed scale+crop pair below, because the target size now changes on
+    // every frame. `scale` supports exactly that through `eval=frame`,
+    // which re-evaluates its w/h expressions per frame using the filter's
+    // own `t` (clip-local, since trim/setpts already rebased this stream to
+    // 0) - empirically verified against the bundled ffmpeg, including that
+    // the following `overlay` happily takes a second input whose size
+    // changes frame to frame. zoompan was tried first and dropped: it
+    // silently discards the alpha channel, which would have turned every
+    // animated overlay-lane clip into an opaque black box over the program.
+    //
+    // The expression is the export-side mirror of the preview's own
+    // `drawW = vw * fitScale * scaleX` (see drawVideoEntry in
+    // frontend/src/timeline/useTimelinePlayer.js): `fit` is that same
+    // contain/cover fit factor, expressed in ffmpeg's iw/ih terms so it
+    // adapts to whatever the real source dimensions turn out to be, and the
+    // result is rounded down to an even size (odd dimensions break chroma
+    // subsampling on the encode). No `force_original_aspect_ratio`/`crop`
+    // here: w and h are computed exactly, and anything spilling past the
+    // canvas is clipped by the overlay onto the canvas-sized background
+    // below - the same thing the static path's crop does.
+    const fit = isCover
+      ? `max(${canvas.width}/iw,${canvas.height}/ih)`
+      : `min(${canvas.width}/iw,${canvas.height}/ih)`;
+    const staticMagnitudeX = Math.max(0.05, Math.min(4, Math.abs(scaleX) || 1));
+    const staticMagnitudeY = Math.max(0.05, Math.min(4, Math.abs(scaleY) || 1));
+    // A clip can animate one axis and hold the other static - matching the
+    // preview, which resolves scaleX and scaleY independently.
+    const sxExpr = scaleXKeyframed ? `abs(${buildKeyframeExpr(kf.scaleX)})` : String(staticMagnitudeX);
+    const syExpr = scaleYKeyframed ? `abs(${buildKeyframeExpr(kf.scaleY)})` : String(staticMagnitudeY);
+    const evenExpr = (dimension, fitFactor, magnitudeExpr) => `max(2,trunc(${dimension}*${fitFactor}*(${magnitudeExpr})/2)*2)`;
+    graph.addNode(
+      `scale=w='${evenExpr('iw', fit, sxExpr)}':h='${evenExpr('ih', fit, syExpr)}':eval=frame`,
+      current,
+      scaleOut,
+    );
+  } else {
+    const magnitude = Math.max(0.05, Math.min(4, Math.abs(scaleX) || 1));
+    const scaledW = Math.max(2, Math.round(canvas.width * magnitude));
+    const scaledH = Math.max(2, Math.round(canvas.height * magnitude));
+    const scaleFilter = isCover
+      ? `scale=${scaledW}:${scaledH}:force_original_aspect_ratio=increase,crop=${scaledW}:${scaledH}`
+      : `scale=${scaledW}:${scaledH}:force_original_aspect_ratio=decrease`;
+    graph.addNode(scaleFilter, current, scaleOut);
+  }
   current = scaleOut;
 
   if (hasRotation) {

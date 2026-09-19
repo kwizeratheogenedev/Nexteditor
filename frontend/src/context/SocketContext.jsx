@@ -14,7 +14,13 @@ function getSocketUrlCandidates() {
 
   const protocol = window.location.protocol;
   const host = window.location.hostname;
+  const isLocal = host === 'localhost' || host === '127.0.0.1';
   const fallbackUrls = [
+    // Reached from another device, "host:3000" isn't necessarily routable -
+    // only this page's own origin is. Vite's dev proxy forwards /socket.io on
+    // that same origin to the real backend, so try it first when not on
+    // localhost.
+    ...(isLocal ? [] : [window.location.origin]),
     `${protocol}//${host}:3000`,
     `${protocol}//localhost:3000`,
     `${protocol}//127.0.0.1:3000`,

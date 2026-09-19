@@ -5,8 +5,13 @@ const getApiBaseUrl = () => {
 
   if (typeof window !== 'undefined') {
     const host = window.location.hostname;
+    // Reached from another device on the network, "host:3000" isn't
+    // necessarily routable - but this page's own origin always is. Vite's dev
+    // proxy (see vite.config.js) forwards /api on that same origin to the
+    // real backend on localhost:3000, so a relative base works for both plain
+    // localhost dev and LAN access.
     if (host && host !== 'localhost' && host !== '127.0.0.1') {
-      return `${window.location.protocol}//${host}:3000`;
+      return '';
     }
   }
 

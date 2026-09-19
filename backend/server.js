@@ -23,6 +23,7 @@ import billingCardsRouter from './routes/billingCards.js';
 import { jobStore, deleteJob } from './services/jobStore.js';
 import { initSocket, isOriginAllowed } from './socket.js';
 import { connectDB } from './db.js';
+import { ownerEmails } from './services/owners.js';
 
 const __filename = fileURLToPath(import.meta.url);
 const __dirname = path.dirname(__filename);
@@ -104,10 +105,17 @@ app.use((err, req, res, next) => {
   return next(err);
 });
 
+// Finished renders stay downloadable for a day by default: a long LongMix
+// render can finish while the user is away, and deleting it an hour later
+// (the old blanket limit) meant coming back to a Download button that led
+// nowhere. Temporary uploads still go after an hour.
+const CLIPS_RETENTION_MS = (Number(process.env.CLIPS_RETENTION_HOURS) > 0 ? Number(process.env.CLIPS_RETENTION_HOURS) : 24) * 60 * 60 * 1000;
+const UPLOADS_RETENTION_MS = 60 * 60 * 1000;
+
 setInterval(() => {
   const now = Date.now();
 
-  [clipsDir, uploadsDir].forEach((dir) => {
+  [[clipsDir, CLIPS_RETENTION_MS], [uploadsDir, UPLOADS_RETENTION_MS]].forEach(([dir, retentionMs]) => {
     if (!fs.existsSync(dir)) {
       return;
     }
@@ -125,7 +133,7 @@ setInterval(() => {
       if (stats.isDirectory()) {
         return;
       }
-      if (now - stats.mtime.getTime() > 60 * 60 * 1000) {
+      if (now - stats.mtime.getTime() > retentionMs) {
         try {
           fs.unlinkSync(filePath);
         } catch (_err) {}
@@ -154,6 +162,13 @@ function startServer(p, attempts = 0,hos ='0.0.0.0') {
   serverInstance.listen(p, hos)
     .once('listening', () => {
       console.log(`Video processing backend is listening on port ${p}`);
+      // Printed at startup so "why am I being charged free-tier limits?"
+      // is answerable by looking at the terminal instead of guessing: if
+      // this line is empty, OWNER_EMAILS never reached the process.
+      const owners = ownerEmails();
+      console.log(owners.length
+        ? `Owner accounts (no free-tier limits): ${owners.join(', ')}`
+        : 'No owner accounts configured - set OWNER_EMAILS in backend/.env to exempt your own account from free-tier limits.');
     })
     .once('error', (err) => {
       if (err && err.code === 'EADDRINUSE' && !explicitPort && attempts < 5) {

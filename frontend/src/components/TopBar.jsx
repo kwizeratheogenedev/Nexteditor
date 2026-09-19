@@ -54,7 +54,7 @@ function TopBar({ activeTab, onExport, exporting = false, exportProgress = 0, pr
       </div>
 
       <div className="topbar-right">
-        <span className="topbar-pill">{activeTab === 'editor' ? 'Editor Mode' : activeTab === 'media' ? 'Montage Mode' : activeTab === 'shorts' ? 'Shorts Mode' : 'Captions Mode'}</span>
+        <span className="topbar-pill">{activeTab === 'editor' ? 'Editor Mode' : activeTab === 'media' ? 'Montage Mode' : activeTab === 'shorts' ? 'Shorts Mode' : activeTab === 'longmix' ? 'LongMix Studio' : 'Captions Mode'}</span>
         {activeTab === 'editor' && (
           <>
             <span className="topbar-pill">{canvasSize?.resolutionId || `${canvasSize?.height || 1080}p`}</span>

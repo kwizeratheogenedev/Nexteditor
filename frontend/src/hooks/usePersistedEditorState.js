@@ -40,15 +40,16 @@ function defaultTransform() {
 }
 
 // Per-property keyframe tracks (clip-local time, i.e. 0 = the clip's first
-// visible output frame). Position/rotation/opacity are keyframeable; scale
-// isn't yet - animating it requires a fundamentally different ffmpeg
-// technique (zoompan or a pre-scaled-buffer + crop-window animation) since a
-// single video stream can't vary frame dimensions over time the way
-// position/rotation/opacity can vary as plain per-frame expressions.
+// visible output frame). Position, rotation, opacity and scale are all
+// keyframeable: scaleX/scaleY export through `scale`'s eval=frame mode,
+// which re-evaluates the target size per frame (see
+// backend/services/filterGraph/effects/transform.js) - that's what makes a
+// Ken Burns move on a still image possible, and it's driven by ordinary
+// keyframes rather than a fixed hardcoded zoom.
 function defaultKeyframes() {
   // `speed` points are in SOURCE-local time (0 = trimmedStart) and step
   // (not interpolate) the playback speed - see timeline/speedCurve.js.
-  return { x: [], y: [], rotation: [], opacity: [], volume: [], speed: [] };
+  return { x: [], y: [], rotation: [], opacity: [], volume: [], speed: [], scaleX: [], scaleY: [] };
 }
 
 export function createSourceId() {
@@ -81,6 +82,12 @@ export function normalizeClip(clip) {
     volume: 1,
     muted: false,
     audioFade: { in: 0, out: 0 },
+    // Auto-ducking (audio-track clips only, i.e. music/voiceover added via
+    // the Audio track - see RightPanel's Audio tab): when enabled, this
+    // clip's volume automatically lowers whenever there's other audio
+    // playing elsewhere in the mix. `amount` (0-100) controls how hard it
+    // ducks - see backend/services/filterGraph/effects/ducking.js.
+    duck: { enabled: false, amount: 70 },
     transitionOut: null,
     // M11: groupId links clips selected/dragged as one unit (null = not
     // grouped); enabled:false skips the clip in preview/export without
@@ -141,11 +148,43 @@ export function createAdjustmentClip({ id, trackIndex = 0, startTime = 0, durati
   });
 }
 
+// Still-image clips live on a VIDEO lane and behave like video clips
+// everywhere else (see timeline/clipKinds.js), with one difference that
+// shapes this factory: an image has no intrinsic duration, so how long it
+// stays on screen is purely a placement decision. `duration` is that
+// choice - trimmedStart/trimmedEnd are a 0..duration span the user can
+// trim or extend freely afterward, exactly like any other clip's handles.
+// `motionKeyframes` carries the Ken Burns move it's dropped in with (see
+// timeline/motionPresets.js) so a still is never a dead static frame by
+// default - just a normal, editable keyframe set.
+export function createImageClip({ id, sourceId, file, url, trackIndex = 0, startTime = 0, duration = 5, motionKeyframes, label, transitionOut = null } = {}) {
+  return normalizeClip({
+    id: id || `image-${Date.now()}-${Math.random().toString(16).slice(2)}`,
+    type: 'image',
+    sourceId,
+    file,
+    url,
+    trackIndex,
+    startTime,
+    duration,
+    trimmedStart: 0,
+    trimmedEnd: duration,
+    label,
+    transitionOut,
+    ...(motionKeyframes ? { keyframes: motionKeyframes } : {}),
+  });
+}
+
 // Standalone audio-track clips (music/voiceover) - independent source media.
 // trimmedStart/trimmedEnd are the real source in/out point (which portion of
 // the audio file plays); startTime/trackIndex place it on the timeline,
 // independent of that source range.
-export function createAudioClip({ id, sourceId, file, url, trackIndex = 0, startTime = 0, trimmedStart = 0, trimmedEnd }) {
+// `chapterTitle` is set when the clip is a song in a long mix (see
+// timeline/longMix.js): the YouTube chapter list is derived from the live
+// timeline's own audio clips rather than kept as a separate document, so
+// the titles have to travel on the clips themselves - that's what keeps the
+// copied chapter timestamps from ever drifting away from the real export.
+export function createAudioClip({ id, sourceId, file, url, trackIndex = 0, startTime = 0, trimmedStart = 0, trimmedEnd, audioFade, chapterTitle }) {
   return normalizeClip({
     id: id || `audio-${Date.now()}-${Math.random().toString(16).slice(2)}`,
     type: 'audio',
@@ -156,6 +195,8 @@ export function createAudioClip({ id, sourceId, file, url, trackIndex = 0, start
     startTime,
     trimmedStart,
     trimmedEnd,
+    ...(audioFade ? { audioFade } : {}),
+    ...(chapterTitle ? { chapterTitle } : {}),
   });
 }
 

@@ -2,8 +2,10 @@ import { useEffect, useMemo, useState } from 'react';
 import { useEditorTimeline, useEditorPlayback, useSelectedEditorClip } from '../context/EditorStateContext';
 import { resolveKeyframedValue, upsertKeyframe, removeKeyframeNear, findKeyframeNear, getClipStartTime } from '../timeline/keyframes';
 import { COLOR_PRESETS, findMatchingPresetId } from '../timeline/colorPresets';
-import { expectedTransitionStart } from '../timeline/transitions';
+import { expectedTransitionStart, TRANSITION_TYPES, clipDuration as clipOutputDuration } from '../timeline/transitions';
 import { hasSpeedCurve, sourceTimeForOutputElapsed, currentSegmentSpeed } from '../timeline/speedCurve';
+import { MOTION_PRESETS, applyMotionPreset, clearMotionPreset } from '../timeline/motionPresets';
+import { isVideoLikeClip, isImageClip } from '../timeline/clipKinds';
 
 function PropertyRow({ label, value, keyframeButton, children }) {
   return (
@@ -40,9 +42,19 @@ const CLIP_COLOR_PRESETS = ['#ef4444', '#f59e0b', '#eab308', '#22c55e', '#06b6d4
 
 const DEFAULT_TRANSFORM = { x: 0, y: 0, scaleX: 1, scaleY: 1, rotation: 0, opacity: 1 };
 const DEFAULT_COLOR_PARAMS = { brightness: 0, contrast: 0, saturation: 0, temperature: 0 };
+const DEFAULT_CHROMA_KEY_PARAMS = { color: '#00ff00', similarity: 35, blend: 15 };
+const CHROMA_KEY_PRESETS = [
+  { label: 'Green', color: '#00ff00' },
+  { label: 'Blue', color: '#0000ff' },
+];
 const DEFAULT_TEXT_STYLE = { content: '', fontFamily: 'Inter, sans-serif', fontSize: 64, color: '#ffffff', align: 'center' };
-const DEFAULT_KEYFRAMES = { x: [], y: [], rotation: [], opacity: [], volume: [], speed: [] };
+const DEFAULT_KEYFRAMES = { x: [], y: [], rotation: [], opacity: [], volume: [], speed: [], scaleX: [], scaleY: [] };
 const KEYFRAME_PROPS = ['x', 'y', 'rotation', 'opacity'];
+// Scale is keyframeable too, but through its own commit path: the panel has
+// a single Scale slider driving both axes, and the flip toggles own the
+// sign of transform.scaleX/scaleY, so the keyframe tracks carry magnitude
+// only and always move as a pair (see commitBasic/toggleScaleKeyframe).
+const SCALE_KEYFRAME_PROPS = ['scaleX', 'scaleY'];
 
 function findColorFilter(filters) {
   return (filters || []).find((filter) => filter.type === 'color') || { id: 'color', type: 'color', enabled: true, params: DEFAULT_COLOR_PARAMS };
@@ -50,6 +62,10 @@ function findColorFilter(filters) {
 
 function findVignetteFilter(filters) {
   return (filters || []).find((filter) => filter.type === 'vignette') || { id: 'vignette', type: 'vignette', enabled: true, params: { intensity: 0 } };
+}
+
+function findChromaKeyFilter(filters) {
+  return (filters || []).find((filter) => filter.type === 'chromaKey') || { id: 'chromaKey', type: 'chromaKey', enabled: false, params: DEFAULT_CHROMA_KEY_PARAMS };
 }
 
 // Defensive against clips missing the newer transform/filters/speed/volume
@@ -63,8 +79,9 @@ function draftFromClip(clip, clipLocalTime) {
       basic: { scale: 100, opacity: 100, rotation: 0, x: 0, y: 0, flipH: false, flipV: false },
       color: { ...DEFAULT_COLOR_PARAMS },
       vignette: 0,
+      chromaKey: { enabled: false, ...DEFAULT_CHROMA_KEY_PARAMS },
       speed: 1,
-      audio: { volume: 100, fadeIn: 0, fadeOut: 0, muted: false },
+      audio: { volume: 100, fadeIn: 0, fadeOut: 0, muted: false, duckEnabled: false, duckAmount: 70 },
       text: { ...DEFAULT_TEXT_STYLE },
       transitionOut: 0,
     };
@@ -73,10 +90,12 @@ function draftFromClip(clip, clipLocalTime) {
   const kf = { ...DEFAULT_KEYFRAMES, ...clip.keyframes };
   const color = { ...DEFAULT_COLOR_PARAMS, ...findColorFilter(clip.filters).params };
   const vignette = findVignetteFilter(clip.filters).params.intensity || 0;
+  const chromaKeyFilter = findChromaKeyFilter(clip.filters);
+  const chromaKey = { enabled: chromaKeyFilter.enabled === true, ...DEFAULT_CHROMA_KEY_PARAMS, ...chromaKeyFilter.params };
   const opacity01 = resolveKeyframedValue(kf.opacity, clipLocalTime, t.opacity);
   return {
     basic: {
-      scale: Math.round(Math.abs(t.scaleX) * 100),
+      scale: Math.round(resolveKeyframedValue(kf.scaleX, clipLocalTime, Math.abs(t.scaleX)) * 100),
       opacity: Math.round(opacity01 * 100),
       rotation: resolveKeyframedValue(kf.rotation, clipLocalTime, t.rotation),
       x: resolveKeyframedValue(kf.x, clipLocalTime, t.x),
@@ -86,6 +105,7 @@ function draftFromClip(clip, clipLocalTime) {
     },
     color,
     vignette,
+    chromaKey,
     // A curved clip's displayed speed tracks the segment active at the
     // playhead (mirrors how the volume envelope's slider shows the
     // interpolated value, not the flat field) - see timeline/speedCurve.js.
@@ -95,6 +115,8 @@ function draftFromClip(clip, clipLocalTime) {
       fadeIn: clip.audioFade?.in || 0,
       fadeOut: clip.audioFade?.out || 0,
       muted: Boolean(clip.muted),
+      duckEnabled: Boolean(clip.duck?.enabled),
+      duckAmount: typeof clip.duck?.amount === 'number' ? clip.duck.amount : 70,
     },
     text: { ...DEFAULT_TEXT_STYLE, ...clip.text },
     transitionOut: clip.transitionOut?.duration || 0,
@@ -102,6 +124,10 @@ function draftFromClip(clip, clipLocalTime) {
 }
 
 const VIDEO_TABS = [['basic', 'Basic'], ['color', 'Color'], ['speed', 'Speed'], ['audio', 'Audio']];
+// A still image carries no audio stream and nothing to play faster or
+// slower - its on-screen length is set by dragging its trim handles - so it
+// gets the transform/color half of the video tabs.
+const IMAGE_TABS = [['basic', 'Basic'], ['color', 'Color']];
 const TEXT_TABS = [['text', 'Text']];
 const AUDIO_TABS = [['audio', 'Audio'], ['speed', 'Speed']];
 // Adjustment layers (M13) carry no media/transform/speed/audio of their
@@ -116,6 +142,7 @@ function RightPanel() {
   const isTextClip = selectedClip?.type === 'text';
   const isAudioClip = selectedClip?.type === 'audio';
   const isAdjustmentClip = selectedClip?.type === 'adjustment';
+  const isImageClipSelected = isImageClip(selectedClip);
   const [activePanel, setActivePanel] = useState('basic');
 
   // Position on this specific clip's own output timeline (0 = the clip's
@@ -161,6 +188,11 @@ function RightPanel() {
     : 'No clip selected';
   const clipDuration = selectedClip ? (selectedClip.trimmedEnd - selectedClip.trimmedStart) : 0;
   const disabled = !selectedClip;
+  // Whether this clip currently carries a camera move - drives the
+  // Animate row's "None" state. Scale is the tell: every preset animates
+  // it, while a pan alone would be indistinguishable from a hand-keyframed
+  // position the user set up themselves.
+  const hasMotionKeyframes = Boolean(selectedClip?.keyframes?.scaleX?.length);
 
   // Whichever clip on the selected clip's own lane comes next by position -
   // not necessarily touching: before a transition is set the pair is
@@ -173,7 +205,7 @@ function RightPanel() {
   const nextVideoClip = useMemo(() => {
     if (isTextClip || isAudioClip || !selectedClip) return null;
     const laneClips = timeline
-      .filter((clip) => (clip.type === 'video' || !clip.type) && (clip.trackIndex || 0) === (selectedClip.trackIndex || 0))
+      .filter((clip) => isVideoLikeClip(clip) && (clip.trackIndex || 0) === (selectedClip.trackIndex || 0))
       .sort((a, b) => a.startTime - b.startTime);
     const index = laneClips.findIndex((clip) => clip.id === selectedClipId);
     if (index < 0) return null;
@@ -182,6 +214,8 @@ function RightPanel() {
   const maxTransitionDuration = nextVideoClip
     ? Math.max(0.1, Math.min(3, clipDuration / (selectedClip.speed || 1), (nextVideoClip.trimmedEnd - nextVideoClip.trimmedStart) / (nextVideoClip.speed || 1)))
     : 0;
+  const activeTransitionType = selectedClip?.transitionOut?.type || 'fade';
+  const activeTransitionLabel = TRANSITION_TYPES.find((t) => t.id === activeTransitionType)?.label || 'Fade';
 
   const commitBasic = (next) => {
     if (!selectedClipId) return;
@@ -199,11 +233,60 @@ function RightPanel() {
         }
       });
 
-      // Scale/flip aren't keyframeable yet - always static.
-      nextTransform.scaleX = (next.flipH ? -1 : 1) * (next.scale / 100);
-      nextTransform.scaleY = (next.flipV ? -1 : 1) * (next.scale / 100);
+      // Scale follows the same "keyframes replace the static value once any
+      // exist" rule as the properties above, with the one twist that the
+      // flip lives in the sign of transform.scaleX/scaleY while the
+      // keyframe track carries magnitude only - so the flip toggles keep
+      // writing to the transform either way, and only the magnitude moves
+      // into the keyframe when the clip is animated.
+      const magnitude = next.scale / 100;
+      const scaleAnimated = SCALE_KEYFRAME_PROPS.some((prop) => kf[prop].length > 0);
+      if (scaleAnimated) {
+        SCALE_KEYFRAME_PROPS.forEach((prop) => {
+          if (kf[prop].length > 0) nextKeyframes[prop] = upsertKeyframe(kf[prop], clipLocalTime, magnitude);
+        });
+        nextTransform.scaleX = (next.flipH ? -1 : 1) * Math.abs(nextTransform.scaleX ?? 1);
+        nextTransform.scaleY = (next.flipV ? -1 : 1) * Math.abs(nextTransform.scaleY ?? 1);
+      } else {
+        nextTransform.scaleX = (next.flipH ? -1 : 1) * magnitude;
+        nextTransform.scaleY = (next.flipV ? -1 : 1) * magnitude;
+      }
 
       return { ...clip, transform: nextTransform, keyframes: nextKeyframes };
+    });
+  };
+
+  // The Scale slider's diamond animates both axes together - the panel only
+  // exposes one uniform scale, and a Ken Burns move that stretched one axis
+  // without the other would just distort the picture.
+  const toggleScaleKeyframe = () => {
+    if (!selectedClipId) return;
+    updateClip(selectedClipId, (clip) => {
+      const kf = { ...DEFAULT_KEYFRAMES, ...clip.keyframes };
+      const existing = findKeyframeNear(kf.scaleX, clipLocalTime) || findKeyframeNear(kf.scaleY, clipLocalTime);
+      const magnitude = draft.basic.scale / 100;
+      const nextKeyframes = { ...kf };
+      SCALE_KEYFRAME_PROPS.forEach((prop) => {
+        nextKeyframes[prop] = existing
+          ? removeKeyframeNear(kf[prop], clipLocalTime)
+          : upsertKeyframe(kf[prop], clipLocalTime, magnitude);
+      });
+      return { ...clip, keyframes: nextKeyframes };
+    });
+  };
+
+  // One-click camera moves (see timeline/motionPresets.js) - they write
+  // ordinary keyframes across the clip's whole output duration, so the
+  // result stays fully editable afterward and exports through the same
+  // keyframe path a hand-animated clip does.
+  const applyMotion = (presetId) => {
+    if (!selectedClipId) return;
+    updateClip(selectedClipId, (clip) => {
+      const kf = { ...DEFAULT_KEYFRAMES, ...clip.keyframes };
+      const nextKeyframes = presetId
+        ? applyMotionPreset(kf, presetId, clipOutputDuration(clip))
+        : clearMotionPreset(kf);
+      return { ...clip, keyframes: nextKeyframes };
     });
   };
 
@@ -243,15 +326,28 @@ function RightPanel() {
     });
   };
 
+  const commitChromaKey = (next) => {
+    if (!selectedClipId) return;
+    updateClip(selectedClipId, (clip) => {
+      const others = clip.filters.filter((filter) => filter.type !== 'chromaKey');
+      const { enabled, ...params } = next;
+      return {
+        ...clip,
+        filters: enabled ? [...others, { id: 'chromaKey', type: 'chromaKey', enabled: true, params }] : others,
+      };
+    });
+  };
+
   // Sets/changes/clears the selected clip's transitionOut, and - in the
   // same commit - moves the adjacent next clip's startTime to match the new
   // overlap amount, since resolveActiveInLane only renders a transition
   // when the next clip actually sits at the expected overlap point (see
   // timeline/transitions.js). Both clips update atomically so Undo reverts
   // the whole edit in one step.
-  const commitTransition = (duration) => {
+  const commitTransition = (duration, type) => {
     if (!selectedClipId || !nextVideoClip) return;
-    const nextTransitionOut = duration > 0 ? { type: 'fade', duration } : null;
+    const resolvedType = type || selectedClip?.transitionOut?.type || 'fade';
+    const nextTransitionOut = duration > 0 ? { type: resolvedType, duration } : null;
     commitTimeline((prev) => prev.map((clip) => {
       if (clip.id === selectedClipId) return { ...clip, transitionOut: nextTransitionOut };
       if (clip.id === nextVideoClip.id) {
@@ -314,6 +410,7 @@ function RightPanel() {
         volume: volumeValue,
         audioFade: { in: next.fadeIn, out: next.fadeOut },
         muted: next.muted,
+        duck: { enabled: next.duckEnabled, amount: next.duckAmount },
         keyframes: nextKeyframes,
       };
     });
@@ -339,6 +436,7 @@ function RightPanel() {
   const updateDraftBasic = (patch) => setDraft((prev) => ({ ...prev, basic: { ...prev.basic, ...patch } }));
   const updateDraftColor = (patch) => setDraft((prev) => ({ ...prev, color: { ...prev.color, ...patch } }));
   const updateDraftVignette = (value) => setDraft((prev) => ({ ...prev, vignette: value }));
+  const updateDraftChromaKey = (patch) => setDraft((prev) => ({ ...prev, chromaKey: { ...prev.chromaKey, ...patch } }));
   const updateDraftTransition = (value) => setDraft((prev) => ({ ...prev, transitionOut: value }));
   const updateDraftAudio = (patch) => setDraft((prev) => ({ ...prev, audio: { ...prev.audio, ...patch } }));
   const updateDraftText = (patch) => setDraft((prev) => ({ ...prev, text: { ...prev.text, ...patch } }));
@@ -376,7 +474,7 @@ function RightPanel() {
   return (
     <aside className="right-panel">
       <div className="inspector-tabs">
-        {(isTextClip ? TEXT_TABS : isAudioClip ? AUDIO_TABS : isAdjustmentClip ? ADJUSTMENT_TABS : VIDEO_TABS).map(([id, label]) => (
+        {(isTextClip ? TEXT_TABS : isAudioClip ? AUDIO_TABS : isAdjustmentClip ? ADJUSTMENT_TABS : isImageClipSelected ? IMAGE_TABS : VIDEO_TABS).map(([id, label]) => (
           <button
             key={id}
             type="button"
@@ -423,7 +521,19 @@ function RightPanel() {
         )}
         {activePanel === 'basic' && (
           <>
-            <PropertyRow label="Scale" value={`${draft.basic.scale}%`}>
+            <PropertyRow
+              label="Scale"
+              value={`${draft.basic.scale}%`}
+              keyframeButton={(
+                <KeyframeButton
+                  disabled={disabled}
+                  active={Boolean(findKeyframeNear(selectedClip?.keyframes?.scaleX, clipLocalTime))}
+                  hasAny={Boolean(selectedClip?.keyframes?.scaleX?.length)}
+                  onClick={toggleScaleKeyframe}
+                  title="Add/remove a scale keyframe at this point in the clip - two or more animate a zoom"
+                />
+              )}
+            >
               <input disabled={disabled} type="range" min="10" max="200" value={draft.basic.scale} onChange={(event) => updateDraftBasic({ scale: Number(event.target.value) })} onMouseUp={() => commitBasic(draft.basic)} onTouchEnd={() => commitBasic(draft.basic)} onBlur={() => commitBasic(draft.basic)} />
             </PropertyRow>
             <PropertyRow label="Opacity" value={`${draft.basic.opacity}%`} keyframeButton={keyframeButtonFor('opacity')}>
@@ -469,13 +579,55 @@ function RightPanel() {
               </PropertyRow>
             )}
             {nextVideoClip && (
-              <PropertyRow label="Transition Out" value={draft.transitionOut > 0 ? `${draft.transitionOut.toFixed(1)}s Fade` : 'None'}>
+              <PropertyRow label="Transition Out" value={draft.transitionOut > 0 ? `${draft.transitionOut.toFixed(1)}s ${activeTransitionLabel}` : 'None'}>
                 <input disabled={disabled} type="range" min="0" max={maxTransitionDuration} step="0.1" value={Math.min(draft.transitionOut, maxTransitionDuration)} onChange={(event) => updateDraftTransition(Number(event.target.value))} onMouseUp={() => commitTransition(draft.transitionOut)} onTouchEnd={() => commitTransition(draft.transitionOut)} onBlur={() => commitTransition(draft.transitionOut)} />
+              </PropertyRow>
+            )}
+            {nextVideoClip && draft.transitionOut > 0 && (
+              <PropertyRow label="Transition Type" value={activeTransitionLabel}>
+                <div className="toggle-pair">
+                  {TRANSITION_TYPES.map((t) => (
+                    <button
+                      key={t.id}
+                      disabled={disabled}
+                      type="button"
+                      className={`mini-toggle ${activeTransitionType === t.id ? 'is-active' : ''}`}
+                      onClick={() => commitTransition(draft.transitionOut, t.id)}
+                    >
+                      {t.label}
+                    </button>
+                  ))}
+                </div>
+              </PropertyRow>
+            )}
+            {!disabled && isVideoLikeClip(selectedClip) && (
+              <PropertyRow label="Animate" value={hasMotionKeyframes ? 'Camera move' : 'None'}>
+                <div className="toggle-pair" style={{ flexWrap: 'wrap' }}>
+                  {MOTION_PRESETS.map((preset) => (
+                    <button
+                      key={preset.id}
+                      type="button"
+                      className="mini-toggle"
+                      title={`Animate this clip across its full length - ${preset.label.toLowerCase()}`}
+                      onClick={() => applyMotion(preset.id)}
+                    >
+                      {preset.label}
+                    </button>
+                  ))}
+                  <button
+                    type="button"
+                    className={`mini-toggle ${hasMotionKeyframes ? '' : 'is-active'}`}
+                    title="Remove the camera move (scale and position keyframes) from this clip"
+                    onClick={() => applyMotion(null)}
+                  >
+                    None
+                  </button>
+                </div>
               </PropertyRow>
             )}
             {!disabled && (
               <div className="caption-info-box" style={{ marginTop: 4 }}>
-                <span>Click ◆ next to Opacity, Rotation or Position to animate it - add a keyframe at the current playhead position, move the playhead, then change the value to animate between them.</span>
+                <span>Click ◆ next to Scale, Opacity, Rotation or Position to animate it - add a keyframe at the current playhead position, move the playhead, then change the value to animate between them. Animate applies a ready-made move across the whole clip, which you can then edit the same way.</span>
               </div>
             )}
           </>
@@ -513,6 +665,68 @@ function RightPanel() {
                 ))}
               </div>
             </PropertyRow>
+            {!isAdjustmentClip && (
+              <>
+                <PropertyRow label="Chroma Key" value={draft.chromaKey.enabled ? 'On' : 'Off'}>
+                  <div className="toggle-pair">
+                    <button
+                      disabled={disabled}
+                      type="button"
+                      className={`mini-toggle ${draft.chromaKey.enabled ? 'is-active' : ''}`}
+                      onClick={() => {
+                        const next = { ...draft.chromaKey, enabled: !draft.chromaKey.enabled };
+                        updateDraftChromaKey(next);
+                        commitChromaKey(next);
+                      }}
+                    >
+                      {draft.chromaKey.enabled ? 'Enabled' : 'Disabled'}
+                    </button>
+                  </div>
+                </PropertyRow>
+                {draft.chromaKey.enabled && (
+                  <>
+                    <PropertyRow label="Key Color" value={draft.chromaKey.color}>
+                      <input
+                        disabled={disabled}
+                        type="color"
+                        value={draft.chromaKey.color}
+                        onChange={(event) => {
+                          const next = { ...draft.chromaKey, color: event.target.value };
+                          updateDraftChromaKey(next);
+                          commitChromaKey(next);
+                        }}
+                      />
+                    </PropertyRow>
+                    <div className="swatch-row">
+                      {CHROMA_KEY_PRESETS.map((preset) => (
+                        <button
+                          key={preset.color}
+                          type="button"
+                          disabled={disabled}
+                          className={`color-swatch ${draft.chromaKey.color === preset.color ? 'is-active' : ''}`}
+                          style={{ background: preset.color }}
+                          title={preset.label}
+                          onClick={() => {
+                            const next = { ...draft.chromaKey, color: preset.color };
+                            updateDraftChromaKey(next);
+                            commitChromaKey(next);
+                          }}
+                        />
+                      ))}
+                    </div>
+                    <PropertyRow label="Similarity" value={`${draft.chromaKey.similarity}%`}>
+                      <input disabled={disabled} type="range" min="1" max="100" value={draft.chromaKey.similarity} onChange={(event) => updateDraftChromaKey({ similarity: Number(event.target.value) })} onMouseUp={() => commitChromaKey(draft.chromaKey)} onTouchEnd={() => commitChromaKey(draft.chromaKey)} onBlur={() => commitChromaKey(draft.chromaKey)} />
+                    </PropertyRow>
+                    <PropertyRow label="Edge Softness" value={`${draft.chromaKey.blend}%`}>
+                      <input disabled={disabled} type="range" min="0" max="100" value={draft.chromaKey.blend} onChange={(event) => updateDraftChromaKey({ blend: Number(event.target.value) })} onMouseUp={() => commitChromaKey(draft.chromaKey)} onTouchEnd={() => commitChromaKey(draft.chromaKey)} onBlur={() => commitChromaKey(draft.chromaKey)} />
+                    </PropertyRow>
+                    <div className="caption-info-box" style={{ marginTop: 4 }}>
+                      <span>Removes the key color from this clip. Raise Similarity to catch more shades of the color, raise Edge Softness to feather the cutout edge.</span>
+                    </div>
+                  </>
+                )}
+              </>
+            )}
           </>
         )}
 
@@ -575,6 +789,30 @@ function RightPanel() {
                 {draft.audio.muted ? 'Muted' : 'Mute'}
               </button>
             </PropertyRow>
+            {isAudioClip && (
+              <>
+                <PropertyRow label="Auto-duck" value={draft.audio.duckEnabled ? 'On' : 'Off'}>
+                  <button
+                    disabled={disabled}
+                    type="button"
+                    className={`mini-toggle ${draft.audio.duckEnabled ? 'is-active' : ''}`}
+                    onClick={() => { const next = { ...draft.audio, duckEnabled: !draft.audio.duckEnabled }; updateDraftAudio(next); commitAudio(next); }}
+                  >
+                    {draft.audio.duckEnabled ? 'Enabled' : 'Disabled'}
+                  </button>
+                </PropertyRow>
+                {draft.audio.duckEnabled && (
+                  <>
+                    <PropertyRow label="Duck Amount" value={`${draft.audio.duckAmount}%`}>
+                      <input disabled={disabled} type="range" min="0" max="100" value={draft.audio.duckAmount} onChange={(event) => updateDraftAudio({ duckAmount: Number(event.target.value) })} onMouseUp={() => commitAudio(draft.audio)} onTouchEnd={() => commitAudio(draft.audio)} onBlur={() => commitAudio(draft.audio)} />
+                    </PropertyRow>
+                    <div className="caption-info-box" style={{ marginTop: 4 }}>
+                      <span>Automatically lowers this track under dialogue and any other audio in the mix. Raise Duck Amount for a harder, more noticeable dip.</span>
+                    </div>
+                  </>
+                )}
+              </>
+            )}
           </>
         )}
 

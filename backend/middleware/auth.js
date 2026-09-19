@@ -1,17 +1,19 @@
 import jwt from 'jsonwebtoken';
 import User from '../models/User.js';
+import { isOwnerEmail } from '../services/owners.js';
+import { isPro } from '../services/planLimits.js';
 
-// Comma-separated allowlist of emails that always get full Pro access,
-// regardless of payment status - for the app owner's own account(s). Applied
-// on every authenticated request (self-healing: a fresh signup/relogin with
-// a listed email is upgraded automatically, no manual DB edit needed).
-const OWNER_EMAILS = (process.env.OWNER_EMAILS || '')
-  .split(',')
-  .map((email) => email.trim().toLowerCase())
-  .filter(Boolean);
-
+// Owner accounts (OWNER_EMAILS in backend/.env - see services/owners.js)
+// always get full Pro access regardless of payment status. This keeps the
+// STORED subscription in step on every authenticated request, so the owner's
+// account also *looks* Pro everywhere the UI reads it from - but the limits
+// themselves no longer depend on this write having happened: isPro() checks
+// the owner list directly (see services/planLimits.js). That matters because
+// a failed save, a stale session, or an account created before the email was
+// added to OWNER_EMAILS would otherwise leave the owner capped at free-tier
+// limits with no obvious reason why.
 export async function ensureOwnerAccess(user) {
-  if (!user || !OWNER_EMAILS.includes(user.email.toLowerCase())) return user;
+  if (!user || !isOwnerEmail(user.email)) return user;
   if (user.subscription.plan !== 'pro' || user.subscription.status !== 'active') {
     user.subscription.plan = 'pro';
     user.subscription.status = 'active';
@@ -62,7 +64,9 @@ export async function optionalAuth(req, _res, next) {
 
 export function requireSubscription(_feature) {
   return (req, res, next) => {
-    if (req.user?.subscription?.plan !== 'pro') {
+    // isPro covers owner accounts too, so this gate can't lock the owner out
+    // of a Pro-only feature.
+    if (!isPro(req.user)) {
       res.status(403).json({ error: 'This feature requires a Pro plan.', code: 'UPGRADE_REQUIRED' });
       return;
     }

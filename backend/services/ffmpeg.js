@@ -1,3 +1,4 @@
+import os from 'os';
 import { spawn } from 'child_process';
 import ffmpegPath from 'ffmpeg-static';
 import ffprobePath from 'ffprobe-static';
@@ -93,13 +94,35 @@ export function probeHasAudio(filePath) {
   });
 }
 
-export function runFFmpeg(args, { duration, onProgress } = {}) {
-  const FFMPEG_TIMEOUT = parseInt(process.env.FFMPEG_TIMEOUT || '3600000', 10); // Default 1 hour
-  
+// `cwd` lets a caller with hundreds of inputs pass short relative file names
+// (Windows caps a whole command line at ~32k characters); `signal` kills the
+// process when a sibling job fails, so a parallel render doesn't keep
+// encoding chunks nobody is going to use.
+// `lowPriority` runs the process below normal CPU priority: when a job fans out
+// into several encoders, that keeps the single-threaded jobs beside it (the
+// audio mix) and the rest of the machine from being starved by them.
+export function runFFmpeg(args, { duration, onProgress, timeout, cwd, signal, lowPriority } = {}) {
+  const FFMPEG_TIMEOUT = timeout || parseInt(process.env.FFMPEG_TIMEOUT || '3600000', 10); // Default 1 hour
+
   return new Promise((resolve, reject) => {
-    const child = spawn(FFMPEG_BINARY, args);
+    const child = spawn(FFMPEG_BINARY, args, cwd ? { cwd } : undefined);
+    if (lowPriority && child.pid) {
+      try {
+        os.setPriority(child.pid, os.constants.priority.PRIORITY_BELOW_NORMAL);
+      } catch { /* not permitted on this platform - just run at normal priority */ }
+    }
     let stderr = '';
     let timeoutId;
+
+    if (signal) {
+      const onAbort = () => {
+        child.kill('SIGTERM');
+        reject(new Error('Render cancelled.'));
+      };
+      if (signal.aborted) onAbort();
+      else signal.addEventListener('abort', onAbort, { once: true });
+      child.on('close', () => signal.removeEventListener('abort', onAbort));
+    }
 
     // Set timeout to kill ffmpeg if it takes too long
     timeoutId = setTimeout(() => {

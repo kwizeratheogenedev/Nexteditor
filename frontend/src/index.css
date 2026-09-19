@@ -1349,6 +1349,19 @@ input[type="color"] {
   box-shadow: 0 0 0 1px rgba(34, 197, 94, 0.25), 0 4px 16px rgba(34, 197, 94, 0.18);
 }
 
+/* Still images share the video lanes but get their own teal tint so a
+   scene photo reads apart from real footage at a glance. */
+.timeline-clip-image {
+  background: rgba(20, 184, 166, 0.16);
+  border: 1px solid rgba(20, 184, 166, 0.5);
+  color: #5eead4;
+}
+
+.timeline-clip-image:hover {
+  border-color: rgba(20, 184, 166, 0.8);
+  box-shadow: 0 0 0 1px rgba(20, 184, 166, 0.25), 0 4px 16px rgba(20, 184, 166, 0.18);
+}
+
 .timeline-clip-text {
   background: var(--timeline-text-bg);
   border: 1px solid var(--timeline-text-border);

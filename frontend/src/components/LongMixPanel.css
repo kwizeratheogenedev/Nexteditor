@@ -1,0 +1,119 @@
+/* LongMix Studio - same visual language as the Shorts/Captions workspaces
+   (shared panel-surface/accent tokens, same card + step-nav shape), so the
+   new tab reads as part of the app rather than a bolted-on wizard. */
+.longmix-workspace{width:min(1180px,100%);margin:0 auto;padding:8px 10px 34px;color:var(--panel-text-1)}
+.longmix-workspace svg{width:20px;height:20px}
+.longmix-heading{display:flex;align-items:flex-end;justify-content:space-between;gap:28px;padding:12px 4px 24px}
+.longmix-kicker{color:var(--accent-purple);font-size:10px;font-weight:800;letter-spacing:.16em}
+.longmix-heading h1{margin:5px 0 6px;font-size:29px;letter-spacing:-.035em}
+.longmix-heading p{color:var(--panel-text-2);font-size:13px}
+.longmix-steps{display:flex;align-items:center;gap:6px}
+.longmix-steps button{display:flex;align-items:center;gap:6px;padding:7px 11px;border:1px solid var(--panel-surface-5);border-radius:999px;background:var(--panel-surface-2);color:var(--panel-text-3);font-size:10px;white-space:nowrap;cursor:pointer}
+.longmix-steps button b{display:grid;place-items:center;width:18px;height:18px;border-radius:50%;background:var(--panel-surface-4);font-size:9px}
+.longmix-steps button.is-active{border-color:var(--accent-purple-strong);background:var(--panel-surface-3);color:var(--accent-purple-light)}
+.longmix-steps button.is-active b{background:var(--accent-purple-strong);color:#fff}
+.longmix-steps button.is-done{color:var(--success)}
+.longmix-steps button.is-done b{background:rgba(34,197,94,.18);color:var(--success)}
+.longmix-steps button.is-locked{opacity:.45;cursor:not-allowed}
+.longmix-main-grid{display:grid;grid-template-columns:minmax(0,1.3fr) minmax(280px,.7fr);gap:18px;align-items:start}
+.longmix-card,.longmix-side{padding:18px;border:1px solid var(--panel-border);border-radius:16px;background:var(--panel-surface-1)}
+.longmix-card{display:flex;flex-direction:column;gap:16px;min-height:380px}
+.longmix-card-head{display:flex;align-items:center;justify-content:space-between;gap:12px}
+.longmix-card-head>div{display:flex;flex-direction:column;gap:4px}
+.longmix-card-head strong{font-size:13px}
+.longmix-card-head span{color:var(--panel-text-3);font-size:10px}
+.longmix-card-head>button{padding:7px 11px;border-radius:8px;background:var(--accent-purple-soft);color:var(--accent-purple-light);font-size:10px;cursor:pointer}
+.longmix-dropzone{display:flex;flex-direction:column;align-items:center;justify-content:center;gap:8px;width:100%;flex:1;min-height:230px;border:1px dashed var(--panel-border-strong);border-radius:12px;background:var(--panel-surface-0);color:inherit;cursor:pointer}
+.longmix-dropzone>span{display:grid;place-items:center;width:48px;height:48px;border-radius:14px;background:var(--panel-surface-4);color:var(--accent-purple-light)}
+.longmix-dropzone small{color:var(--panel-text-3);font-size:10px}
+.longmix-dropzone b{margin-top:5px;padding:8px 12px;border-radius:8px;background:var(--accent-purple-soft);color:var(--accent-purple-light);font-size:10px}
+.longmix-list{display:flex;flex-direction:column;gap:5px;max-height:430px;overflow-y:auto;margin:0;padding:0;list-style:none}
+.longmix-list li{display:flex;align-items:center;gap:9px;padding:8px 10px;border:1px solid var(--panel-surface-5);border-radius:9px;background:var(--panel-surface-2)}
+.longmix-index{display:grid;place-items:center;width:20px;height:20px;flex:none;border-radius:50%;background:var(--panel-surface-4);color:var(--panel-text-3);font-size:9px}
+.longmix-title{flex:1;min-width:0;overflow:hidden;background:transparent;color:var(--panel-text-1);font-size:11px;text-align:left;text-overflow:ellipsis;white-space:nowrap;cursor:text}
+.longmix-rename{flex:1;min-width:0;padding:4px 6px;border:1px solid var(--accent-purple-strong);border-radius:6px;background:var(--panel-surface-0);color:var(--panel-text-1);font-size:11px}
+.longmix-duration{color:var(--panel-text-3);font-size:9px;font-variant-numeric:tabular-nums}
+.longmix-row-actions{display:flex;gap:3px}
+.longmix-row-actions button{width:22px;height:22px;border-radius:6px;background:var(--panel-surface-3);color:var(--panel-text-2);font-size:10px;cursor:pointer}
+.longmix-row-actions button:hover{background:var(--panel-surface-4);color:var(--accent-purple-light)}
+.longmix-scene-grid{display:grid;grid-template-columns:repeat(auto-fill,minmax(140px,1fr));gap:10px;max-height:430px;overflow-y:auto;margin:0;padding:0;list-style:none}
+.longmix-scene-grid li{display:flex;flex-direction:column;gap:6px;padding:8px;border:1px solid var(--panel-surface-5);border-radius:10px;background:var(--panel-surface-2)}
+.longmix-scene-thumb{position:relative;overflow:hidden;border-radius:8px;background:var(--panel-surface-0);aspect-ratio:16/9}
+.longmix-scene-thumb img,.longmix-scene-thumb video{width:100%;height:100%;object-fit:cover}
+.longmix-scene-thumb>span{position:absolute;left:6px;top:6px;padding:3px 6px;border-radius:5px;background:rgba(10,10,13,.8);color:#fff;font-size:9px}
+.longmix-scene-grid strong{overflow:hidden;font-size:10px;text-overflow:ellipsis;white-space:nowrap}
+.longmix-field{display:flex;flex-direction:column;gap:8px}
+.longmix-field>span{color:var(--panel-text-2);font-size:10px;font-weight:650}
+.longmix-field>span b{color:var(--accent-purple-light);font-weight:750}
+.longmix-field input[type=range]{width:100%}
+.longmix-choice-list{display:flex;flex-direction:column;gap:7px}
+.longmix-choice-list button{display:flex;align-items:center;gap:9px;padding:9px 10px;border:1px solid var(--panel-surface-5);border-radius:9px;background:var(--panel-surface-2);color:var(--panel-text-1);text-align:left;cursor:pointer}
+.longmix-choice-list button.is-active{border-color:var(--accent-purple-strong);background:var(--panel-surface-3)}
+.longmix-choice-list button>span{color:var(--accent-purple);font-size:10px}
+.longmix-choice-list strong{display:block;font-size:10px}
+.longmix-choice-list small{color:var(--panel-text-3);font-size:8px}
+.longmix-choice-row{display:flex;flex-wrap:wrap;gap:6px}
+.longmix-choice-row button{padding:7px 10px;border:1px solid var(--panel-surface-5);border-radius:8px;background:var(--panel-surface-2);color:var(--panel-text-2);font-size:10px;cursor:pointer}
+.longmix-choice-row button.is-active{border-color:var(--accent-purple-strong);background:var(--panel-surface-3);color:var(--accent-purple-light)}
+.longmix-warning{display:flex;gap:9px;padding:11px;border:1px solid rgba(245,158,11,.35);border-radius:10px;background:rgba(245,158,11,.08);color:var(--warning)}
+.longmix-warning svg{width:16px;height:16px;flex:none}
+.longmix-warning span{color:var(--panel-text-2);font-size:9px;line-height:1.5}
+.longmix-summary{display:grid;grid-template-columns:repeat(2,1fr);gap:8px;margin:0;padding:0;list-style:none}
+.longmix-summary li{display:flex;flex-direction:column;gap:4px;padding:10px;border-radius:9px;background:var(--panel-surface-2)}
+.longmix-summary span{color:var(--panel-text-3);font-size:9px}
+.longmix-summary b{font-size:15px;font-variant-numeric:tabular-nums}
+.longmix-build-button{display:flex;align-items:center;justify-content:center;gap:8px;width:100%;height:43px;border-radius:10px;background:linear-gradient(135deg,var(--accent-purple),var(--accent-purple-strong));color:#fff;font-size:11px;font-weight:750;cursor:pointer}
+.longmix-build-button:disabled{opacity:.42;cursor:not-allowed;filter:saturate(.4)}
+.longmix-build-button:not(:disabled):hover{filter:brightness(1.1);transform:translateY(-1px)}
+.longmix-build-button svg{width:16px;height:16px}
+.longmix-hint{color:var(--panel-text-3);font-size:9px;text-align:center}
+.longmix-chapters{max-height:210px;overflow:auto;margin:0;padding:11px;border-radius:9px;background:var(--panel-surface-0);color:var(--panel-text-2);font-size:10px;line-height:1.7;white-space:pre-wrap}
+.longmix-secondary-button{padding:9px;border:1px solid var(--panel-border-strong);border-radius:9px;background:var(--panel-surface-2);color:var(--accent-purple-light);font-size:10px;cursor:pointer}
+/* Per-step guidance strip: what this step is for, before the controls. */
+.longmix-guide{display:flex;flex-direction:column;gap:5px;padding:12px 14px;border-left:2px solid var(--accent-purple-strong);border-radius:0 10px 10px 0;background:var(--panel-surface-2)}
+.longmix-guide-step{color:var(--accent-purple);font-size:9px;font-weight:800;letter-spacing:.14em;text-transform:uppercase}
+.longmix-guide strong{font-size:13px}
+.longmix-guide p{margin:0;color:var(--panel-text-3);font-size:10px;line-height:1.55}
+
+/* Back / Next footer - pinned to the bottom of the card so it sits in the
+   same place on every step. */
+.longmix-step-nav{display:flex;align-items:center;justify-content:space-between;gap:12px;margin-top:auto;padding-top:14px;border-top:1px solid var(--panel-border)}
+.longmix-nav-forward{display:flex;align-items:center;gap:10px}
+.longmix-nav-forward small{color:var(--warning);font-size:9px}
+.longmix-nav-back{padding:9px 13px;border:1px solid var(--panel-surface-5);border-radius:9px;background:var(--panel-surface-2);color:var(--panel-text-2);font-size:10px;cursor:pointer}
+.longmix-nav-back:hover{border-color:var(--panel-border-strong);color:var(--panel-text-1)}
+.longmix-nav-next{padding:10px 16px;border-radius:9px;background:linear-gradient(135deg,var(--accent-purple),var(--accent-purple-strong));color:#fff;font-size:10px;font-weight:700;cursor:pointer}
+.longmix-nav-next:disabled{opacity:.4;cursor:not-allowed;filter:saturate(.4)}
+.longmix-nav-next:not(:disabled):hover{filter:brightness(1.1)}
+
+/* Render progress and the finished video. */
+.longmix-render-status{display:flex;flex-direction:column;align-items:center;gap:6px;padding:12px;border-radius:10px;background:var(--panel-surface-2)}
+.longmix-render-status strong{font-size:17px;font-variant-numeric:tabular-nums}
+.longmix-render-status small{color:var(--panel-text-3);font-size:9px}
+.longmix-progress{width:100%;height:4px;border-radius:4px;background:var(--panel-surface-4);overflow:hidden}
+.longmix-progress span{display:block;height:100%;background:var(--accent-purple);transition:width .25s}
+.longmix-result{display:flex;flex-direction:column;gap:12px}
+.longmix-preview{width:100%;max-height:46vh;border-radius:12px;background:#000;object-fit:contain}
+.longmix-result-actions{display:grid;grid-template-columns:1fr auto;gap:9px}
+.longmix-result-actions .longmix-build-button{height:40px}
+.longmix-chapter-block{display:flex;flex-direction:column;gap:9px;padding-top:12px;border-top:1px solid var(--panel-border)}
+
+/* What to do once the mix is on the timeline. */
+.longmix-next-steps{display:flex;flex-direction:column;gap:7px;margin:0;padding-left:18px;color:var(--panel-text-3);font-size:10px;line-height:1.5}
+.longmix-next-steps b{color:var(--panel-text-2)}
+
+.longmix-side{display:flex;flex-direction:column;gap:14px}
+.longmix-flow{display:flex;flex-direction:column;gap:2px;margin:0;padding:0;list-style:none}
+.longmix-flow li{display:flex;align-items:flex-start;gap:10px;padding:9px;border-radius:9px}
+.longmix-flow li.is-active{background:var(--panel-surface-2)}
+.longmix-flow-mark{display:grid;place-items:center;width:20px;height:20px;flex:none;border-radius:50%;background:var(--panel-surface-4);color:var(--panel-text-3);font-size:9px}
+.longmix-flow li.is-done .longmix-flow-mark{background:rgba(34,197,94,.18);color:var(--success)}
+.longmix-flow li.is-active .longmix-flow-mark{background:var(--accent-purple-strong);color:#fff}
+.longmix-flow strong{display:block;font-size:10px}
+.longmix-flow small{color:var(--panel-text-3);font-size:9px}
+.longmix-flow li.is-active strong{color:var(--accent-purple-light)}
+.longmix-flow-end{opacity:.75}
+.longmix-explainer{display:flex;flex-direction:column;gap:9px;margin:0;padding-left:16px;color:var(--panel-text-3);font-size:10px;line-height:1.55}
+.longmix-explainer b{color:var(--panel-text-2)}
+@media(max-width:940px){.longmix-main-grid{grid-template-columns:1fr}}
+@media(max-width:650px){.longmix-heading{align-items:flex-start;flex-direction:column}.longmix-steps{flex-wrap:wrap}.longmix-summary{grid-template-columns:1fr}}

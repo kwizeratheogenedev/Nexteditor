@@ -2,6 +2,7 @@ import { useCallback, useEffect, useMemo, useRef } from 'react';
 import { resolveKeyframedValue } from './keyframes';
 import { resolveActiveInLane, clipDuration, laneTotalDuration } from './transitions';
 import { hasSpeedCurve, sourceTimeForOutputElapsed } from './speedCurve';
+import { isVideoLikeClip, isImageClip } from './clipKinds';
 
 // Default canvas size (matches the pre-schema-v4 fixed 1080p/16:9 canvas) -
 // used only as a fallback when no canvasSize is supplied. The real value
@@ -63,6 +64,38 @@ function drawVignette(ctx, canvas, intensity) {
   ctx.fillStyle = gradient;
   ctx.fillRect(0, 0, canvas.width, canvas.height);
   ctx.restore();
+}
+
+// #rrggbb (with or without '#') -> {r,g,b} 0-255. Never fed untrusted data
+// (this only ever reads a value the user picked via <input type="color">),
+// so no sanitization needed here unlike the backend's colorkey wiring.
+function hexToRgb(hex) {
+  const clean = (hex || '').replace('#', '');
+  const num = parseInt(clean.length === 6 ? clean : '00ff00', 16);
+  return { r: (num >> 16) & 255, g: (num >> 8) & 255, b: num & 255 };
+}
+
+// Same RGB-distance + linear-feather formula as the backend's ffmpeg
+// colorkey= filter (see backend/services/filterGraph/effects/chromaKey.js)
+// so the live preview keys out the same pixels the export will: distance is
+// a 0-1 normalized Euclidean distance in RGB space, pixels within
+// `similarity` of the key color go fully transparent, pixels within
+// `similarity + blend` ramp linearly, everything else stays opaque.
+function chromaKeyImageData(imageData, keyColor, similarity, blend) {
+  const data = imageData.data;
+  const { r: kr, g: kg, b: kb } = keyColor;
+  const sqrt3 = Math.sqrt(3);
+  for (let i = 0; i < data.length; i += 4) {
+    const dr = (data[i] - kr) / 255;
+    const dg = (data[i + 1] - kg) / 255;
+    const db = (data[i + 2] - kb) / 255;
+    const distance = Math.sqrt(dr * dr + dg * dg + db * db) / sqrt3;
+    let alpha = 1;
+    if (distance <= similarity) alpha = 0;
+    else if (blend > 0 && distance <= similarity + blend) alpha = (distance - similarity) / blend;
+    data[i + 3] = Math.round(data[i + 3] * alpha);
+  }
+  return imageData;
 }
 
 function drawTextClip(ctx, clip, canvas) {
@@ -187,6 +220,10 @@ function resolveClipGain(clip, outputLocalTime, clipDuration) {
 export function useTimelinePlayer({ timeline, currentTime, isPlaying, onTimeUpdate, onEnded, onClipDurationUpdate, canvasRef, trackMeta, canvasSize }) {
   const activeCanvasSize = canvasSize || FALLBACK_CANVAS_SIZE;
   const videoPoolRef = useRef(new Map());
+  // Still images decode once into an <img> instead of a pooled <video> -
+  // nothing to seek, play or wire into the audio graph, so they get their
+  // own much simpler pool.
+  const imagePoolRef = useRef(new Map());
   const audioPoolRef = useRef(new Map());
   const videoGainNodesRef = useRef(new Map());
   const audioGainNodesRef = useRef(new Map());
@@ -196,6 +233,20 @@ export function useTimelinePlayer({ timeline, currentTime, isPlaying, onTimeUpda
   const currentTimeRef = useRef(currentTime);
   const isPlayingRef = useRef(isPlaying);
   const reportedDurationsRef = useRef(new Map());
+  // One reused offscreen canvas per clip id for chroma-key pixel processing
+  // (see drawVideoEntry) - avoids allocating a fresh canvas + backing store
+  // every animation frame for any clip using chroma key.
+  const chromaKeyCanvasPoolRef = useRef(new Map());
+  const getChromaKeyCanvas = useCallback((clipId, width, height) => {
+    let canvas = chromaKeyCanvasPoolRef.current.get(clipId);
+    if (!canvas) {
+      canvas = document.createElement('canvas');
+      chromaKeyCanvasPoolRef.current.set(clipId, canvas);
+    }
+    if (canvas.width !== width) canvas.width = width;
+    if (canvas.height !== height) canvas.height = height;
+    return canvas;
+  }, []);
   // A pooled <video>'s src/currentTime assignment loads and seeks
   // asynchronously - drawFrame is only re-triggered by React state changes,
   // so without this, the very first frame (or a fresh seek) can render
@@ -220,7 +271,11 @@ export function useTimelinePlayer({ timeline, currentTime, isPlaying, onTimeUpda
   const { videoClips, audioTrackClips, textClips, videoLanes, audioLanes, textLanes, laneZeroVideoClips, videoDuration } = useMemo(() => {
     // Adjustment layers (M13) live on video lanes for z-order (see
     // createAdjustmentClip) - grouped/drawn alongside real video clips here.
-    const videoClips = timeline.filter((clip) => clip.type === 'video' || clip.type === 'adjustment' || !clip.type);
+    // Image clips share the video lanes (and this whole pipeline) with
+    // video clips - see timeline/clipKinds.js. Adjustment layers (M13) live
+    // on video lanes for z-order (see createAdjustmentClip) and are grouped
+    // and drawn alongside them here too.
+    const videoClips = timeline.filter((clip) => isVideoLikeClip(clip) || clip.type === 'adjustment');
     const audioTrackClips = timeline.filter((clip) => clip.type === 'audio');
     const textClips = timeline.filter((clip) => clip.type === 'text');
     // A disabled clip (M11) still occupies its slot on the timeline - it
@@ -299,6 +354,28 @@ export function useTimelinePlayer({ timeline, currentTime, isPlaying, onTimeUpda
     return el;
   }, [connectToAudioGraph]);
 
+  // The image counterpart of getVideoElement: one decoded <img> per unique
+  // source, redrawing once the bitmap is actually available (the same
+  // problem getVideoElement's 'loadeddata' listener solves - a paused
+  // editor only redraws on React state changes, so without this an
+  // imported image would show nothing until some unrelated re-render).
+  const getImageElement = useCallback((clip) => {
+    const pool = imagePoolRef.current;
+    let el = pool.get(clip.sourceId);
+    if (!el) {
+      el = new Image();
+      el.decoding = 'async';
+      el.addEventListener('load', () => {
+        if (!isPlayingRef.current) drawFrameRef.current(currentTimeRef.current);
+      });
+      pool.set(clip.sourceId, el);
+    }
+    if (clip.url && el.src !== clip.url) {
+      el.src = clip.url;
+    }
+    return el;
+  }, []);
+
   const getAudioElement = useCallback((clip) => {
     const pool = audioPoolRef.current;
     let el = pool.get(clip.sourceId);
@@ -318,6 +395,11 @@ export function useTimelinePlayer({ timeline, currentTime, isPlaying, onTimeUpda
   // Drop pooled elements (and their Web Audio gain nodes) for sources no
   // longer referenced by any clip.
   useEffect(() => {
+    const activeImageSourceIds = new Set(videoClips.filter(isImageClip).map((clip) => clip.sourceId));
+    for (const sourceId of imagePoolRef.current.keys()) {
+      if (!activeImageSourceIds.has(sourceId)) imagePoolRef.current.delete(sourceId);
+    }
+
     const activeVideoSourceIds = new Set(videoClips.map((clip) => clip.sourceId));
     for (const [sourceId, el] of videoPoolRef.current.entries()) {
       if (!activeVideoSourceIds.has(sourceId)) {
@@ -341,6 +423,11 @@ export function useTimelinePlayer({ timeline, currentTime, isPlaying, onTimeUpda
         audioGainNodesRef.current.delete(sourceId);
       }
     }
+
+    const activeClipIds = new Set(timeline.map((clip) => clip.id));
+    for (const clipId of chromaKeyCanvasPoolRef.current.keys()) {
+      if (!activeClipIds.has(clipId)) chromaKeyCanvasPoolRef.current.delete(clipId);
+    }
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [timeline]);
 
@@ -356,9 +443,10 @@ export function useTimelinePlayer({ timeline, currentTime, isPlaying, onTimeUpda
   const drawVideoEntry = useCallback((ctx, canvas, entry, time, compositeAlpha) => {
     const { clip, localTime, clipStart } = entry;
     const clipOutputTime = time - clipStart;
-    const el = getVideoElement(clip);
+    const isStill = isImageClip(clip);
+    const el = isStill ? getImageElement(clip) : getVideoElement(clip);
 
-    if (Number.isFinite(el.duration) && el.duration > 0) {
+    if (!isStill && Number.isFinite(el.duration) && el.duration > 0) {
       const prevReported = reportedDurationsRef.current.get(clip.id);
       if (onClipDurationUpdate && prevReported !== el.duration && Math.abs((clip.duration || 0) - el.duration) > 0.5) {
         reportedDurationsRef.current.set(clip.id, el.duration);
@@ -381,29 +469,38 @@ export function useTimelinePlayer({ timeline, currentTime, isPlaying, onTimeUpda
     // seeking backward each frame (real reverse decode/playback isn't
     // available on an HTML <video>; the export's ffmpeg `reverse`/`areverse`
     // filters are frame/audio-accurate, this is just an approximate preview).
+    // A still has nothing to seek - the same single bitmap serves every
+    // frame of the clip, however it's trimmed, sped up or frozen.
     const seekThreshold = (clip.frozen || clip.reversed) ? 0.03 : 0.15;
-    if (el.readyState >= 1 && Math.abs(el.currentTime - localTime) > seekThreshold) {
+    if (!isStill && el.readyState >= 1 && Math.abs(el.currentTime - localTime) > seekThreshold) {
       try {
         el.currentTime = Math.max(0, localTime);
       } catch { /* element not seekable yet */ }
     }
 
     const t = clip.transform || {};
-    const scaleX = typeof t.scaleX === 'number' ? t.scaleX : 1;
-    const scaleY = typeof t.scaleY === 'number' ? t.scaleY : 1;
-    // Position/rotation/opacity animate via keyframes when present (see
-    // hooks/usePersistedEditorState.js normalizeClip for why scale isn't
-    // keyframeable yet); otherwise they fall back to the static transform.
+    // Scale, position, rotation and opacity all animate via keyframes when
+    // present, falling back to the static transform otherwise. The flip
+    // (the sign of scaleX/scaleY) always comes from the static transform -
+    // a keyframe track carries magnitude only, matching the export, which
+    // applies hflip/vflip up front and feeds the keyframed magnitude into
+    // scale's per-frame expression (see
+    // backend/services/filterGraph/effects/transform.js).
     const kf = clip.keyframes || {};
+    const staticScaleX = typeof t.scaleX === 'number' ? t.scaleX : 1;
+    const staticScaleY = typeof t.scaleY === 'number' ? t.scaleY : 1;
+    const scaleX = resolveKeyframedValue(kf.scaleX, clipOutputTime, Math.abs(staticScaleX)) * (staticScaleX < 0 ? -1 : 1);
+    const scaleY = resolveKeyframedValue(kf.scaleY, clipOutputTime, Math.abs(staticScaleY)) * (staticScaleY < 0 ? -1 : 1);
     const opacity = resolveKeyframedValue(kf.opacity, clipOutputTime, typeof t.opacity === 'number' ? t.opacity : 1);
     const rotation = resolveKeyframedValue(kf.rotation, clipOutputTime, t.rotation || 0);
     const posX = resolveKeyframedValue(kf.x, clipOutputTime, t.x || 0);
     const posY = resolveKeyframedValue(kf.y, clipOutputTime, t.y || 0);
     const combinedAlpha = Math.max(0, Math.min(1, opacity)) * compositeAlpha;
 
-    const vw = el.videoWidth || canvas.width;
-    const vh = el.videoHeight || canvas.height;
-    if (vw > 0 && vh > 0 && el.readyState >= 2) {
+    const vw = (isStill ? el.naturalWidth : el.videoWidth) || canvas.width;
+    const vh = (isStill ? el.naturalHeight : el.videoHeight) || canvas.height;
+    const frameReady = isStill ? (el.complete && el.naturalWidth > 0) : el.readyState >= 2;
+    if (vw > 0 && vh > 0 && frameReady) {
       // 'cover' scales up to fill the canvas (cropping overflow) instead of
       // 'contain'-fitting inside it with letterbox/pillarbox bars - mirrors
       // backend/services/filterGraph/effects/transform.js's isCover branch.
@@ -428,7 +525,24 @@ export function useTimelinePlayer({ timeline, currentTime, isPlaying, onTimeUpda
       ctx.rotate((rotation * Math.PI) / 180);
       ctx.scale(scaleX < 0 ? -1 : 1, scaleY < 0 ? -1 : 1);
       try {
-        ctx.drawImage(el, -drawW / 2, -drawH / 2, drawW, drawH);
+        const chromaKeyFilter = (clip.filters || []).find((f) => f.type === 'chromaKey' && f.enabled !== false);
+        if (chromaKeyFilter) {
+          // Key on the source's native resolution (not the scaled-up canvas
+          // size) - cheaper, and matches the backend applying colorkey=
+          // before its own scale step. Reuses one offscreen canvas per clip
+          // id (see getChromaKeyCanvas) instead of allocating one per frame.
+          const offscreen = getChromaKeyCanvas(clip.id, vw, vh);
+          const octx = offscreen.getContext('2d');
+          octx.clearRect(0, 0, vw, vh);
+          octx.drawImage(el, 0, 0, vw, vh);
+          const { color = '#00ff00', similarity = 35, blend = 15 } = chromaKeyFilter.params || {};
+          const imageData = octx.getImageData(0, 0, vw, vh);
+          chromaKeyImageData(imageData, hexToRgb(color), (Number(similarity) || 0) / 100, (Number(blend) || 0) / 100);
+          octx.putImageData(imageData, 0, 0);
+          ctx.drawImage(offscreen, -drawW / 2, -drawH / 2, drawW, drawH);
+        } else {
+          ctx.drawImage(el, -drawW / 2, -drawH / 2, drawW, drawH);
+        }
       } catch { /* frame not decoded yet */ }
       ctx.restore();
     }
@@ -440,7 +554,7 @@ export function useTimelinePlayer({ timeline, currentTime, isPlaying, onTimeUpda
       drawVignette(ctx, canvas, vignetteIntensity);
       ctx.restore();
     }
-  }, [getVideoElement, onClipDurationUpdate, activeCanvasSize]);
+  }, [getVideoElement, getImageElement, onClipDurationUpdate, activeCanvasSize, getChromaKeyCanvas]);
 
   // Adjustment layers (M13) carry no media of their own - they apply their
   // color/vignette filters to everything already drawn below them in the
@@ -628,9 +742,13 @@ export function useTimelinePlayer({ timeline, currentTime, isPlaying, onTimeUpda
       // drawVideoEntry drives both entirely via repeated seeks, which only
       // reads cleanly on a paused element (playing forward would fight the
       // seek every frame, and there's no native backward playback anyway).
-      const primaryPaused = active.primary.clip.frozen || active.primary.clip.reversed;
+      // A still image has no pooled <video> at all - nothing to play or
+      // pause, so it's simply never a member of this set.
+      const primaryPaused = active.primary.clip.frozen || active.primary.clip.reversed || isImageClip(active.primary.clip);
       if (!primaryPaused) activeVideoSourceIds.add(active.primary.clip.sourceId);
-      if (active.next && !(active.next.clip.frozen || active.next.clip.reversed)) activeVideoSourceIds.add(active.next.clip.sourceId);
+      if (active.next && !(active.next.clip.frozen || active.next.clip.reversed || isImageClip(active.next.clip))) {
+        activeVideoSourceIds.add(active.next.clip.sourceId);
+      }
     });
     videoPoolRef.current.forEach((el, sourceId) => {
       if (isPlaying && activeVideoSourceIds.has(sourceId)) {
@@ -672,6 +790,7 @@ export function useTimelinePlayer({ timeline, currentTime, isPlaying, onTimeUpda
       el.load();
     });
     videoPoolRef.current.clear();
+    imagePoolRef.current.clear();
     audioPoolRef.current.forEach((el) => {
       el.pause();
       el.removeAttribute('src');

@@ -2,6 +2,7 @@ import express from 'express';
 import Project from '../models/Project.js';
 import User from '../models/User.js';
 import { requireAuth } from '../middleware/auth.js';
+import { isPro } from '../services/planLimits.js';
 
 const router = express.Router();
 const FREE_PROJECT_LIMIT = 3;
@@ -27,7 +28,7 @@ router.post('/', async (req, res) => {
     return;
   }
   try {
-    if (req.user.subscription.plan === 'free' && req.user.usage.projectCount >= FREE_PROJECT_LIMIT) {
+    if (!isPro(req.user) && req.user.usage.projectCount >= FREE_PROJECT_LIMIT) {
       res.status(403).json({
         error: `Free plan is limited to ${FREE_PROJECT_LIMIT} projects. Upgrade to Pro for unlimited projects.`,
         code: 'UPGRADE_REQUIRED',

@@ -1335,6 +1335,8 @@ export default function MontageTab({ loadVideoInEditor, onError, onShurfer, onRe
     setSmoothTransitions,
     contrastPolish,
     setContrastPolish,
+    skipStartSeconds,
+    setSkipStartSeconds,
     clearAll,
   } = montage;
 
@@ -1545,6 +1547,7 @@ export default function MontageTab({ loadVideoInEditor, onError, onShurfer, onRe
     fd.append('colorBoost', String(colorBoost));
     fd.append('smoothTransitions', String(smoothTransitions));
     fd.append('contrastPolish', String(contrastPolish));
+    fd.append('skipStartSeconds', String(skipStartSeconds));
 
     fetch(`${API_BASE}/api/create-montage`, {
       method: 'POST',
@@ -1723,6 +1726,28 @@ export default function MontageTab({ loadVideoInEditor, onError, onShurfer, onRe
                 <option value="high">High</option>
                 <option value="ultra">Ultra</option>
               </select>
+            </div>
+
+            <div className="mt-config-group">
+              <div className="mt-config-label">Skip intro per video (sec)</div>
+              <input
+                type="number"
+                className="mt-config-select"
+                min={0}
+                max={600}
+                step={5}
+                value={skipStartSeconds}
+                onChange={(e) => {
+                  const raw = e.target.value;
+                  if (raw === '') { setSkipStartSeconds(''); return; }
+                  const n = Number(raw);
+                  if (Number.isFinite(n)) setSkipStartSeconds(Math.max(0, Math.min(600, n)));
+                }}
+                onBlur={() => { if (skipStartSeconds === '' || Number.isNaN(Number(skipStartSeconds))) setSkipStartSeconds(40); }}
+              />
+              <div style={{ fontSize:10, color:'var(--panel-text-3)', lineHeight:1.5 }}>
+                Clips are never pulled from the first N seconds of each source video (skips intros/setup footage). Default is 40s.
+              </div>
             </div>
 
             <div className="mt-config-group">

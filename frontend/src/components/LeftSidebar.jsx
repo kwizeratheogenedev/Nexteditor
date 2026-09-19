@@ -43,6 +43,14 @@ function WandIcon() {
   );
 }
 
+function LongMixIcon() {
+  return (
+    <svg viewBox="0 0 18 18" aria-hidden="true">
+      <path d="M2.5 12.5v-3M5.5 14V4M8.5 12V6M11.5 15V3M14.5 11.5v-5" stroke="currentColor" strokeWidth="1.5" strokeLinecap="round" fill="none" />
+    </svg>
+  );
+}
+
 function BubbleIcon() {
   return (
     <svg viewBox="0 0 18 18" aria-hidden="true">
@@ -76,12 +84,14 @@ const tools = [
   { id: 'editor', label: 'Editor', icon: GearIcon, tab: 'editor' },
   { id: 'media', label: 'Montage', icon: GridIcon, tab: 'media' },
   { id: 'shorts', label: 'Shorts', icon: WandIcon, tab: 'shorts' },
+  { id: 'longmix', label: 'LongMix', icon: LongMixIcon, tab: 'longmix' },
   { id: 'captions', label: 'Captions', icon: BubbleIcon, tab: 'captions' },
 ];
 
 function getActiveTool(activeTab) {
   if (activeTab === 'media') return 'media';
   if (activeTab === 'shorts') return 'shorts';
+  if (activeTab === 'longmix') return 'longmix';
   if (activeTab === 'captions') return 'captions';
   if (activeTab === 'editor') return 'editor';
   return '';
