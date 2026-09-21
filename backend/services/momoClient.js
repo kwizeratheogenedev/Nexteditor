@@ -53,6 +53,7 @@ export async function requestToPay({ amount, phoneNumber, externalId, payerMessa
       'X-Reference-Id': referenceId,
       'X-Target-Environment': process.env.MOMO_TARGET_ENVIRONMENT || 'sandbox',
       'Content-Type': 'application/json',
+      ...(process.env.MOMO_CALLBACK_URL ? { 'X-Callback-Url': process.env.MOMO_CALLBACK_URL } : {}),
     },
     body: JSON.stringify({
       amount: String(amount),

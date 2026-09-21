@@ -23,6 +23,7 @@ const userSchema = new Schema({
     plan: { type: String, enum: ['free', 'pro'], default: 'free' },
     status: { type: String, enum: ['none', 'active', 'trialing', 'past_due', 'canceled'], default: 'none' },
     momoPaymentRef: { type: String, default: null },
+    momoLastAppliedRef: { type: String, default: null },
     cardCustomerId: { type: String, default: null },
     cardSubscriptionId: { type: String, default: null },
     currentPeriodEnd: { type: Date, default: null },

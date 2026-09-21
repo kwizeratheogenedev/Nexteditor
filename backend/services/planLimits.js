@@ -17,7 +17,11 @@ const PERIOD_MS = 30 * 24 * 60 * 60 * 1000;
 // leave the owner capped.
 export function isPro(user) {
   if (isOwnerEmail(user?.email)) return true;
-  return user?.subscription?.plan === 'pro' && user?.subscription?.status !== 'canceled';
+  if (user?.subscription?.plan !== 'pro' || user?.subscription?.status === 'canceled') return false;
+  // Only period-based payments (MoMo) set currentPeriodEnd; a null value
+  // (card subscriptions, manual grants) means "no fixed expiry".
+  const end = user.subscription.currentPeriodEnd;
+  return !end || new Date(end).getTime() > Date.now();
 }
 
 // Resets the rolling 30-day export counter if it's stale, checks the

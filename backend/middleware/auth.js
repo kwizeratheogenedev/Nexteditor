@@ -13,7 +13,18 @@ import { isPro } from '../services/planLimits.js';
 // added to OWNER_EMAILS would otherwise leave the owner capped at free-tier
 // limits with no obvious reason why.
 export async function ensureOwnerAccess(user) {
-  if (!user || !isOwnerEmail(user.email)) return user;
+  if (!user) return user;
+  if (!isOwnerEmail(user.email)) {
+    // Lapsed period-based (MoMo) Pro: keep the stored plan in step with what
+    // isPro() already enforces, so the UI stops showing Pro too.
+    const end = user.subscription?.currentPeriodEnd;
+    if (user.subscription?.plan === 'pro' && end && new Date(end).getTime() <= Date.now()) {
+      user.subscription.plan = 'free';
+      user.subscription.status = 'none';
+      await user.save();
+    }
+    return user;
+  }
   if (user.subscription.plan !== 'pro' || user.subscription.status !== 'active') {
     user.subscription.plan = 'pro';
     user.subscription.status = 'active';
