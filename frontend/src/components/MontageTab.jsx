@@ -170,24 +170,34 @@ const STYLES = `
   .mt-thumb-overlay { position:absolute; inset:0; background:rgba(0,0,0,.45); display:flex; align-items:center; justify-content:center; opacity:0; transition:opacity .2s; }
 
   .mt-pill-track { background:var(--panel-surface-1); border:1px solid var(--panel-surface-2); border-radius:10px; padding:3px; display:flex; }
-  .mt-pill-opt { flex:1; font-size:11px; font-weight:500; padding:8px 0; border-radius:9px; text-align:center; transition:all .2s; cursor:pointer; color:var(--panel-text-2); border:none; background:transparent; display:flex; align-items:center; justify-content:center; gap:6px; }
+  .mt-pill-opt { flex:1; font-size:12px; font-weight:500; padding:8px 0; border-radius:9px; text-align:center; transition:all .2s; cursor:pointer; color:var(--panel-text-2); border:none; background:transparent; display:flex; align-items:center; justify-content:center; gap:6px; }
   .mt-pill-opt.active { background:var(--accent-violet); color:#fff; box-shadow:0 4px 16px rgba(124,58,237,.22); }
   .mt-pill-opt.active-audio { background:var(--accent-pink); color:#fff; box-shadow:0 4px 16px rgba(219,39,119,.22); }
   .mt-pill-opt:not(.active):not(.active-audio):hover { color:var(--accent-violet-light); }
 
   .mt-config-group { display:flex; flex-direction:column; gap:8px; }
-  .mt-config-label { font-size:11px; font-weight:700; color:var(--panel-text-2); text-transform:uppercase; letter-spacing:.14em; }
+  .mt-config-label { font-size:12px; font-weight:700; color:var(--panel-text-2); text-transform:uppercase; letter-spacing:.14em; }
   .mt-config-select { background:var(--panel-surface-0); border:1px solid var(--panel-surface-2); border-radius:12px; color:var(--text-primary); font-size:12px; padding:10px 12px; outline:none; }
   .mt-config-select:focus { border-color:var(--accent-violet); }
   .mt-config-toggle { width:100%; border:1px solid var(--panel-surface-2); border-radius:14px; background:transparent; color:var(--accent-purple-light); padding:12px 0; font-size:12px; font-weight:600; cursor:pointer; transition:all .2s; }
   .mt-config-toggle.active { background:var(--panel-surface-3); border-color:var(--accent-violet); color:var(--panel-text-1); }
+
+  .mt-video-grid { display:grid; grid-template-columns:repeat(4,minmax(0,1fr)); gap:16px; align-items:stretch; }
+  .mt-side { width:340px; min-width:300px; flex-shrink:0; }
+  @media (max-width:1180px) { .mt-video-grid { grid-template-columns:repeat(2,minmax(0,1fr)); } }
+  @media (max-width:1000px) {
+    .mt-body { flex-direction:column; overflow-y:auto !important; }
+    .mt-main { overflow:visible !important; flex:none !important; }
+    .mt-side { width:100%; min-width:0; overflow:visible !important; padding:0 20px 20px !important; }
+  }
+  @media (max-width:560px) { .mt-video-grid { grid-template-columns:minmax(0,1fr); } }
 
   .mt-add-card { min-height:220px; }
   .mt-add-card:hover { border-color: rgba(124,58,237,.5); background: rgba(124,58,237,.04); }
 
   .mt-card { transition: border-color .2s, box-shadow .2s; }
   .mt-card:hover { border-color: var(--panel-surface-5) !important; }
-  .mt-url-input::placeholder { color:var(--panel-border-strong); }
+  .mt-url-input::placeholder { color:var(--panel-text-3); }
   .mt-url-input:focus { border-color:rgba(124,58,237,.5); }
 
   .mt-merge-btn { position:relative; overflow:hidden; }
@@ -315,7 +325,7 @@ function MediaCard({ label, item, setItem, accept, type, onError, isOptional = f
           </div>
           <div>
             <div style={{ fontSize:13, fontWeight:600, color:'var(--text-primary)', letterSpacing:'-0.01em' }}>{label}</div>
-            {isOptional && <div style={{ fontSize:10, color:'var(--panel-border-strong)', marginTop:1 }}>optional</div>}
+            {isOptional && <div style={{ fontSize:12, color:'var(--panel-border-strong)', marginTop:1 }}>optional</div>}
           </div>
         </div>
         {!isReady && !isLoading && item.sourceMode === 'device' && (
@@ -362,7 +372,7 @@ function MediaCard({ label, item, setItem, accept, type, onError, isOptional = f
               <div style={{ width:40, height:40, borderRadius:10, border:`1px dashed ${accentClr}33`, display:'flex', alignItems:'center', justifyContent:'center', color:`${accentClr}55` }}>
                 <div style={{ width:20, height:20 }}>{isAudio ? <Icon.Music /> : <Icon.Plus />}</div>
               </div>
-              <span style={{ fontSize:11, color:'var(--panel-text-3)' }}>
+              <span style={{ fontSize:12, color:'var(--panel-text-3)' }}>
                 {item.sourceMode === 'device' ? `Click to add ${type}` : 'Enter URL below'}
               </span>
               {item.sourceMode === 'device' && (
@@ -380,7 +390,7 @@ function MediaCard({ label, item, setItem, accept, type, onError, isOptional = f
                     border:`1px solid ${accentClr}55`,
                     background:isAudio ? 'rgba(219,39,119,.22)' : 'rgba(124,58,237,.22)',
                     color:'var(--panel-text-1)',
-                    fontSize:11,
+                    fontSize:12,
                     fontWeight:700,
                     display:'inline-flex',
                     alignItems:'center',
@@ -409,7 +419,7 @@ function MediaCard({ label, item, setItem, accept, type, onError, isOptional = f
             <div style={{ width:100, height:2, background:'var(--panel-surface-2)', borderRadius:99, overflow:'hidden' }}>
               <div className="mt-progress-bar" style={{ width:`${item.progress}%`, height:'100%', borderRadius:99, transition:'width .3s' }} />
             </div>
-            <span style={{ fontSize:11, color:'var(--text-muted)' }}>{Math.round(item.progress)}%</span>
+            <span style={{ fontSize:12, color:'var(--text-muted)' }}>{Math.round(item.progress)}%</span>
           </div>
         )}
 
@@ -442,7 +452,7 @@ function MediaCard({ label, item, setItem, accept, type, onError, isOptional = f
             <div style={{ fontSize:14, fontWeight:700, color:'var(--panel-text-1)', letterSpacing:'-0.01em', whiteSpace:'nowrap', overflow:'hidden', textOverflow:'ellipsis' }}>
               {item.fileName || 'No audio selected'}
             </div>
-            <div style={{ fontSize:11, color:'var(--panel-text-2)', marginTop:4 }}>
+            <div style={{ fontSize:12, color:'var(--panel-text-2)', marginTop:4 }}>
               {item.status === 'ready' ? `${formatDuration(item.duration)} · ${formatFileSize(item.file?.size)}` : 'Upload a song to power your montage'}
             </div>
           </div>
@@ -542,8 +552,8 @@ function MediaCard({ label, item, setItem, accept, type, onError, isOptional = f
               <div style={{ width:11, height:11 }}><Icon.Check /></div>
             </div>
             <div style={{ flex:1, minWidth:0 }}>
-              <div style={{ fontSize:11, color:'var(--panel-text-2)', fontWeight:500, whiteSpace:'nowrap', overflow:'hidden', textOverflow:'ellipsis' }}>{item.fileName}</div>
-              <div style={{ fontSize:10, color:'var(--text-muted)', marginTop:1 }}>{formatDuration(item.duration)}</div>
+              <div style={{ fontSize:12, color:'var(--panel-text-2)', fontWeight:500, whiteSpace:'nowrap', overflow:'hidden', textOverflow:'ellipsis' }}>{item.fileName}</div>
+              <div style={{ fontSize:12, color:'var(--text-muted)', marginTop:1 }}>{formatDuration(item.duration)}</div>
             </div>
           </div>
         )}
@@ -551,7 +561,7 @@ function MediaCard({ label, item, setItem, accept, type, onError, isOptional = f
         {/* error */}
         {isError && !isLoading && (
           <div style={{ display:'flex', alignItems:'flex-start', gap:8, padding:'8px 10px', background:'rgba(239,68,68,.06)', borderRadius:9, border:'1px solid rgba(239,68,68,.2)' }}>
-            <span style={{ fontSize:11, color:'var(--danger)', lineHeight:1.4 }}>{item.error}</span>
+            <span style={{ fontSize:12, color:'var(--danger)', lineHeight:1.4 }}>{item.error}</span>
           </div>
         )}
       </div>
@@ -614,15 +624,15 @@ function AudioCard({ item, setItem, accept, onError }) {
         <div style={{ display:'flex', alignItems:'center', justifyContent:'space-between', gap:10, padding:'16px', borderRadius:18, background:'var(--panel-surface-0)', border:'1px solid rgba(255,255,255,.04)' }}>
           <div style={{ minWidth:0 }}>
             <div style={{ fontSize:14, fontWeight:700, color:'var(--panel-text-1)', whiteSpace:'nowrap', overflow:'hidden', textOverflow:'ellipsis' }}>{isReady ? item.fileName || 'Uploaded audio' : 'No audio selected'}</div>
-            <div style={{ fontSize:11, color:'var(--panel-text-2)', marginTop:4 }}>
+            <div style={{ fontSize:12, color:'var(--panel-text-2)', marginTop:4 }}>
               {isReady ? `${formatDuration(item.duration)} · ${formatFileSize(item.file?.size)}` : 'Use the button below to add your song.'}
             </div>
           </div>
-          {isReady && <div style={{ padding:'6px 10px', borderRadius:999, background:'rgba(124,58,237,.16)', color:'var(--accent-violet-light)', fontSize:11, fontWeight:700 }}>Replace track</div>}
+          {isReady && <div style={{ padding:'6px 10px', borderRadius:999, background:'rgba(124,58,237,.16)', color:'var(--accent-violet-light)', fontSize:12, fontWeight:700 }}>Replace track</div>}
         </div>
 
         {isError && (
-          <div style={{ color:'var(--danger)', fontSize:11, background:'rgba(239,68,68,.08)', border:'1px solid rgba(239,68,68,.18)', borderRadius:12, padding:'10px 12px' }}>{item.error}</div>
+          <div style={{ color:'var(--danger)', fontSize:12, background:'rgba(239,68,68,.08)', border:'1px solid rgba(239,68,68,.18)', borderRadius:12, padding:'10px 12px' }}>{item.error}</div>
         )}
       </div>
 
@@ -693,7 +703,7 @@ function ProcessingPreview({ progress, status, totalEstimatedTime, timeSpent, ti
         <div style={{ fontSize:15, fontWeight:600, color:'var(--accent-purple-light)', marginBottom:6 }}>Creating Your Montage</div>
         <div style={{ fontSize:12, color:'var(--text-muted)' }}>{status || fallbackStatus}</div>
         {(totalEstimatedTime > 0 || timeSpent > 0 || timeLeft > 0) && (
-          <div style={{ fontSize:11, color:'var(--panel-text-3)', marginTop:6, display:'flex', gap:12, justifyContent:'center', flexWrap:'wrap' }}>
+          <div style={{ fontSize:12, color:'var(--panel-text-3)', marginTop:6, display:'flex', gap:12, justifyContent:'center', flexWrap:'wrap' }}>
             {totalEstimatedTime > 0 && <span>Total: {formatTime(totalEstimatedTime)}</span>}
             {timeSpent > 0 && <span>Spent: {formatTime(timeSpent)}</span>}
             {timeLeft > 0 && <span>Left: {formatTime(timeLeft)}</span>}
@@ -710,7 +720,7 @@ function ProcessingPreview({ progress, status, totalEstimatedTime, timeSpent, ti
 // tags/hashtags in-app once the upload lands - saved back via a second
 // videos.update call rather than making them go to YouTube Studio.
 
-const ytFieldLabel = { fontSize:10, fontWeight:600, color:'var(--panel-text-3)', textTransform:'uppercase', letterSpacing:'.03em' };
+const ytFieldLabel = { fontSize:12, fontWeight:600, color:'var(--panel-text-3)', textTransform:'uppercase', letterSpacing:'.03em' };
 const ytFieldInput = { width:'100%', padding:'8px 10px', background:'var(--panel-surface-0)', border:'1px solid var(--panel-surface-3)', borderRadius:8, color:'var(--panel-text-1)', fontSize:12, outline:'none', boxSizing:'border-box' };
 const ytPrimaryBtn = { display:'flex', alignItems:'center', justifyContent:'center', gap:8, padding:'10px 16px', background:'var(--danger)', border:'none', borderRadius:10, color:'#fff', fontSize:12, fontWeight:600, cursor:'pointer' };
 
@@ -862,7 +872,7 @@ function YouTubePublishPanel({ outputFile, onClose }) {
         </div>
 
         {errorText && (
-          <div style={{ padding:'8px 10px', background:'rgba(239,68,68,.12)', border:'1px solid rgba(239,68,68,.3)', borderRadius:8, color:'var(--danger)', fontSize:11 }}>{errorText}</div>
+          <div style={{ padding:'8px 10px', background:'rgba(239,68,68,.12)', border:'1px solid rgba(239,68,68,.3)', borderRadius:8, color:'var(--danger)', fontSize:12 }}>{errorText}</div>
         )}
 
         {status === 'checking' && (
@@ -895,7 +905,7 @@ function YouTubePublishPanel({ outputFile, onClose }) {
             {channel && (
               <div style={{ display:'flex', alignItems:'center', gap:8, padding:'8px 10px', background:'var(--panel-surface-0)', border:'1px solid var(--panel-surface-2)', borderRadius:10 }}>
                 {channel.thumbnail && <img src={channel.thumbnail} alt="" style={{ width:24, height:24, borderRadius:'50%' }} />}
-                <span style={{ fontSize:11, color:'var(--panel-text-2)' }}>Connected as <b style={{ color:'var(--panel-text-1)' }}>{channel.title}</b></span>
+                <span style={{ fontSize:12, color:'var(--panel-text-2)' }}>Connected as <b style={{ color:'var(--panel-text-1)' }}>{channel.title}</b></span>
               </div>
             )}
             <label style={ytFieldLabel}>Title</label>
@@ -923,12 +933,12 @@ function YouTubePublishPanel({ outputFile, onClose }) {
 
         {(status === 'details' || status === 'saved') && (
           <div style={{ display:'flex', flexDirection:'column', gap:10 }}>
-            <div style={{ display:'flex', alignItems:'center', gap:8, padding:'8px 10px', background:'rgba(34,197,94,.12)', border:'1px solid rgba(34,197,94,.3)', borderRadius:8, color:'var(--success)', fontSize:11 }}>
+            <div style={{ display:'flex', alignItems:'center', gap:8, padding:'8px 10px', background:'rgba(34,197,94,.12)', border:'1px solid rgba(34,197,94,.3)', borderRadius:8, color:'var(--success)', fontSize:12 }}>
               <div style={{ width:14, height:14 }}><Icon.Check /></div>
               {status === 'saved' ? 'Saved to YouTube.' : 'Uploaded! Now finish your details.'}
             </div>
             {videoUrl && (
-              <a href={videoUrl} target="_blank" rel="noreferrer" style={{ fontSize:11, color:'var(--info-light)', display:'flex', alignItems:'center', gap:5, textDecoration:'none' }}>
+              <a href={videoUrl} target="_blank" rel="noreferrer" style={{ fontSize:12, color:'var(--info-light)', display:'flex', alignItems:'center', gap:5, textDecoration:'none' }}>
                 <div style={{ width:12, height:12 }}><Icon.Link /></div> View on YouTube
               </a>
             )}
@@ -1199,7 +1209,7 @@ function SuccessPreview({ outputFile, loadVideoInEditor, onShurfer, onReset }) {
               <div style={{ width:12, height:12 }}><Icon.SkipForward /></div>
             </button>
 
-            <span style={{ fontSize:10, color:'rgba(255,255,255,.7)', minWidth:72, textAlign:'center', fontVariantNumeric:'tabular-nums' }}>
+            <span style={{ fontSize:12, color:'rgba(255,255,255,.7)', minWidth:72, textAlign:'center', fontVariantNumeric:'tabular-nums' }}>
               {formatDuration(currentTime)} / {formatDuration(dur)}
             </span>
 
@@ -1217,13 +1227,13 @@ function SuccessPreview({ outputFile, loadVideoInEditor, onShurfer, onReset }) {
 
             {/* speed */}
             <div style={{ position:'relative' }}>
-              <button onClick={(e) => { e.stopPropagation(); setShowSpeedMenu(!showSpeedMenu); }} style={{ height:28, padding:'0 8px', borderRadius:6, background:'transparent', border:'1px solid rgba(255,255,255,.15)', color:'rgba(255,255,255,.85)', cursor:'pointer', fontSize:10, fontWeight:600, display:'flex', alignItems:'center', gap:4 }}>
+              <button onClick={(e) => { e.stopPropagation(); setShowSpeedMenu(!showSpeedMenu); }} style={{ height:28, padding:'0 8px', borderRadius:6, background:'transparent', border:'1px solid rgba(255,255,255,.15)', color:'rgba(255,255,255,.85)', cursor:'pointer', fontSize:12, fontWeight:600, display:'flex', alignItems:'center', gap:4 }}>
                 {playbackRate}x <Icon.Settings />
               </button>
               {showSpeedMenu && (
                 <div style={{ position:'absolute', bottom:36, right:0, background:'var(--panel-surface-1)', border:'1px solid var(--panel-border)', borderRadius:8, padding:4, display:'flex', flexDirection:'column', gap:2, zIndex:20, minWidth:72 }} onClick={(e) => e.stopPropagation()}>
                   {[0.5, 0.75, 1, 1.25, 1.5, 2].map(rate => (
-                    <button key={rate} onClick={() => changeSpeed(rate)} style={{ padding:'4px 10px', border:'none', borderRadius:4, background: rate === playbackRate ? 'rgba(124,58,237,.25)' : 'transparent', color: rate === playbackRate ? '#fff' : 'var(--panel-text-2)', cursor:'pointer', fontSize:10, textAlign:'left' }}>{rate}x</button>
+                    <button key={rate} onClick={() => changeSpeed(rate)} style={{ padding:'4px 10px', border:'none', borderRadius:4, background: rate === playbackRate ? 'rgba(124,58,237,.25)' : 'transparent', color: rate === playbackRate ? '#fff' : 'var(--panel-text-2)', cursor:'pointer', fontSize:12, textAlign:'left' }}>{rate}x</button>
                   ))}
                 </div>
               )}
@@ -1235,23 +1245,23 @@ function SuccessPreview({ outputFile, loadVideoInEditor, onShurfer, onReset }) {
       {/* info + actions */}
       <div style={{ display:'flex', gap:10 }}>
         <div style={{ flex:1, padding:'10px 12px', background:'var(--panel-surface-0)', borderRadius:10, border:'1px solid var(--panel-surface-2)' }}>
-          <div style={{ fontSize:11, fontWeight:600, color:'var(--panel-text-2)', whiteSpace:'nowrap', overflow:'hidden', textOverflow:'ellipsis', marginBottom:4 }}>{outputFile.downloadName || outputFile.fileName}</div>
-          <div style={{ fontSize:10, color:'var(--panel-border-strong)' }}>{formatDuration(outputFile.duration)} · {formatFileSize(outputFile.size)}</div>
+          <div style={{ fontSize:12, fontWeight:600, color:'var(--panel-text-2)', whiteSpace:'nowrap', overflow:'hidden', textOverflow:'ellipsis', marginBottom:4 }}>{outputFile.downloadName || outputFile.fileName}</div>
+          <div style={{ fontSize:12, color:'var(--panel-border-strong)' }}>{formatDuration(outputFile.duration)} · {formatFileSize(outputFile.size)}</div>
         </div>
         <div style={{ display:'flex', flexDirection:'column', gap:6 }}>
-          <button onClick={handleDownload} style={{ display:'flex', alignItems:'center', gap:6, padding:'7px 14px', background:'var(--accent-violet)', border:'none', borderRadius:9, color:'#fff', fontSize:11, fontWeight:600, cursor:'pointer', whiteSpace:'nowrap' }}>
+          <button onClick={handleDownload} style={{ display:'flex', alignItems:'center', gap:6, padding:'7px 14px', background:'var(--accent-violet)', border:'none', borderRadius:9, color:'#fff', fontSize:12, fontWeight:600, cursor:'pointer', whiteSpace:'nowrap' }}>
             <div style={{ width:13, height:13 }}><Icon.Download /></div> {isDownloading ? 'Downloading...' : 'Download'}
           </button>
-          <button onClick={() => loadVideoInEditor(outputFile.filePath, outputFile.fileName)} style={{ display:'flex', alignItems:'center', gap:6, padding:'7px 14px', background:'transparent', border:'1px solid rgba(124,58,237,.4)', borderRadius:9, color:'var(--accent-purple)', fontSize:11, fontWeight:600, cursor:'pointer', whiteSpace:'nowrap' }}>
+          <button onClick={() => loadVideoInEditor(outputFile.filePath, outputFile.fileName)} style={{ display:'flex', alignItems:'center', gap:6, padding:'7px 14px', background:'transparent', border:'1px solid rgba(124,58,237,.4)', borderRadius:9, color:'var(--accent-purple)', fontSize:12, fontWeight:600, cursor:'pointer', whiteSpace:'nowrap' }}>
             <div style={{ width:13, height:13 }}><Icon.Edit /></div> Edit
           </button>
-          <button onClick={() => setShowYoutubePanel(true)} style={{ display:'flex', alignItems:'center', gap:6, padding:'7px 14px', background:'rgba(255,0,51,.12)', border:'1px solid rgba(255,0,51,.35)', borderRadius:9, color:'var(--danger)', fontSize:11, fontWeight:600, cursor:'pointer', whiteSpace:'nowrap' }}>
+          <button onClick={() => setShowYoutubePanel(true)} style={{ display:'flex', alignItems:'center', gap:6, padding:'7px 14px', background:'rgba(255,0,51,.12)', border:'1px solid rgba(255,0,51,.35)', borderRadius:9, color:'var(--danger)', fontSize:12, fontWeight:600, cursor:'pointer', whiteSpace:'nowrap' }}>
             <div style={{ width:13, height:13 }}><Icon.Youtube /></div> Upload to YouTube
           </button>
-          <button onClick={onShurfer} style={{ display:'flex', alignItems:'center', gap:6, padding:'7px 14px', background:'rgba(34,197,94,.18)', border:'1px solid rgba(34,197,94,.32)', borderRadius:9, color:'var(--success)', fontSize:11, fontWeight:600, cursor:'pointer', whiteSpace:'nowrap' }}>
+          <button onClick={onShurfer} style={{ display:'flex', alignItems:'center', gap:6, padding:'7px 14px', background:'rgba(34,197,94,.18)', border:'1px solid rgba(34,197,94,.32)', borderRadius:9, color:'var(--success)', fontSize:12, fontWeight:600, cursor:'pointer', whiteSpace:'nowrap' }}>
             <div style={{ width:13, height:13 }}><Icon.Star /></div> Shurfer
           </button>
-          <button onClick={onReset} style={{ display:'flex', alignItems:'center', justifyContent:'center', padding:'7px 14px', background:'transparent', border:'1px solid var(--panel-surface-3)', borderRadius:9, color:'var(--text-muted)', fontSize:11, cursor:'pointer' }}>
+          <button onClick={onReset} style={{ display:'flex', alignItems:'center', justifyContent:'center', padding:'7px 14px', background:'transparent', border:'1px solid var(--panel-surface-3)', borderRadius:9, color:'var(--text-muted)', fontSize:12, cursor:'pointer' }}>
             New
           </button>
         </div>
@@ -1269,7 +1279,7 @@ function ErrorPreview({ error, onRetry }) {
       </div>
       <div>
         <div style={{ fontSize:16, fontWeight:600, color:'var(--text-primary)', marginBottom:8 }}>Merge Failed</div>
-        <div style={{ fontSize:11, color:'var(--text-muted)', fontFamily:'monospace', background:'var(--panel-surface-0)', border:'1px solid var(--panel-surface-2)', borderRadius:8, padding:'8px 12px', textAlign:'left', lineHeight:1.5 }}>{error}</div>
+        <div style={{ fontSize:12, color:'var(--text-muted)', fontFamily:'monospace', background:'var(--panel-surface-0)', border:'1px solid var(--panel-surface-2)', borderRadius:8, padding:'8px 12px', textAlign:'left', lineHeight:1.5 }}>{error}</div>
       </div>
       <button onClick={onRetry}
         style={{ padding:'8px 24px', background:'rgba(239,68,68,.15)', border:'1px solid rgba(239,68,68,.3)', borderRadius:9, color:'var(--danger)', fontSize:12, fontWeight:600, cursor:'pointer' }}>
@@ -1601,11 +1611,11 @@ export default function MontageTab({ loadVideoInEditor, onError, onShurfer, onRe
             <div style={{ width:14, height:14 }}><Icon.Film /></div>
           </div>
           <span style={{ fontSize:13, fontWeight:600, color:'var(--accent-purple-light)', letterSpacing:'-0.01em' }}>Montage Creator</span>
-          <span style={{ fontSize:11, color:'var(--panel-text-3)', marginLeft:4 }}>
+          <span style={{ fontSize:12, color:'var(--panel-text-3)', marginLeft:4 }}>
             {readyCount === 0 ? 'add 3 videos and 1 audio track' : `${readyCount}/3 videos selected${hasAudio ? ' · audio ready' : ''}`}
           </span>
           {isSocketUnavailable && (
-            <span style={{ fontSize:10, color:'var(--danger)', marginLeft:8 }}>
+            <span style={{ fontSize:12, color:'var(--danger)', marginLeft:8 }}>
               {socketError}
             </span>
           )}
@@ -1634,8 +1644,8 @@ export default function MontageTab({ loadVideoInEditor, onError, onShurfer, onRe
       </div>
 
       {/* ── Body: source setup or preview page */}
-      <div style={{ flex:1, display:'flex', overflow:'hidden' }}>
-        <div style={{ flex:1, padding:'24px 20px', overflow:'hidden', minHeight:0, maxHeight:'100vh' }}>
+      <div className="mt-body" style={{ flex:1, display:'flex', overflow:'hidden', minHeight:0 }}>
+        <div className="mt-main" style={{ flex:1, padding:'16px 20px', overflowY:'auto', overflowX:'hidden', minHeight:0, minWidth:0 }}>
           {mergeStatus === 'idle' ? (
             <div style={{ display:'flex', flexDirection:'column', gap:20, minWidth:0, minHeight:0 }}>
               <div style={{ borderRadius:22, background:'var(--panel-surface-0)', border:'1px solid var(--panel-surface-1)', padding:24, display:'flex', flexDirection:'column', gap:20 }}>
@@ -1644,19 +1654,19 @@ export default function MontageTab({ loadVideoInEditor, onError, onShurfer, onRe
                   <div style={{ fontSize:12, color:'var(--panel-text-2)', marginTop:6 }}>Add at least two video clips, choose your audio track, then click Merge Montage to generate the preview.</div>
                 </div>
 
-                <div style={{ display:'grid', gridTemplateColumns:'repeat(4,minmax(0,1fr))', gap:16, alignItems:'stretch' }}>
+                <div className="mt-video-grid">
                   <MediaCard label="Video Source 1" item={videos[0]} setItem={setVideo0} accept="video/*" type="video" onError={onError} animDelay="mt-stagger-1" />
                   <MediaCard label="Video Source 2" item={videos[1]} setItem={setVideo1} accept="video/*" type="video" onError={onError} animDelay="mt-stagger-2" />
                   <MediaCard label="Video Source 3" item={videos[2]} setItem={setVideo2} accept="video/*" type="video" onError={onError} animDelay="mt-stagger-3" />
                   <div className="mt-card mt-add-card" style={{ borderRadius:20, border:'1px dashed rgba(124,58,237,.3)', background:'var(--panel-surface-0)', display:'flex', flexDirection:'column', alignItems:'center', justifyContent:'center', gap:12, padding:20, textAlign:'center', minHeight:210, cursor:'default' }}>
                     <div style={{ width:44, height:44, borderRadius:14, background:'rgba(124,58,237,.15)', display:'flex', alignItems:'center', justifyContent:'center', color:'var(--accent-purple)' }}><Icon.Plus /></div>
                     <div style={{ fontSize:13, fontWeight:700, color:'var(--text-primary)' }}>Add more video</div>
-                    <div style={{ fontSize:11, color:'var(--panel-text-3)', lineHeight:1.6 }}>Use extra clips to expand your montage rhythm and create a fuller story.</div>
+                    <div style={{ fontSize:12, color:'var(--panel-text-3)', lineHeight:1.6 }}>Use extra clips to expand your montage rhythm and create a fuller story.</div>
                   </div>
                 </div>
               </div>
 
-              <div style={{ width:'100%', paddingTop:24, paddingBottom:24, display:'flex', justifyContent:'center' }}>
+              <div style={{ width:'100%', paddingTop:0, paddingBottom:8, display:'flex', justifyContent:'center' }}>
                 <div style={{ width:'100%', maxWidth:920, minWidth:0 }}>
                   <AudioCard item={audio} setItem={setAudio} accept="audio/*" onError={onError} />
                 </div>
@@ -1686,13 +1696,13 @@ export default function MontageTab({ loadVideoInEditor, onError, onShurfer, onRe
           )}
         </div>
 
-        <div style={{ width:340, display:'flex', flexDirection:'column', gap:18, minWidth:300 }}>
+        <div className="mt-side" style={{ display:'flex', flexDirection:'column', gap:18, overflowY:'auto', minHeight:0, padding:'16px 20px 16px 0' }}>
           <div style={{ borderRadius:22, background:'var(--panel-surface-0)', border:'1px solid var(--panel-surface-1)', padding:22, display:'flex', flexDirection:'column', gap:16 }}>
             <div style={{ display:'flex', alignItems:'center', gap:12 }}>
               <div style={{ width:36, height:36, borderRadius:12, background:'rgba(124,58,237,.14)', display:'flex', alignItems:'center', justifyContent:'center', color:'var(--accent-violet-light)' }}><Icon.Waveform /></div>
               <div>
                 <div style={{ fontSize:14, fontWeight:700, color:'var(--text-primary)' }}>Sync & output settings</div>
-                <div style={{ fontSize:11, color:'var(--panel-text-3)' }}>Keep the montage aligned with the song beat and refine quality.</div>
+                <div style={{ fontSize:12, color:'var(--panel-text-3)' }}>Keep the montage aligned with the song beat and refine quality.</div>
               </div>
             </div>
 
@@ -1745,7 +1755,7 @@ export default function MontageTab({ loadVideoInEditor, onError, onShurfer, onRe
                 }}
                 onBlur={() => { if (skipStartSeconds === '' || Number.isNaN(Number(skipStartSeconds))) setSkipStartSeconds(40); }}
               />
-              <div style={{ fontSize:10, color:'var(--panel-text-3)', lineHeight:1.5 }}>
+              <div style={{ fontSize:12, color:'var(--panel-text-3)', lineHeight:1.5 }}>
                 Clips are never pulled from the first N seconds of each source video (skips intros/setup footage). Default is 40s.
               </div>
             </div>
@@ -1770,12 +1780,12 @@ export default function MontageTab({ loadVideoInEditor, onError, onShurfer, onRe
               </button>
             </div>
 
-            <div style={{ fontSize:11, color:'var(--panel-text-3)', lineHeight:1.6 }}>Use sync and beauty controls together to guide the montage toward a cinematic beat-driven edit.</div>
+            <div style={{ fontSize:12, color:'var(--panel-text-3)', lineHeight:1.6 }}>Use sync and beauty controls together to guide the montage toward a cinematic beat-driven edit.</div>
           </div>
 
           <div style={{ borderRadius:22, background:'var(--panel-surface-0)', border:'1px solid var(--panel-surface-1)', padding:18, display:'flex', flexDirection:'column', gap:14 }}>
             <div style={{ fontSize:12, fontWeight:700, color:'var(--text-primary)' }}>Creative boost</div>
-            <div style={{ fontSize:11, color:'var(--panel-text-2)', lineHeight:1.6 }}>Try the settings above to make the generated clip more dynamic, vibrant, and polished.</div>
+            <div style={{ fontSize:12, color:'var(--panel-text-2)', lineHeight:1.6 }}>Try the settings above to make the generated clip more dynamic, vibrant, and polished.</div>
             <div style={{ display:'grid', gap:10, marginTop:8 }}>
               <button type="button" className={`mt-config-toggle ${smoothTransitions ? 'active' : ''}`} onClick={() => setSmoothTransitions(prev => !prev)}>
                 Smooth transitions
@@ -1786,12 +1796,12 @@ export default function MontageTab({ loadVideoInEditor, onError, onShurfer, onRe
             </div>
             <div style={{ display:'grid', gap:10, marginTop:8 }}>
               <div style={{ background:'var(--panel-surface-0)', border:'1px solid var(--panel-surface-2)', borderRadius:14, padding:12, display:'flex', alignItems:'center', justifyContent:'space-between' }}>
-                <span style={{ fontSize:11, color:'var(--accent-purple-light)' }}>Motion accent</span>
-                <span style={{ fontSize:10, color:'var(--panel-text-2)' }}>{enhanceMotion ? 'On' : 'Off'}</span>
+                <span style={{ fontSize:12, color:'var(--accent-purple-light)' }}>Motion accent</span>
+                <span style={{ fontSize:12, color:'var(--panel-text-2)' }}>{enhanceMotion ? 'On' : 'Off'}</span>
               </div>
               <div style={{ background:'var(--panel-surface-0)', border:'1px solid var(--panel-surface-2)', borderRadius:14, padding:12, display:'flex', alignItems:'center', justifyContent:'space-between' }}>
-                <span style={{ fontSize:11, color:'var(--accent-purple-light)' }}>Color boost</span>
-                <span style={{ fontSize:10, color:'var(--panel-text-2)' }}>{colorBoost ? 'On' : 'Off'}</span>
+                <span style={{ fontSize:12, color:'var(--accent-purple-light)' }}>Color boost</span>
+                <span style={{ fontSize:12, color:'var(--panel-text-2)' }}>{colorBoost ? 'On' : 'Off'}</span>
               </div>
             </div>
           </div>
