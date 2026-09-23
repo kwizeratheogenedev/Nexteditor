@@ -12,6 +12,10 @@
   --text-primary: #f2f2f5;
   --text-secondary: #b4b4bc;
   --text-muted: #8f8f99;
+  /* Bright cyan primary accent + violet secondary - matches the palette in
+     the hero-demo.mp4 product video (HeroShowcase), which is what these
+     tokens were originally built around before a brief orange/crimson
+     rebrand experiment. */
   --accent: #00c8ff;
   --accent-dim: rgba(0, 200, 255, 0.15);
   --accent-border: rgba(0, 200, 255, 0.35);
@@ -105,6 +109,17 @@
   --panel-text-3: #67656f;
   --accent-purple-soft: #ece9fb;
   --info-light: #1d4ed8;
+  /* The bright dark-theme cyan/violet (#00c8ff/#c2b8f0/#f9a8d4) reads great
+     as text on near-black panels but fails contrast (~2:1) against this
+     theme's white surfaces - same class of problem --info-light above
+     already exists to fix. Use deeper blue/violet/pink here instead;
+     --accent-purple's own base value needs no override since it was already
+     deep enough to read on white. */
+  --accent: #0077b3;
+  --accent-purple-light: #5b21b6;
+  --accent-violet-light: #5b21b6;
+  --accent-hover: #0077b3;
+  --accent-pink-light: #a3155e;
 
   --clip-video-bg: #dce8f7;
   --clip-video-border: #a9c9ea;

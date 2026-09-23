@@ -2596,7 +2596,7 @@ function App() {
       />
       <EditorStateProvider timelineValue={editorTimelineContextValue} playbackValue={editorPlaybackContextValue}>
       <div id="main-area">
-        <LeftSidebar activeTab={activeTab} onSelect={setActiveTab} />
+        <LeftSidebar activeTab={activeTab} onSelect={setActiveTab} onOpenProjects={() => setProjectsModalOpen(true)} />
         <CenterPanel
           activeTab={activeTab}
           mediaProps={mediaProps}
