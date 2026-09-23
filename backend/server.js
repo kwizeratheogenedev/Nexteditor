@@ -24,10 +24,19 @@ import { jobStore, deleteJob } from './services/jobStore.js';
 import { initSocket, isOriginAllowed } from './socket.js';
 import { connectDB } from './db.js';
 import { ownerEmails } from './services/owners.js';
+import { securityHeaders, configureProxyTrust, applyRateLimits } from './middleware/security.js';
+import { createDiskGuard } from './middleware/diskGuard.js';
+import { requestLogger } from './middleware/requestLog.js';
+import { installCrashHandlers } from './services/crashHandlers.js';
+import healthRouter from './routes/health.js';
 
 const __filename = fileURLToPath(import.meta.url);
 const __dirname = path.dirname(__filename);
 const app = express();
+installCrashHandlers();
+configureProxyTrust(app);
+app.use(securityHeaders);
+app.use(requestLogger());
 // Hosting platforms (Render, Fly.io, etc.) assign the listen port via PORT
 // and expect the app to bind exactly to it - only fall back to auto-picking
 // a free port (see the EADDRINUSE retry in startServer) when PORT wasn't
@@ -68,12 +77,16 @@ app.use(cors({
 }));
 app.use(cookieParser());
 app.use(express.json());
+applyRateLimits(app);
+app.use(createDiskGuard());
 app.use('/clips', express.static(clipsDir));
 
 // Used by hosting platforms for restart/zero-downtime-deploy health checks.
 app.get('/health', (req, res) => {
   res.status(200).json({ status: 'ok' });
 });
+
+app.use('/health/details', healthRouter);
 
 app.use('/api/convert', convertRouter);
 app.use('/api/burn-subtitles', burnSubtitlesRouter);

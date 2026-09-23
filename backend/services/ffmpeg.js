@@ -2,6 +2,7 @@ import os from 'os';
 import { spawn } from 'child_process';
 import ffmpegPath from 'ffmpeg-static';
 import ffprobePath from 'ffprobe-static';
+import { ffmpegGate } from './renderGate.js';
 
 function resolveBinaryPath(pkgExport) {
   if (typeof pkgExport === 'string') return pkgExport;
@@ -101,7 +102,24 @@ export function probeHasAudio(filePath) {
 // `lowPriority` runs the process below normal CPU priority: when a job fans out
 // into several encoders, that keeps the single-threaded jobs beside it (the
 // audio mix) and the rest of the machine from being starved by them.
-export function runFFmpeg(args, { duration, onProgress, timeout, cwd, signal, lowPriority } = {}) {
+//
+// Every ffmpeg launch in the app goes through runFFmpeg, so waiting for a free
+// slot in the global gate (see renderGate.js) protects all routes at once,
+// and all the options above are passed straight through. The kill-switch
+// timeout in runFFmpegNow only starts once the process actually spawns, so
+// time spent queued never counts against a job.
+export async function runFFmpeg(args, options) {
+  const release = await ffmpegGate.acquire();
+  try {
+    // Cancelled while still waiting in line: don't start it at all.
+    if (options?.signal?.aborted) throw new Error('Render cancelled.');
+    return await runFFmpegNow(args, options);
+  } finally {
+    release();
+  }
+}
+
+function runFFmpegNow(args, { duration, onProgress, timeout, cwd, signal, lowPriority } = {}) {
   const FFMPEG_TIMEOUT = timeout || parseInt(process.env.FFMPEG_TIMEOUT || '3600000', 10); // Default 1 hour
 
   return new Promise((resolve, reject) => {
