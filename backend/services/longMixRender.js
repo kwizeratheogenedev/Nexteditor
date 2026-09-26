@@ -1,8 +1,8 @@
 import fs from 'fs';
-import os from 'os';
 import path from 'path';
 import { runFFmpeg, probeDuration } from './ffmpeg.js';
 import { planLongMix, SAMPLE_RATE, MOTION_PRESETS, STILL_MOTION } from './longMixPlan.js';
+import { EFFECTIVE_CPUS, MAX_PARALLEL_ENCODES } from './cpuBudget.js';
 
 // LongMix Studio's own renderer. The general editor export (see
 // filterGraph/index.js) builds ONE filter graph for the whole timeline and
@@ -52,7 +52,7 @@ function envInt(name, fallback) {
 // 2-3 concurrent chunks rendered the video as fast as 5 and finished the whole
 // mix sooner).
 function defaultConcurrency() {
-  return envInt('LONGMIX_CONCURRENCY', Math.max(1, Math.min(3, Math.floor(os.cpus().length / 4))));
+  return envInt('LONGMIX_CONCURRENCY', Math.max(1, Math.min(3, MAX_PARALLEL_ENCODES, Math.floor(EFFECTIVE_CPUS / 4))));
 }
 
 async function runPool(items, limit, worker) {

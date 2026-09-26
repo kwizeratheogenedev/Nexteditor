@@ -1,4 +1,4 @@
-import os from 'os';
+import { MAX_PARALLEL_ENCODES } from './cpuBudget.js';
 
 // A first-in-first-out concurrency limiter. runFFmpeg (services/ffmpeg.js)
 // acquires a slot before spawning, so no matter how many montages, exports or
@@ -44,10 +44,11 @@ export function createGate(max) {
 // Default: one process per CPU core (never fewer than 2). A single montage
 // already fans out to cpus-1 clip encodes, so this lets one job use the
 // machine fully while still capping the total when several arrive together.
-// Override with FFMPEG_MAX_CONCURRENT.
+// In a container (Render) the real CPU/memory limits decide instead - see
+// cpuBudget.js. Override with FFMPEG_MAX_CONCURRENT.
 const configured = Number(process.env.FFMPEG_MAX_CONCURRENT);
 const defaultMax = Number.isFinite(configured) && configured > 0
   ? configured
-  : Math.max(2, (os.cpus() || []).length);
+  : MAX_PARALLEL_ENCODES;
 
 export const ffmpegGate = createGate(defaultMax);

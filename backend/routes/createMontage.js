@@ -9,8 +9,8 @@ import { getIo } from '../socket.js';
 import { optionalAuth } from '../middleware/auth.js';
 import { upsertJob } from '../services/jobTracker.js';
 import pLimit from 'p-limit';
-import os from 'os';
 import { UPLOADS_DIR, CLIPS_DIR } from '../storagePaths.js';
+import { IS_LIMITED, EFFECTIVE_CPUS, MAX_PARALLEL_ENCODES } from '../services/cpuBudget.js';
 
 
 const router = express.Router();
@@ -412,8 +412,8 @@ router.post('/', optionalAuth, upload.any(), async (req, res) => {
     // idle and slowed renders for no reason (output length/quality are
     // unaffected either way, this only changes how many clips render at
     // the same time).
-    const cpuCount = (os.cpus() || []).length || 4;
-    const clipLimit = pLimit(Math.max(2, cpuCount - 1));
+    // In a container the instance's real limits decide (see cpuBudget.js).
+    const clipLimit = pLimit(IS_LIMITED ? MAX_PARALLEL_ENCODES : Math.max(2, EFFECTIVE_CPUS - 1));
     let completedClips = 0;
     const totalClips = clipPlan.length;
     const clipRangeStart = 10;

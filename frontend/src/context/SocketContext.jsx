@@ -15,6 +15,12 @@ function getSocketUrlCandidates() {
   const protocol = window.location.protocol;
   const host = window.location.hostname;
   const isLocal = host === 'localhost' || host === '127.0.0.1';
+  // A deployed site with a configured backend address uses only that: the
+  // localhost/port guesses below are for local development and would just
+  // fail (and spam the console) on a hosted site.
+  if (!isLocal && configuredUrls.length) {
+    return configuredUrls;
+  }
   const fallbackUrls = [
     // Reached from another device, "host:3000" isn't necessarily routable -
     // only this page's own origin is. Vite's dev proxy forwards /socket.io on

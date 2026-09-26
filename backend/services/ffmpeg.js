@@ -3,6 +3,7 @@ import { spawn } from 'child_process';
 import ffmpegPath from 'ffmpeg-static';
 import ffprobePath from 'ffprobe-static';
 import { ffmpegGate } from './renderGate.js';
+import { FFMPEG_THREADS } from './cpuBudget.js';
 
 function resolveBinaryPath(pkgExport) {
   if (typeof pkgExport === 'string') return pkgExport;
@@ -119,11 +120,27 @@ export async function runFFmpeg(args, options) {
   }
 }
 
+// In a container ffmpeg would size its decoder, filter and encoder threads
+// by the HOST's core count (see cpuBudget.js) and a single 1080p encode can
+// then outgrow a 512 MB instance. Caps every one of those thread pools when
+// FFMPEG_THREADS applies; commands that already choose threads are left alone.
+export function withThreadLimit(args, threads = FFMPEG_THREADS) {
+  if (!threads || args.includes('-threads') || args.length === 0) return args;
+  const n = String(threads);
+  const limited = ['-filter_threads', n, '-filter_complex_threads', n];
+  args.slice(0, -1).forEach((arg) => {
+    if (arg === '-i') limited.push('-threads', n);
+    limited.push(arg);
+  });
+  limited.push('-threads', n, args[args.length - 1]);
+  return limited;
+}
+
 function runFFmpegNow(args, { duration, onProgress, timeout, cwd, signal, lowPriority } = {}) {
   const FFMPEG_TIMEOUT = timeout || parseInt(process.env.FFMPEG_TIMEOUT || '3600000', 10); // Default 1 hour
 
   return new Promise((resolve, reject) => {
-    const child = spawn(FFMPEG_BINARY, args, cwd ? { cwd } : undefined);
+    const child = spawn(FFMPEG_BINARY, withThreadLimit(args), cwd ? { cwd } : undefined);
     if (lowPriority && child.pid) {
       try {
         os.setPriority(child.pid, os.constants.priority.PRIORITY_BELOW_NORMAL);

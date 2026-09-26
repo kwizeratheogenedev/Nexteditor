@@ -34,6 +34,7 @@ import { requestLogger } from './middleware/requestLog.js';
 import { installCrashHandlers } from './services/crashHandlers.js';
 import healthRouter from './routes/health.js';
 import { UPLOADS_DIR, CLIPS_DIR } from './storagePaths.js';
+import { describeBudget } from './services/cpuBudget.js';
 
 const app = express();
 installCrashHandlers();
@@ -182,6 +183,7 @@ function startServer(p, attempts = 0,hos ='0.0.0.0') {
   serverInstance.listen(p, hos)
     .once('listening', () => {
       console.log(`Video processing backend is listening on port ${p}`);
+      console.log('Render budget:', JSON.stringify(describeBudget()));
       // Printed at startup so "why am I being charged free-tier limits?"
       // is answerable by looking at the terminal instead of guessing: if
       // this line is empty, OWNER_EMAILS never reached the process.
