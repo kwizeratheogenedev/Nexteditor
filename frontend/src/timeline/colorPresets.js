@@ -4,7 +4,13 @@
 // therefore the exact same preview/export pipeline) that the manual sliders
 // already write to, so no new filter type or backend work is needed here.
 export const COLOR_PRESETS = [
-  { id: 'none', label: 'None', swatch: 'linear-gradient(135deg, #6b7280, #9ca3af)', params: { brightness: 0, contrast: 0, saturation: 0, temperature: 0 } },
+  // The four `featured` looks are the ones shown up front in the inspector
+  // (the studio's Natural / Warm film / Teal & orange / Mono row); the rest
+  // sit behind "+ more". Natural is "no grade" - it clears the look.
+  { id: 'natural', label: 'Natural', featured: true, swatch: 'linear-gradient(135deg, #6b7280, #9ca3af)', params: { brightness: 0, contrast: 0, saturation: 0, temperature: 0 } },
+  { id: 'warm-film', label: 'Warm film', featured: true, swatch: 'linear-gradient(135deg, #f6d365, #c96b3c)', params: { brightness: 6, contrast: 12, saturation: 18, temperature: 30 } },
+  { id: 'teal-orange', label: 'Teal & orange', featured: true, swatch: 'linear-gradient(135deg, #1f8a8a, #f28c38)', params: { brightness: 0, contrast: 22, saturation: 24, temperature: 12 } },
+  { id: 'mono', label: 'Mono', featured: true, swatch: 'linear-gradient(135deg, #1c1c1c, #d9d9d9)', params: { brightness: 0, contrast: 12, saturation: -100, temperature: 0 } },
   { id: 'cinematic', label: 'Cinematic', swatch: 'linear-gradient(135deg, #0f2027, #2c5364)', params: { brightness: -5, contrast: 25, saturation: -15, temperature: -10 } },
   { id: 'vivid', label: 'Vivid', swatch: 'linear-gradient(135deg, #ff512f, #f09819)', params: { brightness: 5, contrast: 20, saturation: 35, temperature: 5 } },
   { id: 'warm', label: 'Warm', swatch: 'linear-gradient(135deg, #f6d365, #fda085)', params: { brightness: 5, contrast: 5, saturation: 10, temperature: 35 } },

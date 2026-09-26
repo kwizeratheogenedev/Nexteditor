@@ -21,6 +21,9 @@ import ProjectsModal from './components/ProjectsModal';
 import JobsResumeBanner from './components/JobsResumeBanner';
 import MontageTab from './components/MontageTab';
 import BottomTimeline, { PX_PER_SECOND, laneHeight } from './components/BottomTimeline';
+import ExportCompleteDialog from './components/ExportCompleteDialog';
+import { laneCode, laneName } from './timeline/laneNames';
+import './styles/studio.css';
 
 const VALID_TABS = ['media', 'captions', 'shorts', 'longmix', 'editor'];
 
@@ -49,6 +52,29 @@ async function readErrorMessage(response) {
   }
 
   return response.text();
+}
+
+// "Golden Hour — Promo" -> "golden-hour-promo" (export file names).
+function slugify(text) {
+  return String(text || '').toLowerCase().normalize('NFKD').replace(/[\u0300-\u036f]/g, '')
+    .replace(/[^a-z0-9]+/g, '-').replace(/^-+|-+$/g, '').slice(0, 60);
+}
+
+// A readable file name for media pulled in from a link: the link's own file
+// name when it has one, youtube-<id> for YouTube, otherwise the site name.
+function fileNameForLink(url, kind) {
+  const ext = kind === 'audio' ? 'mp3' : 'mp4';
+  try {
+    const parsed = new URL(url);
+    const host = parsed.hostname.replace(/^www\./, '');
+    const youtubeId = parsed.searchParams.get('v') || (host === 'youtu.be' ? parsed.pathname.slice(1) : '');
+    if (/youtube\.com|youtu\.be/.test(host) && youtubeId) return `youtube-${youtubeId.slice(0, 20)}.${ext}`;
+    const last = decodeURIComponent(parsed.pathname.split('/').filter(Boolean).pop() || '');
+    if (/\.[a-z0-9]{2,4}$/i.test(last)) return last.slice(0, 80);
+    return `${slugify(host) || 'link'}-${Date.now().toString(36)}.${ext}`;
+  } catch {
+    return `link-${Date.now().toString(36)}.${ext}`;
+  }
 }
 
 function App() {
@@ -164,6 +190,11 @@ function App() {
   } = mediaState;
 
   const [projectsModalOpen, setProjectsModalOpen] = useState(false);
+  // Which sidebar entry opened the editor: 'media' (the bin, nothing
+  // selected) or 'edit' (working on clips). Only decides which item is lit.
+  const [editorPane, setEditorPane] = useState('edit');
+  const [mediaFocusTick, setMediaFocusTick] = useState(0);
+  const [exportDone, setExportDone] = useState(null);
 
   // LongMix Studio (the songs/scenes/settings the wizard is collecting, and
   // whatever render is or was in flight) - persisted across a reload or
@@ -368,6 +399,8 @@ function App() {
         url: clip.url,
         remoteUrl: clip.remoteUrl,
         color: clip.color,
+        keyframes: clip.keyframes,
+        enabled: clip.enabled,
       });
       return {
         video: buildLanes(editorVideoClips, trackMeta.video.length).map((lane) => lane.map(toDisplay('Clip'))),
@@ -488,16 +521,16 @@ function App() {
 
   const [timelineHeight, setTimelineHeight] = useState(() => {
     try {
-      const stored = localStorage.getItem('nexeditor_timeline_height');
-      return stored ? Number(stored) : 238;
+      const stored = localStorage.getItem('nexeditor_timeline_height_v2');
+      return stored ? Number(stored) : 340;
     } catch {
-      return 238;
+      return 340;
     }
   });
 
   useEffect(() => {
     try {
-      localStorage.setItem('nexeditor_timeline_height', String(timelineHeight));
+      localStorage.setItem('nexeditor_timeline_height_v2', String(timelineHeight));
     } catch {
       // ignore storage errors
     }
@@ -1280,11 +1313,7 @@ function App() {
   // so an audio file lands on the audio track and an image becomes a still
   // clip instead of being probed with a <video> element that would never
   // report a duration for it.
-  const handleEditorUpload = (event) => {
-    const file = event.target.files[0];
-    if (!file) {
-      return;
-    }
+  const importEditorFile = (file) => {
     if (file.type.startsWith('audio/')) {
       addAudioFileToTimeline(file);
     } else if (file.type.startsWith('image/')) {
@@ -1292,7 +1321,35 @@ function App() {
     } else {
       addVideoFileToTimeline(file);
     }
+  };
+
+  const handleEditorUpload = (event) => {
+    [...(event.target.files || [])].forEach(importEditorFile);
     event.target.value = '';
+  };
+
+  // Paste-a-link import for the editor's media bin: the server downloads
+  // the link (the same service Montage uses), then the file is pulled into
+  // the browser and imported exactly like a local file, marked "From link".
+  const handleEditorImportUrl = async (url, onStatus) => {
+    const isAudio = /\.(mp3|wav|m4a|aac|ogg|flac)(\?|#|$)/i.test(url);
+    const kind = isAudio ? 'audio' : 'video';
+    onStatus?.('Downloading from the link…');
+    const res = await fetch(API_ENDPOINTS.fetchUrlVideo, {
+      method: 'POST',
+      credentials: 'include',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ url, type: kind, socketId }),
+    });
+    const data = await res.json().catch(() => ({}));
+    if (!res.ok) throw new Error(data.error || 'Could not fetch that link.');
+    onStatus?.('Adding it to your media…');
+    const fileRes = await fetch(API_ENDPOINTS.fetchUrlFile(data.fileName, kind), { credentials: 'include' });
+    if (!fileRes.ok) throw new Error('The download finished but could not be loaded - try again.');
+    const blob = await fileRes.blob();
+    const file = new File([blob], fileNameForLink(url, kind), { type: blob.type || (isAudio ? 'audio/mpeg' : 'video/mp4') });
+    file.nexFromLink = true;
+    importEditorFile(file);
   };
 
   // Splits whichever clip is under the playhead - now that every clip has
@@ -1702,7 +1759,11 @@ function App() {
         // per-type, not per-lane), so this single row height is valid for
         // every lane of that type - no need to walk individual row offsets.
         const rowHeight = laneHeight(expandedTracks?.[metaType]);
-        const laneDelta = Math.round(deltaY / rowHeight);
+        // Video and text lanes are listed highest-first (V2 above V1, see
+        // BottomTimeline's displayOrder), so dragging DOWN means a LOWER lane
+        // index there; audio lanes read top-down.
+        const laneDirection = metaType === 'audio' ? 1 : -1;
+        const laneDelta = Math.round(deltaY / rowHeight) * laneDirection;
         const laneCount = trackMeta[metaType]?.length || 1;
         let newTrackIndex = Math.max(0, Math.min(original.trackIndex + laneDelta, laneCount - 1));
         // Reject a drop onto a locked destination lane - keep the clip on
@@ -2250,7 +2311,7 @@ function App() {
       return !trackMeta?.[type]?.[laneIndex]?.hidden && clip.enabled !== false;
     });
 
-    const { formData, missingSourceClipId } = buildExportFormData(exportableTimeline, editorCanvasSize, 'nexeditor-export');
+    const { formData, missingSourceClipId } = buildExportFormData(exportableTimeline, editorCanvasSize, slugify(projectName) || 'nexeditor-export');
     if (missingSourceClipId) {
       setErrorText('One of your clips is missing its video file - try re-importing it.');
       setProcessing(false);
@@ -2268,6 +2329,13 @@ function App() {
       const data = await promise;
       setProgress({ percent: 100, currentTime: 'Export complete' });
       await downloadExportResult(data);
+      setExportDone({
+        data,
+        fileName: data.downloadName || data.fileName,
+        resolution: editorCanvasSize?.resolutionId || `${editorCanvasSize?.height || 1080}p`,
+        size: data.size,
+        savedToAccount: Boolean(currentProjectId),
+      });
     } catch (error) {
       console.error('Editor export failed:', error);
       setErrorText(error.message || 'Failed to export the timeline.');
@@ -2444,6 +2512,32 @@ function App() {
   );
   const longMixRuntime = longMixResult?.duration || 0;
 
+  const handleSidebarSelect = (id) => {
+    if (id === 'library') {
+      setActiveTab('editor');
+      setEditorPane('media');
+      setSelectedClipId(null);
+      setSelectedClipIds([]);
+      setMediaFocusTick((tick) => tick + 1);
+      return;
+    }
+    if (id === 'editor') setEditorPane('edit');
+    setActiveTab(id);
+  };
+
+  // Selecting a clip anywhere means you're editing - light up Edit.
+  const selectClipForEditing = (clipId, event) => {
+    setEditorPane('edit');
+    handleClipSelect(clipId, event);
+  };
+
+  // "V1 · Main" for the inspector's Track field.
+  const describeTrack = (clip) => {
+    const type = laneTypeForClip(clip);
+    const laneIndex = clip.trackIndex || 0;
+    return `${laneCode(type, laneIndex)} · ${laneName(type, laneIndex, trackMeta?.[type]?.[laneIndex]?.name)}`;
+  };
+
   const triggerExport = () => {
     if (activeTab === 'media') {
       handleMontageConvert();
@@ -2593,10 +2687,13 @@ function App() {
         onSaveProject={saveProjectToAccount}
         onOpenProjects={() => setProjectsModalOpen(true)}
         canvasSize={editorCanvasSize}
+        onCanvasSizeChange={setEditorCanvasSize}
       />
       <EditorStateProvider timelineValue={editorTimelineContextValue} playbackValue={editorPlaybackContextValue}>
       <div id="main-area">
-        <LeftSidebar activeTab={activeTab} onSelect={setActiveTab} onOpenProjects={() => setProjectsModalOpen(true)} />
+        <LeftSidebar activeTab={activeTab} editorPane={editorPane} onSelect={handleSidebarSelect} onOpenProjects={() => setProjectsModalOpen(true)} />
+        <div className="st-workspace">
+        <div className="st-workspace-upper">
         <CenterPanel
           activeTab={activeTab}
           mediaProps={mediaProps}
@@ -2629,11 +2726,15 @@ function App() {
             bannerVisible: editorBannerVisible,
             onDismissBanner: () => setEditorBannerVisible(false),
             timeline: editorTimeline,
+            audioClips: editorAudioClips,
             selectedClipId,
             selectedClip: editorTimeline.find((clip) => clip.id === selectedClipId) || null,
-            onSelectClip: handleClipSelect,
+            onSelectClip: selectClipForEditing,
             onImportClick: () => editorFileInputRef.current?.click(),
             onUpload: handleEditorUpload,
+            onImportFiles: (files) => files.forEach(importEditorFile),
+            onImportUrl: handleEditorImportUrl,
+            mediaFocus: editorPane === 'media' ? mediaFocusTick : 0,
             fileInputRef: editorFileInputRef,
             canvasRef: editorCanvasRef,
             isPlaying: editorIsPlaying,
@@ -2652,8 +2753,8 @@ function App() {
             onCanvasSizeChange: setEditorCanvasSize,
           }}
       />
-        {activeTab === 'editor' && <RightPanel />}
-      </div>
+        {activeTab === 'editor' && <RightPanel fps={editorCanvasSize?.fps || 30} describeTrack={describeTrack} />}
+        </div>
       {activeTab === 'editor' && <BottomTimeline
         activeTab={activeTab}
         style={{ display: activeTab === 'editor' ? 'flex' : 'none' }}
@@ -2670,9 +2771,11 @@ function App() {
         timelineHeight={timelineHeight}
         onTimelineHeightChange={setTimelineHeight}
         laneLabels={laneLabels}
+        fps={editorCanvasSize?.fps || 30}
+        contentDuration={editorFullExtentDuration}
         selectedClipId={selectedClipId}
         selectedClipIds={selectedClipIds}
-        onSelectClip={handleClipSelect}
+        onSelectClip={selectClipForEditing}
         onClipDragStart={handleClipDragStart}
         snapEnabled={snapEnabled}
         onSnapToggle={handleSnapToggle}
@@ -2706,6 +2809,8 @@ function App() {
         onRenameMarker={handleRenameMarker}
         onJumpToMarker={handleJumpToMarker}
       />}
+        </div>
+      </div>
       {gapMenu && (
         <div
           className="timeline-gap-menu"
@@ -2717,6 +2822,13 @@ function App() {
       <input ref={audioFileInputRef} type="file" accept="audio/*,video/*" onChange={handleAudioUpload} className="sr-only-input" style={{ display: 'none' }} />
       </EditorStateProvider>
       <ErrorPopup errorText={errorText} setErrorText={setErrorText} />
+      {exportDone && (
+        <ExportCompleteDialog
+          result={exportDone}
+          onClose={() => setExportDone(null)}
+          onDownloadAgain={() => downloadExportResult(exportDone.data).catch((error) => setErrorText(error.message))}
+        />
+      )}
       <JobsResumeBanner />
       {projectsModalOpen && (
         <ProjectsModal

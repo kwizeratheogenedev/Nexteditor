@@ -27,6 +27,7 @@ export const API_ENDPOINTS = {
   extractShorts: `${API_BASE_URL}/api/extract-shorts`,
   reformatShort: `${API_BASE_URL}/api/reformat-short`,
   fetchUrlVideo: `${API_BASE_URL}/api/fetch-url-video`,
+  fetchUrlFile: (name, kind) => `${API_BASE_URL}/api/fetch-url-video/file/${name}?kind=${kind}`,
   createMontage: `${API_BASE_URL}/api/create-montage`,
   youtubeAuthUrl: `${API_BASE_URL}/api/youtube/auth/url`,
   youtubeAuthStatus: `${API_BASE_URL}/api/youtube/auth/status`,

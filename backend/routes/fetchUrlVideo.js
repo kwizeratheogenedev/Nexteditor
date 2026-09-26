@@ -252,4 +252,24 @@ router.post('/', async (req, res) => {
   }
 });
 
+// GET /api/fetch-url-video/file/:name - hands a file fetched by the POST
+// above back to the browser, so the Editor (which edits local files in the
+// browser) can pull a pasted link straight into its media bin. Only the
+// random 32-hex names this route itself creates are accepted, so it can never
+// be pointed at anything else in uploads/ or outside it.
+router.get('/file/:name', (req, res) => {
+  const { name } = req.params;
+  if (!/^[a-f0-9]{32}$/.test(name)) {
+    res.status(404).json({ error: 'File not found.' });
+    return;
+  }
+  const filePath = path.join(uploadsDir, name);
+  if (!fs.existsSync(filePath)) {
+    res.status(404).json({ error: 'That download has expired - fetch the link again.' });
+    return;
+  }
+  res.type(req.query.kind === 'audio' ? 'audio/mpeg' : 'video/mp4');
+  res.sendFile(filePath);
+});
+
 export default router;

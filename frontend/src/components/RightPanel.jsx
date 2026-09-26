@@ -5,35 +5,83 @@ import { COLOR_PRESETS, findMatchingPresetId } from '../timeline/colorPresets';
 import { expectedTransitionStart, TRANSITION_TYPES, clipDuration as clipOutputDuration } from '../timeline/transitions';
 import { hasSpeedCurve, sourceTimeForOutputElapsed, currentSegmentSpeed } from '../timeline/speedCurve';
 import { MOTION_PRESETS, applyMotionPreset, clearMotionPreset } from '../timeline/motionPresets';
-import { isVideoLikeClip, isImageClip } from '../timeline/clipKinds';
+import { isVideoLikeClip } from '../timeline/clipKinds';
+import { formatTimecode } from '../timeline/timecode';
 
-function PropertyRow({ label, value, keyframeButton, children }) {
+// One inspector value: label on the left, value (and its ◆ keyframe
+// toggle) on the right, a thin slider underneath - the studio layout.
+// Dragging updates the local draft; the change is committed (one undo step)
+// when the drag ends.
+function Slider({ label, display, min, max, step = 1, value, onChange, onCommit, keyframe }) {
+  const pct = max > min ? ((Number(value) - min) / (max - min)) * 100 : 0;
   return (
-    <div className="property-row">
-      <div className="property-row-head">
-        <span className="property-label">{label}</span>
-        <span className="property-value">{value}</span>
+    <div className="st-field">
+      <div className="st-field-head">
+        <span>{label}</span>
+        <span className="st-field-value">{keyframe}{display}</span>
       </div>
-      <div className="property-row-control">
-        {children}
-        {keyframeButton}
-      </div>
+      <input
+        className="st-range"
+        type="range"
+        aria-label={label}
+        min={min}
+        max={max}
+        step={step}
+        value={value}
+        style={{ '--fill': `${Math.max(0, Math.min(100, pct))}%` }}
+        onChange={(event) => onChange(Number(event.target.value))}
+        onMouseUp={onCommit}
+        onTouchEnd={onCommit}
+        onKeyUp={onCommit}
+        onBlur={onCommit}
+      />
     </div>
   );
 }
 
-function KeyframeButton({ active, hasAny, onClick, disabled, title }) {
+function Toggle({ label, checked, onChange }) {
+  return (
+    <label className="st-toggle">
+      <span>{label}</span>
+      <input type="checkbox" role="switch" checked={Boolean(checked)} onChange={onChange} />
+      <i aria-hidden="true" />
+    </label>
+  );
+}
+
+function Collapsible({ title, badge, children }) {
+  return (
+    <details className="st-collapse">
+      <summary>
+        <span>{title}</span>
+        {badge && <em>{badge}</em>}
+      </summary>
+      <div className="st-collapse-body">{children}</div>
+    </details>
+  );
+}
+
+function KeyframeButton({ active, hasAny, onClick, title }) {
   return (
     <button
       type="button"
-      className={`keyframe-toggle ${active ? 'is-active' : ''} ${hasAny ? 'has-keyframes' : ''}`}
+      className={`st-kf ${active ? 'is-active' : ''} ${hasAny ? 'has-keyframes' : ''}`}
       onClick={onClick}
-      disabled={disabled}
       title={title}
+      aria-label={title}
+      aria-pressed={active}
     >
       ◆
     </button>
   );
+}
+
+// 100% = 0 dB, like a mixer.
+function volumeDb(percent) {
+  if (percent <= 0) return '-∞ dB';
+  const db = 20 * Math.log10(percent / 100);
+  const rounded = Math.round(db);
+  return `${rounded > 0 ? '+' : ''}${rounded} dB`;
 }
 
 // Organizational tag colors for a clip block - purely a timeline display
@@ -123,27 +171,15 @@ function draftFromClip(clip, clipLocalTime) {
   };
 }
 
-const VIDEO_TABS = [['basic', 'Basic'], ['color', 'Color'], ['speed', 'Speed'], ['audio', 'Audio']];
-// A still image carries no audio stream and nothing to play faster or
-// slower - its on-screen length is set by dragging its trim handles - so it
-// gets the transform/color half of the video tabs.
-const IMAGE_TABS = [['basic', 'Basic'], ['color', 'Color']];
-const TEXT_TABS = [['text', 'Text']];
-const AUDIO_TABS = [['audio', 'Audio'], ['speed', 'Speed']];
-// Adjustment layers (M13) carry no media/transform/speed/audio of their
-// own - only their color/vignette filters matter, same params a regular
-// clip's Color tab edits.
-const ADJUSTMENT_TABS = [['color', 'Color']];
 
-function RightPanel() {
+function RightPanel({ fps = 30, describeTrack }) {
   const { timeline, selectedClipId, selectedClipIds, updateClip, commitTimeline } = useEditorTimeline();
   const { playhead } = useEditorPlayback();
   const selectedClip = useSelectedEditorClip();
   const isTextClip = selectedClip?.type === 'text';
   const isAudioClip = selectedClip?.type === 'audio';
   const isAdjustmentClip = selectedClip?.type === 'adjustment';
-  const isImageClipSelected = isImageClip(selectedClip);
-  const [activePanel, setActivePanel] = useState('basic');
+  const [showAllLooks, setShowAllLooks] = useState(false);
 
   // Position on this specific clip's own output timeline (0 = the clip's
   // first visible frame) - what keyframes are stored/added relative to.
@@ -170,12 +206,6 @@ function RightPanel() {
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [selectedClipId, selectedClip, clipLocalTime]);
 
-  // Jump to the tab set that's actually relevant to the newly-selected
-  // clip's type, rather than leaving a video-only tab active over a text or
-  // audio clip's panel (or vice versa).
-  useEffect(() => {
-    setActivePanel(isTextClip ? 'text' : isAudioClip ? 'audio' : isAdjustmentClip ? 'color' : 'basic');
-  }, [selectedClipId, isTextClip, isAudioClip, isAdjustmentClip]);
 
   // A clip that only has a remoteUrl (no local File, e.g. brought in from
   // Montage output via "Edit", or restored on a different browser than it
@@ -447,7 +477,6 @@ function RightPanel() {
     const hasAny = Boolean(points?.length);
     return (
       <KeyframeButton
-        disabled={disabled}
         active={active}
         hasAny={hasAny}
         onClick={() => toggleKeyframe(prop)}
@@ -462,7 +491,6 @@ function RightPanel() {
     const hasAny = Boolean(points?.length);
     return (
       <KeyframeButton
-        disabled={disabled}
         active={active}
         hasAny={hasAny}
         onClick={toggleSpeedKeyframe}
@@ -471,388 +499,292 @@ function RightPanel() {
     );
   };
 
-  return (
-    <aside className="right-panel">
-      <div className="inspector-tabs">
-        {(isTextClip ? TEXT_TABS : isAudioClip ? AUDIO_TABS : isAdjustmentClip ? ADJUSTMENT_TABS : isImageClipSelected ? IMAGE_TABS : VIDEO_TABS).map(([id, label]) => (
+  const signed = (n, digits = 0) => `${n > 0 ? '+' : ''}${Number(n).toFixed(digits)}`;
+  const kelvin = (temperature) => `${Math.round(6500 + temperature * 35)}K`;
+  const isVideoClip = !disabled && selectedClip?.type === 'video';
+  const isVisualClip = !disabled && isVideoLikeClip(selectedClip);
+  const outputDuration = selectedClip ? clipOutputDuration(selectedClip) : 0;
+
+  // The one property with the most keyframes, for the "◆ Keyframes on
+  // Scale · 3" summary row.
+  const keyframeSummary = (() => {
+    if (!selectedClip?.keyframes) return null;
+    const names = { scaleX: 'Scale', opacity: 'Opacity', rotation: 'Rotation', x: 'Position X', y: 'Position Y', volume: 'Volume', speed: 'Speed' };
+    let best = null;
+    Object.entries(names).forEach(([prop, label]) => {
+      const count = selectedClip.keyframes[prop]?.length || 0;
+      if (count && (!best || count > best.count)) best = { label, count };
+    });
+    return best;
+  })();
+
+  const colorSection = (
+    <section className="st-insp-section">
+      <h3 className="st-insp-title">Color</h3>
+      <div className="st-chips">
+        {(showAllLooks ? COLOR_PRESETS : COLOR_PRESETS.filter((preset) => preset.featured)).map((preset) => (
           <button
-            key={id}
+            key={preset.id}
             type="button"
-            className={`inspector-tab ${activePanel === id ? 'is-active' : ''}`}
-            onClick={() => setActivePanel(id)}
+            className={`st-chip ${findMatchingPresetId(draft.color) === preset.id ? 'is-active' : ''}`}
+            onClick={() => { updateDraftColor(preset.params); commitColor(preset.params); }}
           >
-            {label}
+            {preset.label}
           </button>
         ))}
+        <button type="button" className="st-chip is-ghost" onClick={() => setShowAllLooks((v) => !v)}>
+          {showAllLooks ? 'Fewer' : `+${COLOR_PRESETS.filter((preset) => !preset.featured).length} more`}
+        </button>
       </div>
-
-      <div className={`inspector-body ${disabled ? 'is-disabled' : ''}`}>
-        <div className="property-row">
-          <div className="property-row-head">
-            <span className="property-label">Clip</span>
-            <span className="property-value">{clipName}</span>
-          </div>
-          <div style={{ padding: '0 4px', fontSize: 12, color: 'var(--text-muted)' }}>
-            {selectedClipIds.length > 1 ? `${selectedClipIds.length} clips selected` : disabled ? 'Select a clip to edit its properties' : `Duration: ${clipDuration.toFixed(2)}s`}
-          </div>
+      <Slider label="Exposure" display={signed(draft.color.brightness / 100, 2)} min={-100} max={100} value={draft.color.brightness} onChange={(v) => updateDraftColor({ brightness: v })} onCommit={() => commitColor(draft.color)} />
+      <Slider label="Contrast" display={signed(draft.color.contrast)} min={-100} max={100} value={draft.color.contrast} onChange={(v) => updateDraftColor({ contrast: v })} onCommit={() => commitColor(draft.color)} />
+      <Slider label="Saturation" display={signed(draft.color.saturation)} min={-100} max={100} value={draft.color.saturation} onChange={(v) => updateDraftColor({ saturation: v })} onCommit={() => commitColor(draft.color)} />
+      <Slider label="Temperature" display={kelvin(draft.color.temperature)} min={-100} max={100} value={draft.color.temperature} onChange={(v) => updateDraftColor({ temperature: v })} onCommit={() => commitColor(draft.color)} />
+      <Slider label="Vignette" display={`${draft.vignette}%`} min={0} max={100} value={draft.vignette} onChange={updateDraftVignette} onCommit={() => commitVignette(draft.vignette)} />
+      {!isAdjustmentClip && (
+        <div className="st-keyframe-row">
+          <span className="st-diamond" aria-hidden="true">◆</span>
+          {keyframeSummary
+            ? <span>Keyframes on {keyframeSummary.label} · {keyframeSummary.count}</span>
+            : <span className="is-muted">No keyframes yet - click ◆ beside a value to add one</span>}
         </div>
-        {!disabled && (
-          <PropertyRow label="Clip color" value="">
-            <div className="swatch-row">
-              <button
-                type="button"
-                className={`color-swatch ${!selectedClip?.color ? 'is-active' : ''}`}
-                style={{ background: 'var(--timeline-clip-video, #3b82f6)' }}
-                title="Default (by clip type)"
-                onClick={() => updateClip(selectedClipId, (clip) => ({ ...clip, color: null }))}
-              />
-              {CLIP_COLOR_PRESETS.map((swatch) => (
-                <button
-                  key={swatch}
-                  type="button"
-                  className={`color-swatch ${selectedClip?.color === swatch ? 'is-active' : ''}`}
-                  style={{ background: swatch }}
-                  title={swatch}
-                  onClick={() => updateClip(selectedClipId, (clip) => ({ ...clip, color: swatch }))}
-                />
-              ))}
-            </div>
-          </PropertyRow>
-        )}
-        {activePanel === 'basic' && (
-          <>
-            <PropertyRow
-              label="Scale"
-              value={`${draft.basic.scale}%`}
-              keyframeButton={(
-                <KeyframeButton
-                  disabled={disabled}
-                  active={Boolean(findKeyframeNear(selectedClip?.keyframes?.scaleX, clipLocalTime))}
-                  hasAny={Boolean(selectedClip?.keyframes?.scaleX?.length)}
-                  onClick={toggleScaleKeyframe}
-                  title="Add/remove a scale keyframe at this point in the clip - two or more animate a zoom"
-                />
-              )}
-            >
-              <input disabled={disabled} type="range" min="10" max="200" value={draft.basic.scale} onChange={(event) => updateDraftBasic({ scale: Number(event.target.value) })} onMouseUp={() => commitBasic(draft.basic)} onTouchEnd={() => commitBasic(draft.basic)} onBlur={() => commitBasic(draft.basic)} />
-            </PropertyRow>
-            <PropertyRow label="Opacity" value={`${draft.basic.opacity}%`} keyframeButton={keyframeButtonFor('opacity')}>
-              <input disabled={disabled} type="range" min="0" max="100" value={draft.basic.opacity} onChange={(event) => updateDraftBasic({ opacity: Number(event.target.value) })} onMouseUp={() => commitBasic(draft.basic)} onTouchEnd={() => commitBasic(draft.basic)} onBlur={() => commitBasic(draft.basic)} />
-            </PropertyRow>
-            <PropertyRow label="Rotation" value={`${draft.basic.rotation}°`} keyframeButton={keyframeButtonFor('rotation')}>
-              <input disabled={disabled} type="range" min="-180" max="180" value={draft.basic.rotation} onChange={(event) => updateDraftBasic({ rotation: Number(event.target.value) })} onMouseUp={() => commitBasic(draft.basic)} onTouchEnd={() => commitBasic(draft.basic)} onBlur={() => commitBasic(draft.basic)} />
-            </PropertyRow>
-            <PropertyRow label="Position X" value={`${Math.round(draft.basic.x)}%`} keyframeButton={keyframeButtonFor('x')}>
-              <input disabled={disabled} type="range" min="-100" max="100" value={draft.basic.x} onChange={(event) => updateDraftBasic({ x: Number(event.target.value) })} onMouseUp={() => commitBasic(draft.basic)} onTouchEnd={() => commitBasic(draft.basic)} onBlur={() => commitBasic(draft.basic)} />
-            </PropertyRow>
-            <PropertyRow label="Position Y" value={`${Math.round(draft.basic.y)}%`} keyframeButton={keyframeButtonFor('y')}>
-              <input disabled={disabled} type="range" min="-100" max="100" value={draft.basic.y} onChange={(event) => updateDraftBasic({ y: Number(event.target.value) })} onMouseUp={() => commitBasic(draft.basic)} onTouchEnd={() => commitBasic(draft.basic)} onBlur={() => commitBasic(draft.basic)} />
-            </PropertyRow>
-            <PropertyRow label="Flip" value="">
-              <div className="toggle-pair">
-                <button disabled={disabled} type="button" className={`mini-toggle ${draft.basic.flipH ? 'is-active' : ''}`} onClick={() => { const next = { ...draft.basic, flipH: !draft.basic.flipH }; updateDraftBasic(next); commitBasic(next); }}>↔ H</button>
-                <button disabled={disabled} type="button" className={`mini-toggle ${draft.basic.flipV ? 'is-active' : ''}`} onClick={() => { const next = { ...draft.basic, flipV: !draft.basic.flipV }; updateDraftBasic(next); commitBasic(next); }}>↕ V</button>
-              </div>
-            </PropertyRow>
-            {!isTextClip && !isAudioClip && (
-              <PropertyRow label="Clip" value="">
-                <div className="toggle-pair">
-                  <button
-                    disabled={disabled}
-                    type="button"
-                    className={`mini-toggle ${selectedClip?.enabled !== false ? 'is-active' : ''}`}
-                    title="Disabled clips are skipped in preview and export without being deleted"
-                    onClick={() => updateClip(selectedClipId, (clip) => ({ ...clip, enabled: clip.enabled === false }))}
-                  >
-                    {selectedClip?.enabled !== false ? 'Enabled' : 'Disabled'}
-                  </button>
-                  <button
-                    disabled={disabled}
-                    type="button"
-                    className={`mini-toggle ${selectedClip?.reversed ? 'is-active' : ''}`}
-                    title="Play this clip's trimmed range backward"
-                    onClick={() => updateClip(selectedClipId, (clip) => ({ ...clip, reversed: !clip.reversed }))}
-                  >
-                    Reverse
-                  </button>
-                </div>
-              </PropertyRow>
-            )}
-            {nextVideoClip && (
-              <PropertyRow label="Transition Out" value={draft.transitionOut > 0 ? `${draft.transitionOut.toFixed(1)}s ${activeTransitionLabel}` : 'None'}>
-                <input disabled={disabled} type="range" min="0" max={maxTransitionDuration} step="0.1" value={Math.min(draft.transitionOut, maxTransitionDuration)} onChange={(event) => updateDraftTransition(Number(event.target.value))} onMouseUp={() => commitTransition(draft.transitionOut)} onTouchEnd={() => commitTransition(draft.transitionOut)} onBlur={() => commitTransition(draft.transitionOut)} />
-              </PropertyRow>
-            )}
-            {nextVideoClip && draft.transitionOut > 0 && (
-              <PropertyRow label="Transition Type" value={activeTransitionLabel}>
-                <div className="toggle-pair">
-                  {TRANSITION_TYPES.map((t) => (
-                    <button
-                      key={t.id}
-                      disabled={disabled}
-                      type="button"
-                      className={`mini-toggle ${activeTransitionType === t.id ? 'is-active' : ''}`}
-                      onClick={() => commitTransition(draft.transitionOut, t.id)}
-                    >
-                      {t.label}
-                    </button>
-                  ))}
-                </div>
-              </PropertyRow>
-            )}
-            {!disabled && isVideoLikeClip(selectedClip) && (
-              <PropertyRow label="Animate" value={hasMotionKeyframes ? 'Camera move' : 'None'}>
-                <div className="toggle-pair" style={{ flexWrap: 'wrap' }}>
-                  {MOTION_PRESETS.map((preset) => (
-                    <button
-                      key={preset.id}
-                      type="button"
-                      className="mini-toggle"
-                      title={`Animate this clip across its full length - ${preset.label.toLowerCase()}`}
-                      onClick={() => applyMotion(preset.id)}
-                    >
-                      {preset.label}
-                    </button>
-                  ))}
-                  <button
-                    type="button"
-                    className={`mini-toggle ${hasMotionKeyframes ? '' : 'is-active'}`}
-                    title="Remove the camera move (scale and position keyframes) from this clip"
-                    onClick={() => applyMotion(null)}
-                  >
-                    None
-                  </button>
-                </div>
-              </PropertyRow>
-            )}
-            {!disabled && (
-              <div className="caption-info-box" style={{ marginTop: 4 }}>
-                <span>Click ◆ next to Scale, Opacity, Rotation or Position to animate it - add a keyframe at the current playhead position, move the playhead, then change the value to animate between them. Animate applies a ready-made move across the whole clip, which you can then edit the same way.</span>
-              </div>
-            )}
-          </>
-        )}
+      )}
+    </section>
+  );
 
-        {activePanel === 'color' && (
-          <>
-            <PropertyRow label="Brightness" value={`${draft.color.brightness}`}>
-              <input disabled={disabled} type="range" min="-100" max="100" value={draft.color.brightness} onChange={(event) => updateDraftColor({ brightness: Number(event.target.value) })} onMouseUp={() => commitColor(draft.color)} onTouchEnd={() => commitColor(draft.color)} onBlur={() => commitColor(draft.color)} />
-            </PropertyRow>
-            <PropertyRow label="Contrast" value={`${draft.color.contrast}`}>
-              <input disabled={disabled} type="range" min="-100" max="100" value={draft.color.contrast} onChange={(event) => updateDraftColor({ contrast: Number(event.target.value) })} onMouseUp={() => commitColor(draft.color)} onTouchEnd={() => commitColor(draft.color)} onBlur={() => commitColor(draft.color)} />
-            </PropertyRow>
-            <PropertyRow label="Saturation" value={`${draft.color.saturation}`}>
-              <input disabled={disabled} type="range" min="-100" max="100" value={draft.color.saturation} onChange={(event) => updateDraftColor({ saturation: Number(event.target.value) })} onMouseUp={() => commitColor(draft.color)} onTouchEnd={() => commitColor(draft.color)} onBlur={() => commitColor(draft.color)} />
-            </PropertyRow>
-            <PropertyRow label="Temperature" value={`${draft.color.temperature}`}>
-              <input disabled={disabled} type="range" min="-100" max="100" value={draft.color.temperature} onChange={(event) => updateDraftColor({ temperature: Number(event.target.value) })} onMouseUp={() => commitColor(draft.color)} onTouchEnd={() => commitColor(draft.color)} onBlur={() => commitColor(draft.color)} />
-            </PropertyRow>
-            <PropertyRow label="Vignette" value={`${draft.vignette}%`}>
-              <input disabled={disabled} type="range" min="0" max="100" value={draft.vignette} onChange={(event) => updateDraftVignette(Number(event.target.value))} onMouseUp={() => commitVignette(draft.vignette)} onTouchEnd={() => commitVignette(draft.vignette)} onBlur={() => commitVignette(draft.vignette)} />
-            </PropertyRow>
-            <PropertyRow label="Presets" value="">
-              <div className="swatch-row">
-                {COLOR_PRESETS.map((preset) => (
-                  <button
-                    key={preset.id}
-                    type="button"
-                    disabled={disabled}
-                    className={`color-swatch ${findMatchingPresetId(draft.color) === preset.id ? 'is-active' : ''}`}
-                    style={{ background: preset.swatch }}
-                    title={preset.label}
-                    onClick={() => { updateDraftColor(preset.params); commitColor(preset.params); }}
-                  />
-                ))}
+  return (
+    <aside className="right-panel st-inspector">
+      <header className="st-insp-head">
+        <h2 title={disabled ? 'Inspector' : clipName}>{disabled ? 'Inspector' : clipName}</h2>
+      </header>
+
+      {disabled ? (
+        <div className="st-insp-empty">
+          {selectedClipIds.length > 1 ? `${selectedClipIds.length} clips selected` : 'Select a clip to edit its properties'}
+        </div>
+      ) : (
+        <div className="st-insp-body">
+          <dl className="st-insp-card">
+            <div><dt>Duration</dt><dd>{outputDuration.toFixed(2)}s</dd></div>
+            <div><dt>Start</dt><dd>{formatTimecode(clipStartTime, fps)}</dd></div>
+            <div><dt>Track</dt><dd>{describeTrack ? describeTrack(selectedClip) : '—'}</dd></div>
+          </dl>
+
+          {isTextClip && (
+            <section className="st-insp-section">
+              <label className="st-field-block">
+                <span>Text</span>
+                <textarea
+                  className="st-textarea"
+                  rows={3}
+                  value={draft.text.content}
+                  onChange={(event) => updateDraftText({ content: event.target.value })}
+                  onBlur={() => commitText(draft.text)}
+                  placeholder="Type your text..."
+                />
+              </label>
+              <Slider label="Size" display={`${draft.text.fontSize} px`} min={16} max={160} value={draft.text.fontSize} onChange={(v) => updateDraftText({ fontSize: v })} onCommit={() => commitText(draft.text)} />
+              <div className="st-field">
+                <div className="st-field-head"><span>Color</span><span className="st-field-value">{draft.text.color}</span></div>
+                <input className="st-color" type="color" value={draft.text.color} onChange={(event) => { updateDraftText({ color: event.target.value }); commitText({ ...draft.text, color: event.target.value }); }} />
               </div>
-            </PropertyRow>
-            {!isAdjustmentClip && (
-              <>
-                <PropertyRow label="Chroma Key" value={draft.chromaKey.enabled ? 'On' : 'Off'}>
-                  <div className="toggle-pair">
-                    <button
-                      disabled={disabled}
-                      type="button"
-                      className={`mini-toggle ${draft.chromaKey.enabled ? 'is-active' : ''}`}
-                      onClick={() => {
-                        const next = { ...draft.chromaKey, enabled: !draft.chromaKey.enabled };
-                        updateDraftChromaKey(next);
-                        commitChromaKey(next);
-                      }}
-                    >
-                      {draft.chromaKey.enabled ? 'Enabled' : 'Disabled'}
+              <div className="st-field">
+                <div className="st-field-head"><span>Align</span></div>
+                <div className="st-segment">
+                  {['left', 'center', 'right'].map((align) => (
+                    <button key={align} type="button" className={draft.text.align === align ? 'is-active' : ''} onClick={() => { updateDraftText({ align }); commitText({ ...draft.text, align }); }}>
+                      {align[0].toUpperCase() + align.slice(1)}
                     </button>
-                  </div>
-                </PropertyRow>
-                {draft.chromaKey.enabled && (
-                  <>
-                    <PropertyRow label="Key Color" value={draft.chromaKey.color}>
-                      <input
-                        disabled={disabled}
-                        type="color"
-                        value={draft.chromaKey.color}
-                        onChange={(event) => {
-                          const next = { ...draft.chromaKey, color: event.target.value };
-                          updateDraftChromaKey(next);
-                          commitChromaKey(next);
-                        }}
+                  ))}
+                </div>
+              </div>
+            </section>
+          )}
+
+          {isVisualClip && (
+            <section className="st-insp-section">
+              <Slider
+                label="Scale"
+                display={`${draft.basic.scale}%`}
+                min={10}
+                max={200}
+                value={draft.basic.scale}
+                onChange={(v) => updateDraftBasic({ scale: v })}
+                onCommit={() => commitBasic(draft.basic)}
+                keyframe={(
+                  <KeyframeButton
+                    active={Boolean(findKeyframeNear(selectedClip?.keyframes?.scaleX, clipLocalTime))}
+                    hasAny={Boolean(selectedClip?.keyframes?.scaleX?.length)}
+                    onClick={toggleScaleKeyframe}
+                    title="Add/remove a scale keyframe here - two or more animate a zoom"
+                  />
+                )}
+              />
+              <Slider label="Opacity" display={`${draft.basic.opacity}%`} min={0} max={100} value={draft.basic.opacity} onChange={(v) => updateDraftBasic({ opacity: v })} onCommit={() => commitBasic(draft.basic)} keyframe={keyframeButtonFor('opacity')} />
+              {isVideoClip && (
+                <>
+                  <Slider
+                    label="Volume"
+                    display={volumeDb(draft.audio.volume)}
+                    min={0}
+                    max={200}
+                    value={draft.audio.volume}
+                    onChange={(v) => updateDraftAudio({ volume: v })}
+                    onCommit={() => commitAudio(draft.audio)}
+                    keyframe={(
+                      <KeyframeButton
+                        active={Boolean(findKeyframeNear(selectedClip?.keyframes?.volume, clipLocalTime))}
+                        hasAny={Boolean(selectedClip?.keyframes?.volume?.length)}
+                        onClick={toggleVolumeKeyframe}
+                        title="Add/remove a volume keyframe here"
                       />
-                    </PropertyRow>
-                    <div className="swatch-row">
+                    )}
+                  />
+                  <Slider label="Speed" display={`${draft.speed.toFixed(1)}×`} min={0.1} max={4} step={0.1} value={draft.speed} onChange={(v) => setDraft((prev) => ({ ...prev, speed: v }))} onCommit={() => commitSpeed(draft.speed)} keyframe={speedKeyframeButton()} />
+                </>
+              )}
+            </section>
+          )}
+
+          {isAudioClip && (
+            <section className="st-insp-section">
+              <Slider
+                label="Volume"
+                display={volumeDb(draft.audio.volume)}
+                min={0}
+                max={200}
+                value={draft.audio.volume}
+                onChange={(v) => updateDraftAudio({ volume: v })}
+                onCommit={() => commitAudio(draft.audio)}
+                keyframe={(
+                  <KeyframeButton
+                    active={Boolean(findKeyframeNear(selectedClip?.keyframes?.volume, clipLocalTime))}
+                    hasAny={Boolean(selectedClip?.keyframes?.volume?.length)}
+                    onClick={toggleVolumeKeyframe}
+                    title="Add/remove a volume keyframe here"
+                  />
+                )}
+              />
+              <Slider label="Speed" display={`${draft.speed.toFixed(1)}×`} min={0.1} max={4} step={0.1} value={draft.speed} onChange={(v) => setDraft((prev) => ({ ...prev, speed: v }))} onCommit={() => commitSpeed(draft.speed)} keyframe={speedKeyframeButton()} />
+            </section>
+          )}
+
+          {(isVisualClip || isAdjustmentClip) && colorSection}
+
+          {isVisualClip && (
+            <Collapsible title="Transform">
+              <Slider label="Rotation" display={`${draft.basic.rotation}°`} min={-180} max={180} value={draft.basic.rotation} onChange={(v) => updateDraftBasic({ rotation: v })} onCommit={() => commitBasic(draft.basic)} keyframe={keyframeButtonFor('rotation')} />
+              <Slider label="Position X" display={`${Math.round(draft.basic.x)}%`} min={-100} max={100} value={draft.basic.x} onChange={(v) => updateDraftBasic({ x: v })} onCommit={() => commitBasic(draft.basic)} keyframe={keyframeButtonFor('x')} />
+              <Slider label="Position Y" display={`${Math.round(draft.basic.y)}%`} min={-100} max={100} value={draft.basic.y} onChange={(v) => updateDraftBasic({ y: v })} onCommit={() => commitBasic(draft.basic)} keyframe={keyframeButtonFor('y')} />
+              <div className="st-field">
+                <div className="st-field-head"><span>Flip</span></div>
+                <div className="st-segment">
+                  <button type="button" className={draft.basic.flipH ? 'is-active' : ''} onClick={() => { const next = { ...draft.basic, flipH: !draft.basic.flipH }; updateDraftBasic(next); commitBasic(next); }}>↔ Horizontal</button>
+                  <button type="button" className={draft.basic.flipV ? 'is-active' : ''} onClick={() => { const next = { ...draft.basic, flipV: !draft.basic.flipV }; updateDraftBasic(next); commitBasic(next); }}>↕ Vertical</button>
+                </div>
+              </div>
+              <div className="st-field">
+                <div className="st-field-head"><span>Animate</span><span className="st-field-value">{hasMotionKeyframes ? 'Camera move' : 'None'}</span></div>
+                <div className="st-chips">
+                  {MOTION_PRESETS.map((preset) => (
+                    <button key={preset.id} type="button" className="st-chip" title={`Animate this clip across its full length - ${preset.label.toLowerCase()}`} onClick={() => applyMotion(preset.id)}>{preset.label}</button>
+                  ))}
+                  <button type="button" className={`st-chip ${hasMotionKeyframes ? '' : 'is-active'}`} onClick={() => applyMotion(null)}>None</button>
+                </div>
+              </div>
+            </Collapsible>
+          )}
+
+          {isVisualClip && nextVideoClip && (
+            <Collapsible title="Transition" badge={draft.transitionOut > 0 ? activeTransitionLabel : null}>
+              <Slider label="Length" display={draft.transitionOut > 0 ? `${draft.transitionOut.toFixed(1)}s` : 'None'} min={0} max={maxTransitionDuration} step={0.1} value={Math.min(draft.transitionOut, maxTransitionDuration)} onChange={updateDraftTransition} onCommit={() => commitTransition(draft.transitionOut)} />
+              {draft.transitionOut > 0 && (
+                <div className="st-chips">
+                  {TRANSITION_TYPES.map((t) => (
+                    <button key={t.id} type="button" className={`st-chip ${activeTransitionType === t.id ? 'is-active' : ''}`} onClick={() => commitTransition(draft.transitionOut, t.id)}>{t.label}</button>
+                  ))}
+                </div>
+              )}
+            </Collapsible>
+          )}
+
+          {(isVideoClip || isAudioClip) && (
+            <Collapsible title={isAudioClip ? 'Audio' : 'Audio & speed'}>
+              <Slider label="Fade in" display={`${draft.audio.fadeIn.toFixed(1)}s`} min={0} max={3} step={0.1} value={draft.audio.fadeIn} onChange={(v) => updateDraftAudio({ fadeIn: v })} onCommit={() => commitAudio(draft.audio)} />
+              <Slider label="Fade out" display={`${draft.audio.fadeOut.toFixed(1)}s`} min={0} max={3} step={0.1} value={draft.audio.fadeOut} onChange={(v) => updateDraftAudio({ fadeOut: v })} onCommit={() => commitAudio(draft.audio)} />
+              <Toggle label="Mute" checked={draft.audio.muted} onChange={() => { const next = { ...draft.audio, muted: !draft.audio.muted }; updateDraftAudio(next); commitAudio(next); }} />
+              {isAudioClip && (
+                <>
+                  <Toggle label="Auto-duck under other audio" checked={draft.audio.duckEnabled} onChange={() => { const next = { ...draft.audio, duckEnabled: !draft.audio.duckEnabled }; updateDraftAudio(next); commitAudio(next); }} />
+                  {draft.audio.duckEnabled && (
+                    <Slider label="Duck amount" display={`${draft.audio.duckAmount}%`} min={0} max={100} value={draft.audio.duckAmount} onChange={(v) => updateDraftAudio({ duckAmount: v })} onCommit={() => commitAudio(draft.audio)} />
+                  )}
+                </>
+              )}
+              <div className="st-field">
+                <div className="st-field-head"><span>Speed presets</span></div>
+                <div className="st-segment">
+                  {[1, 2, 4].map((value) => (
+                    <button key={value} type="button" className={value === Math.round(draft.speed) ? 'is-active' : ''} onClick={() => { setDraft((prev) => ({ ...prev, speed: value })); commitSpeed(value); }}>
+                      {value === 1 ? 'Normal' : `${value}×`}
+                    </button>
+                  ))}
+                </div>
+              </div>
+              {selectedClip?.keyframes?.speed?.length > 0 && (
+                <p className="st-note">Speed curve: {selectedClip.keyframes.speed.length} point{selectedClip.keyframes.speed.length === 1 ? '' : 's'}. Move the playhead and use ◆ beside Speed to add more.</p>
+              )}
+            </Collapsible>
+          )}
+
+          {isVisualClip && (
+            <Collapsible title="Chroma key" badge={draft.chromaKey.enabled ? 'On' : null}>
+              <Toggle
+                label="Remove a background color"
+                checked={draft.chromaKey.enabled}
+                onChange={() => {
+                  const next = { ...draft.chromaKey, enabled: !draft.chromaKey.enabled };
+                  updateDraftChromaKey(next);
+                  commitChromaKey(next);
+                }}
+              />
+              {draft.chromaKey.enabled && (
+                <>
+                  <div className="st-field">
+                    <div className="st-field-head"><span>Key color</span><span className="st-field-value">{draft.chromaKey.color}</span></div>
+                    <div className="st-swatches">
+                      <input className="st-color" type="color" value={draft.chromaKey.color} onChange={(event) => { const next = { ...draft.chromaKey, color: event.target.value }; updateDraftChromaKey(next); commitChromaKey(next); }} />
                       {CHROMA_KEY_PRESETS.map((preset) => (
-                        <button
-                          key={preset.color}
-                          type="button"
-                          disabled={disabled}
-                          className={`color-swatch ${draft.chromaKey.color === preset.color ? 'is-active' : ''}`}
-                          style={{ background: preset.color }}
-                          title={preset.label}
-                          onClick={() => {
-                            const next = { ...draft.chromaKey, color: preset.color };
-                            updateDraftChromaKey(next);
-                            commitChromaKey(next);
-                          }}
-                        />
+                        <button key={preset.color} type="button" className={`st-swatch ${draft.chromaKey.color === preset.color ? 'is-active' : ''}`} style={{ background: preset.color }} title={preset.label} aria-label={preset.label} onClick={() => { const next = { ...draft.chromaKey, color: preset.color }; updateDraftChromaKey(next); commitChromaKey(next); }} />
                       ))}
                     </div>
-                    <PropertyRow label="Similarity" value={`${draft.chromaKey.similarity}%`}>
-                      <input disabled={disabled} type="range" min="1" max="100" value={draft.chromaKey.similarity} onChange={(event) => updateDraftChromaKey({ similarity: Number(event.target.value) })} onMouseUp={() => commitChromaKey(draft.chromaKey)} onTouchEnd={() => commitChromaKey(draft.chromaKey)} onBlur={() => commitChromaKey(draft.chromaKey)} />
-                    </PropertyRow>
-                    <PropertyRow label="Edge Softness" value={`${draft.chromaKey.blend}%`}>
-                      <input disabled={disabled} type="range" min="0" max="100" value={draft.chromaKey.blend} onChange={(event) => updateDraftChromaKey({ blend: Number(event.target.value) })} onMouseUp={() => commitChromaKey(draft.chromaKey)} onTouchEnd={() => commitChromaKey(draft.chromaKey)} onBlur={() => commitChromaKey(draft.chromaKey)} />
-                    </PropertyRow>
-                    <div className="caption-info-box" style={{ marginTop: 4 }}>
-                      <span>Removes the key color from this clip. Raise Similarity to catch more shades of the color, raise Edge Softness to feather the cutout edge.</span>
-                    </div>
-                  </>
-                )}
-              </>
-            )}
-          </>
-        )}
-
-        {activePanel === 'speed' && (
-          <>
-            <PropertyRow label="Speed" value={`${draft.speed.toFixed(1)}×`} keyframeButton={speedKeyframeButton()}>
-              <input disabled={disabled} type="range" min="0.1" max="4" step="0.1" value={draft.speed} onChange={(event) => setDraft((prev) => ({ ...prev, speed: Number(event.target.value) }))} onMouseUp={() => commitSpeed(draft.speed)} onTouchEnd={() => commitSpeed(draft.speed)} onBlur={() => commitSpeed(draft.speed)} />
-            </PropertyRow>
-            <div className="toggle-pair">
-              {['1', '2', '4'].map((value) => (
-                <button
-                  disabled={disabled}
-                  key={value}
-                  type="button"
-                  className={`mini-toggle ${Number(value) === Math.round(draft.speed) ? 'is-active' : ''}`}
-                  onClick={() => { setDraft((prev) => ({ ...prev, speed: Number(value) })); commitSpeed(Number(value)); }}
-                >
-                  {value === '1' ? 'Normal' : `${value}×`}
-                </button>
-              ))}
-            </div>
-            {!disabled && selectedClip?.keyframes?.speed?.length > 0 && (
-              <div className="caption-info-box" style={{ marginTop: 4 }}>
-                Speed curve: {selectedClip.keyframes.speed.length} point{selectedClip.keyframes.speed.length === 1 ? '' : 's'} - move the playhead and use the diamond to add more, or drag the slider to edit the point nearest the playhead.
-              </div>
-            )}
-          </>
-        )}
-
-        {activePanel === 'audio' && (
-          <>
-            <PropertyRow
-              label="Volume"
-              value={`${draft.audio.volume}%`}
-              keyframeButton={(
-                <KeyframeButton
-                  disabled={disabled}
-                  active={Boolean(findKeyframeNear(selectedClip?.keyframes?.volume, clipLocalTime))}
-                  hasAny={Boolean(selectedClip?.keyframes?.volume?.length)}
-                  onClick={toggleVolumeKeyframe}
-                  title="Add/remove a volume keyframe at this point in the clip"
-                />
+                  </div>
+                  <Slider label="Similarity" display={`${draft.chromaKey.similarity}%`} min={1} max={100} value={draft.chromaKey.similarity} onChange={(v) => updateDraftChromaKey({ similarity: v })} onCommit={() => commitChromaKey(draft.chromaKey)} />
+                  <Slider label="Edge softness" display={`${draft.chromaKey.blend}%`} min={0} max={100} value={draft.chromaKey.blend} onChange={(v) => updateDraftChromaKey({ blend: v })} onCommit={() => commitChromaKey(draft.chromaKey)} />
+                </>
               )}
-            >
-              <input disabled={disabled} type="range" min="0" max="200" value={draft.audio.volume} onChange={(event) => updateDraftAudio({ volume: Number(event.target.value) })} onMouseUp={() => commitAudio(draft.audio)} onTouchEnd={() => commitAudio(draft.audio)} onBlur={() => commitAudio(draft.audio)} />
-            </PropertyRow>
-            {!disabled && (selectedClip?.keyframes?.volume?.length > 0) && (
-              <div className="caption-info-box" style={{ marginTop: 4 }}>
-                <span>Volume is animated - click ◆ at the current playhead position to add or remove a keyframe, then change Volume to animate between points.</span>
-              </div>
-            )}
-            <PropertyRow label="Fade In" value={`${draft.audio.fadeIn.toFixed(1)}s`}>
-              <input disabled={disabled} type="range" min="0" max="3" step="0.1" value={draft.audio.fadeIn} onChange={(event) => updateDraftAudio({ fadeIn: Number(event.target.value) })} onMouseUp={() => commitAudio(draft.audio)} onTouchEnd={() => commitAudio(draft.audio)} onBlur={() => commitAudio(draft.audio)} />
-            </PropertyRow>
-            <PropertyRow label="Fade Out" value={`${draft.audio.fadeOut.toFixed(1)}s`}>
-              <input disabled={disabled} type="range" min="0" max="3" step="0.1" value={draft.audio.fadeOut} onChange={(event) => updateDraftAudio({ fadeOut: Number(event.target.value) })} onMouseUp={() => commitAudio(draft.audio)} onTouchEnd={() => commitAudio(draft.audio)} onBlur={() => commitAudio(draft.audio)} />
-            </PropertyRow>
-            <PropertyRow label="Mute" value="">
-              <button disabled={disabled} type="button" className={`mini-toggle ${draft.audio.muted ? 'is-active' : ''}`} onClick={() => { const next = { ...draft.audio, muted: !draft.audio.muted }; updateDraftAudio(next); commitAudio(next); }}>
-                {draft.audio.muted ? 'Muted' : 'Mute'}
-              </button>
-            </PropertyRow>
-            {isAudioClip && (
+            </Collapsible>
+          )}
+
+          <Collapsible title="Clip">
+            {!isTextClip && !isAudioClip && !isAdjustmentClip && (
               <>
-                <PropertyRow label="Auto-duck" value={draft.audio.duckEnabled ? 'On' : 'Off'}>
-                  <button
-                    disabled={disabled}
-                    type="button"
-                    className={`mini-toggle ${draft.audio.duckEnabled ? 'is-active' : ''}`}
-                    onClick={() => { const next = { ...draft.audio, duckEnabled: !draft.audio.duckEnabled }; updateDraftAudio(next); commitAudio(next); }}
-                  >
-                    {draft.audio.duckEnabled ? 'Enabled' : 'Disabled'}
-                  </button>
-                </PropertyRow>
-                {draft.audio.duckEnabled && (
-                  <>
-                    <PropertyRow label="Duck Amount" value={`${draft.audio.duckAmount}%`}>
-                      <input disabled={disabled} type="range" min="0" max="100" value={draft.audio.duckAmount} onChange={(event) => updateDraftAudio({ duckAmount: Number(event.target.value) })} onMouseUp={() => commitAudio(draft.audio)} onTouchEnd={() => commitAudio(draft.audio)} onBlur={() => commitAudio(draft.audio)} />
-                    </PropertyRow>
-                    <div className="caption-info-box" style={{ marginTop: 4 }}>
-                      <span>Automatically lowers this track under dialogue and any other audio in the mix. Raise Duck Amount for a harder, more noticeable dip.</span>
-                    </div>
-                  </>
-                )}
+                <Toggle label="Enabled (off = skipped in preview and export)" checked={selectedClip?.enabled !== false} onChange={() => updateClip(selectedClipId, (clip) => ({ ...clip, enabled: clip.enabled === false }))} />
+                <Toggle label="Play in reverse" checked={Boolean(selectedClip?.reversed)} onChange={() => updateClip(selectedClipId, (clip) => ({ ...clip, reversed: !clip.reversed }))} />
               </>
             )}
-          </>
-        )}
-
-        {activePanel === 'text' && (
-          <>
-            <PropertyRow label="Content" value="">
-              <textarea
-                disabled={disabled}
-                className="text-content-input"
-                rows={3}
-                value={draft.text.content}
-                onChange={(event) => updateDraftText({ content: event.target.value })}
-                onBlur={() => commitText(draft.text)}
-                placeholder="Type your text..."
-              />
-            </PropertyRow>
-            <PropertyRow label="Size" value={`${draft.text.fontSize}px`}>
-              <input disabled={disabled} type="range" min="16" max="160" value={draft.text.fontSize} onChange={(event) => updateDraftText({ fontSize: Number(event.target.value) })} onMouseUp={() => commitText(draft.text)} onTouchEnd={() => commitText(draft.text)} onBlur={() => commitText(draft.text)} />
-            </PropertyRow>
-            <PropertyRow label="Color" value={draft.text.color}>
-              <input disabled={disabled} type="color" value={draft.text.color} onChange={(event) => { updateDraftText({ color: event.target.value }); commitText({ ...draft.text, color: event.target.value }); }} />
-            </PropertyRow>
-            <PropertyRow label="Align" value="">
-              <div className="toggle-pair">
-                {['left', 'center', 'right'].map((align) => (
-                  <button
-                    disabled={disabled}
-                    key={align}
-                    type="button"
-                    className={`mini-toggle ${draft.text.align === align ? 'is-active' : ''}`}
-                    onClick={() => { updateDraftText({ align }); commitText({ ...draft.text, align }); }}
-                  >
-                    {align[0].toUpperCase() + align.slice(1)}
-                  </button>
+            <div className="st-field">
+              <div className="st-field-head"><span>Label color on timeline</span></div>
+              <div className="st-swatches">
+                <button type="button" className={`st-swatch is-default ${!selectedClip?.color ? 'is-active' : ''}`} title="Default" aria-label="Default color" onClick={() => updateClip(selectedClipId, (clip) => ({ ...clip, color: null }))} />
+                {CLIP_COLOR_PRESETS.map((swatch) => (
+                  <button key={swatch} type="button" className={`st-swatch ${selectedClip?.color === swatch ? 'is-active' : ''}`} style={{ background: swatch }} title={swatch} aria-label={`Color ${swatch}`} onClick={() => updateClip(selectedClipId, (clip) => ({ ...clip, color: swatch }))} />
                 ))}
               </div>
-            </PropertyRow>
-          </>
-        )}
-      </div>
+            </div>
+          </Collapsible>
+        </div>
+      )}
     </aside>
   );
 }

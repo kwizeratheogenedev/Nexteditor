@@ -20,39 +20,30 @@ function ToolIcon({ name }) {
   );
 }
 
-// Order and icons match the hero-section product demo's own sidebar (Media,
-// Editor, Montage, Captions, Shorts, Long Mix, Projects). "Media" isn't
-// included here - unlike the demo, this app has no standalone media-library
-// tab of its own; importing files happens inside the Editor's own Media
-// panel instead.
+// Same order and icons as the hero demo: Media, Edit, Montage, Captions,
+// Shorts, Long Mix, Projects. Media and Edit both open the editor - Media
+// with the media bin in focus (nothing selected), Edit for working on clips.
 const tools = [
-  { id: 'editor', label: 'Editor', icon: 'edit', tab: 'editor' },
-  { id: 'media', label: 'Montage', icon: 'montage', tab: 'media' },
-  { id: 'captions', label: 'Captions', icon: 'captions', tab: 'captions' },
-  { id: 'shorts', label: 'Shorts', icon: 'shorts', tab: 'shorts' },
-  { id: 'longmix', label: 'Long Mix', icon: 'mix', tab: 'longmix' },
+  { id: 'library', label: 'Media', icon: 'media' },
+  { id: 'editor', label: 'Edit', icon: 'edit' },
+  { id: 'media', label: 'Montage', icon: 'montage' },
+  { id: 'captions', label: 'Captions', icon: 'captions' },
+  { id: 'shorts', label: 'Shorts', icon: 'shorts' },
+  { id: 'longmix', label: 'Long Mix', icon: 'mix' },
 ];
 
-function getActiveTool(activeTab) {
-  if (activeTab === 'media') return 'media';
-  if (activeTab === 'shorts') return 'shorts';
-  if (activeTab === 'longmix') return 'longmix';
-  if (activeTab === 'captions') return 'captions';
-  if (activeTab === 'editor') return 'editor';
-  return '';
-}
-
-function LeftSidebar({ activeTab, onSelect, onOpenProjects }) {
-  const activeTool = getActiveTool(activeTab);
+function LeftSidebar({ activeTab, editorPane = 'edit', onSelect, onOpenProjects }) {
+  const activeTool = activeTab === 'editor' ? (editorPane === 'media' ? 'library' : 'editor') : activeTab;
 
   return (
-    <aside className="left-sidebar">
+    <aside className="left-sidebar st-sidebar" aria-label="Tools">
       {tools.map((tool) => (
         <button
           key={tool.id}
           type="button"
           className={`tool-button ${activeTool === tool.id ? 'is-active' : ''}`}
-          onClick={() => onSelect(tool.tab)}
+          aria-current={activeTool === tool.id ? 'page' : undefined}
+          onClick={() => onSelect(tool.id)}
         >
           <ToolIcon name={tool.icon} />
           <span>{tool.label}</span>

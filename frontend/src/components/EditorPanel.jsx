@@ -1,20 +1,26 @@
-import { useMemo, useRef, useState } from 'react';
+import { useEffect, useMemo, useRef, useState } from 'react';
 import './EditorWorkspace.css';
-import CanvasSettingsMenu from './CanvasSettingsMenu';
 import { isVideoLikeClip, isImageClip } from '../timeline/clipKinds';
+import { getWaveformForClip, sliceWaveform } from '../timeline/waveform';
+import { formatTimecode, formatShortDuration } from '../timeline/timecode';
 
-const EditorIcon = ({ children }) => <svg viewBox="0 0 24 24" aria-hidden="true" fill="none" stroke="currentColor" strokeWidth="1.7" strokeLinecap="round" strokeLinejoin="round">{children}</svg>;
+const Icon = ({ d, size = 18, strokeWidth = 1.8, filled = false }) => (
+  <svg viewBox="0 0 24 24" width={size} height={size} fill={filled ? 'currentColor' : 'none'} stroke={filled ? 'none' : 'currentColor'} strokeWidth={strokeWidth} strokeLinecap="round" strokeLinejoin="round" aria-hidden="true">
+    <path d={d} />
+  </svg>
+);
 
-function formatSeconds(value) {
-  return (Number.isFinite(value) ? value : 0).toFixed(1);
-}
+const ICON = {
+  link: 'M10 14a4 4 0 0 0 5.7 0l3-3a4 4 0 0 0-5.7-5.7l-1 1 M14 10a4 4 0 0 0-5.7 0l-3 3a4 4 0 0 0 5.7 5.7l1-1',
+  image: 'M4 5h16v14H4z M4 15l4-4 4 4 3-3 5 5 M15 9h.01',
+  play: 'M7 4v16l13-8z',
+  pause: 'M7 4h4v16H7z M13 4h4v16h-4z',
+  fullscreen: 'M4 9V4h5 M20 9V4h-5 M4 15v5h5 M20 15v5h-5',
+  upload: 'M12 16V4 M7 9l5-5 5 5 M5 20h14',
+};
 
-// Maps a client (mouse) position to canvas-internal pixel coordinates,
-// accounting for the canvas's own resolution (the project's canvasSize,
-// which can be any aspect ratio/resolution since schema v4 - see
-// usePersistedEditorState.js) being displayed at a different, letterboxed
-// CSS size via object-fit:contain. Reads canvasEl.width/height live, so it
-// already works for any canvas size without needing the size passed in.
+// Maps a client (mouse) position to the canvas's on-screen content box,
+// accounting for the canvas being letterboxed via object-fit:contain.
 function getCanvasContentRect(canvasEl) {
   const rect = canvasEl.getBoundingClientRect();
   const canvasAspect = canvasEl.width / canvasEl.height;
@@ -31,80 +37,80 @@ function getCanvasContentRect(canvasEl) {
   return { left: rect.left + (rect.width - width) / 2, top: rect.top + (rect.height - height) / 2, width, height };
 }
 
+function clipName(clip, fallback) {
+  return clip.file?.name || clip.label || (clip.url || clip.remoteUrl || '').split('/').pop()?.split('?')[0] || fallback;
+}
+
+// A green waveform tile for audio in the media bin, drawn from the same
+// decoded peaks the timeline uses (timeline/waveform.js caches per source).
+function AudioThumb({ clip }) {
+  const canvasRef = useRef(null);
+  const [waveform, setWaveform] = useState(null);
+  useEffect(() => {
+    let cancelled = false;
+    getWaveformForClip(clip).then((result) => { if (!cancelled) setWaveform(result); });
+    return () => { cancelled = true; };
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [clip.sourceId]);
+  useEffect(() => {
+    const canvas = canvasRef.current;
+    if (!canvas || !waveform) return;
+    const width = 160;
+    const height = 80;
+    const dpr = window.devicePixelRatio || 1;
+    canvas.width = width * dpr;
+    canvas.height = height * dpr;
+    const ctx = canvas.getContext('2d');
+    ctx.scale(dpr, dpr);
+    const bars = 40;
+    const peaks = sliceWaveform(waveform, 0, waveform.duration, bars);
+    ctx.fillStyle = '#6ee7a8';
+    const gap = 1.5;
+    const barWidth = width / bars - gap;
+    for (let i = 0; i < bars; i += 1) {
+      const amp = Math.max(0.12, Math.min(1, peaks[i] * 3.2));
+      const h = amp * (height - 16);
+      ctx.fillRect(i * (barWidth + gap) + gap / 2, (height - h) / 2, barWidth, h);
+    }
+  }, [waveform]);
+  return <canvas ref={canvasRef} className="st-media-wave" aria-hidden="true" />;
+}
+
 function EditorPanel({
-  bannerVisible, onDismissBanner, timeline, selectedClipId, selectedClip, onSelectClip, onImportClick, onUpload, fileInputRef,
-  canvasRef, isPlaying, currentTime, videoDuration, onTogglePlayback, onSeek, onMoveOverlay, onMoveOverlayEnd,
-  canvasSize, onCanvasSizeChange,
+  timeline, audioClips = [], selectedClipId, selectedClip, onSelectClip, onImportClick, onUpload, onImportFiles, onImportUrl, fileInputRef,
+  canvasRef, isPlaying, currentTime, videoDuration, onTogglePlayback, onMoveOverlay, onMoveOverlayEnd,
+  canvasSize, onFullscreen, mediaFocus,
 }) {
-  const [canvasSettingsOpen, setCanvasSettingsOpen] = useState(false);
-  // 'player' shows the editable view (drag handles on the selected overlay
-  // clip, click-to-reposition); 'preview' is a clean look at the actual
-  // composited frame with no edit chrome - useful for judging how a shot
-  // really looks without selection UI in the way.
+  // 'player' shows the editable view (drag handles on a selected overlay
+  // clip); 'preview' is the clean composited frame with no edit chrome.
   const [viewMode, setViewMode] = useState('player');
-  // 'fit' scales the canvas to the available stage (previous/default
-  // behavior); '100' shows it at its true pixel size (canvasSize.width x
-  // height) inside a scrollable stage, matching CapCut/Premiere-style
-  // Fit vs 100% zoom presets.
+  // 'fit' scales the canvas to the stage; '100' shows true pixel size.
   const [zoomMode, setZoomMode] = useState('fit');
-  // One card per unique imported SOURCE, not one per timeline clip - the
-  // timeline can reference the same source many times (split, duplicate,
-  // freeze-frame all add clip entries without importing anything new), so
-  // filtering timeline directly used to make split/duplicate look like a
-  // fresh import: a second card for the same file would appear immediately.
-  // Dedup key falls back to clip.id only for a legacy clip somehow missing
-  // sourceId, so it still renders instead of silently vanishing.
-  const mediaClips = useMemo(() => {
+  const [link, setLink] = useState('');
+  const [linkState, setLinkState] = useState({ status: 'idle', message: '' });
+  const [dragOver, setDragOver] = useState(false);
+  const mediaRef = useRef(null);
+  const fps = canvasSize?.fps || 30;
+
+  // One card per imported SOURCE, not one per timeline clip - split,
+  // duplicate and freeze-frame add clips that reference the same file.
+  const mediaItems = useMemo(() => {
     const bySource = new Map();
-    timeline.forEach((clip) => {
-      // Images are media in this panel exactly as video clips are - see
-      // timeline/clipKinds.js.
-      if (!isVideoLikeClip(clip)) return;
+    [...timeline.filter((clip) => isVideoLikeClip(clip)), ...audioClips].forEach((clip) => {
       const key = clip.sourceId || clip.id;
       if (!bySource.has(key)) bySource.set(key, clip);
     });
     return [...bySource.values()];
-  }, [timeline]);
+  }, [timeline, audioClips]);
   const hasContent = timeline.length > 0;
-  const pct = videoDuration ? (currentTime / videoDuration) * 100 : 0;
   const overlayDragRef = useRef(null);
 
-  // Only a clip on an overlay lane (trackIndex 1+) is directly draggable on
-  // the canvas - lane 0 fills the whole frame, so moving it around wouldn't
-  // mean anything. Reposition-by-dragging is the CapCut-familiar way to
-  // place picture-in-picture content; this writes straight to the same
-  // transform.x/y RightPanel's Position sliders already use, so both stay
-  // in sync automatically. Gated to 'player' mode - 'preview' is meant to
-  // show the clean composite with no edit chrome, drag handles included.
+  // Pressing "Media" in the sidebar brings the bin into focus.
+  useEffect(() => {
+    if (mediaFocus) mediaRef.current?.focus();
+  }, [mediaFocus]);
+
   const isOverlayClip = viewMode === 'player' && selectedClip && isVideoLikeClip(selectedClip) && (selectedClip.trackIndex || 0) > 0;
-
-  const handleSeek = (event) => {
-    if (!videoDuration) return;
-    const rect = event.currentTarget.getBoundingClientRect();
-    const pct = Math.max(0, Math.min((event.clientX - rect.left) / rect.width, 1));
-    onSeek?.(pct * videoDuration);
-  };
-
-  const handleOverlayDragStart = (event) => {
-    if (!isOverlayClip || !canvasRef.current) return;
-    event.preventDefault();
-    const content = getCanvasContentRect(canvasRef.current);
-    overlayDragRef.current = {
-      startClientX: event.clientX,
-      startClientY: event.clientY,
-      // transform.x/y are a percent of half the canvas dimension (schema
-      // v4+) - converting the on-screen CSS-pixel drag delta straight to a
-      // percent delta only needs the content box's own on-screen size, not
-      // the canvas's actual pixel dimensions (the canvas-pixel scale factor
-      // cancels out of the ratio algebraically).
-      contentWidth: content.width,
-      contentHeight: content.height,
-      originX: selectedClip.transform?.x || 0,
-      originY: selectedClip.transform?.y || 0,
-    };
-    window.addEventListener('mousemove', handleOverlayDragMove);
-    window.addEventListener('mouseup', handleOverlayDragEnd);
-  };
 
   const handleOverlayDragMove = (event) => {
     const drag = overlayDragRef.current;
@@ -121,72 +127,159 @@ function EditorPanel({
     onMoveOverlayEnd?.();
   };
 
+  // Only a clip on an overlay lane can be dragged around the frame - it
+  // writes the same transform.x/y the inspector's Position sliders use.
+  const handleOverlayDragStart = (event) => {
+    if (!isOverlayClip || !canvasRef.current) return;
+    event.preventDefault();
+    const content = getCanvasContentRect(canvasRef.current);
+    overlayDragRef.current = {
+      startClientX: event.clientX,
+      startClientY: event.clientY,
+      contentWidth: content.width,
+      contentHeight: content.height,
+      originX: selectedClip.transform?.x || 0,
+      originY: selectedClip.transform?.y || 0,
+    };
+    window.addEventListener('mousemove', handleOverlayDragMove);
+    window.addEventListener('mouseup', handleOverlayDragEnd);
+  };
+
+  const handleFetch = async (event) => {
+    event.preventDefault();
+    const url = link.trim();
+    if (!url || linkState.status === 'loading') return;
+    setLinkState({ status: 'loading', message: 'Fetching…' });
+    try {
+      await onImportUrl?.(url, (message) => setLinkState({ status: 'loading', message }));
+      setLink('');
+      setLinkState({ status: 'idle', message: '' });
+    } catch (err) {
+      setLinkState({ status: 'error', message: err.message || 'Could not fetch that link.' });
+    }
+  };
+
+  const handleDrop = (event) => {
+    event.preventDefault();
+    setDragOver(false);
+    const files = [...(event.dataTransfer?.files || [])].filter((file) => /^(video|audio|image)\//.test(file.type));
+    if (files.length) onImportFiles?.(files);
+  };
+
+  const dropProps = {
+    onDragOver: (event) => { event.preventDefault(); if (!dragOver) setDragOver(true); },
+    onDragLeave: (event) => { if (!event.currentTarget.contains(event.relatedTarget)) setDragOver(false); },
+    onDrop: handleDrop,
+  };
+
   return (
-    <div className="capcut-editor-workspace">
-      {bannerVisible && <div className="editor-notice"><span><b>Local project</b> Changes stay in this browser session.</span><button type="button" onClick={onDismissBanner}>×</button></div>}
+    <div className="st-editor">
+      <aside className="st-media" ref={mediaRef} tabIndex={-1} aria-label="Media" {...dropProps}>
+        <header className="st-media-head">
+          <h2>Media</h2>
+          <button type="button" className="st-chip-btn" onClick={onImportClick}>+ Import</button>
+        </header>
+        <input ref={fileInputRef} type="file" accept="video/*,audio/*,image/*" multiple onChange={onUpload} className="sr-only-input" />
 
-      <aside className="editor-media-library">
-        {/* Only "Media" (locally imported clips) exists - no stock-media
-            library is wired up, so there's nothing a second tab would
-            switch to. A dead "Library" button that didn't do anything used
-            to sit here; removed rather than left as a non-functional
-            click target. */}
-        <div className="editor-library-tabs"><button type="button" className="is-active">Media</button></div>
-        <div className="editor-library-toolbar"><strong>Local</strong><button type="button" onClick={onImportClick}>+ Import</button></div>
-        <input ref={fileInputRef} type="file" accept="video/*,audio/*,image/*" onChange={onUpload} className="sr-only-input" />
+        <form className={`st-link ${linkState.status === 'error' ? 'is-error' : ''}`} onSubmit={handleFetch}>
+          <Icon d={ICON.link} size={16} />
+          <input
+            type="url"
+            value={link}
+            onChange={(event) => { setLink(event.target.value); if (linkState.status === 'error') setLinkState({ status: 'idle', message: '' }); }}
+            placeholder="Paste a YouTube, TikTok or Drive link"
+            aria-label="Video link"
+            disabled={linkState.status === 'loading'}
+          />
+          <button type="submit" disabled={!link.trim() || linkState.status === 'loading'}>
+            {linkState.status === 'loading' ? <span className="st-spin" aria-label="Fetching" /> : 'Fetch'}
+          </button>
+        </form>
+        {linkState.message && <p className={`st-link-status ${linkState.status === 'error' ? 'is-error' : ''}`} role="status">{linkState.message}</p>}
 
-        {mediaClips.length ? <div className="editor-media-grid">{mediaClips.map((clip, index) => <button type="button" key={clip.id} className={selectedClipId === clip.id ? 'is-active' : ''} onClick={() => onSelectClip?.(clip.id)}><div className="editor-media-thumb">{isImageClip(clip) ? <img src={clip.url} alt="" style={{ width: '100%', height: '100%', objectFit: 'cover' }} /> : <video src={clip.url} muted preload="metadata"/>}<span>{(clip.trimmedEnd - clip.trimmedStart).toFixed(1)}s</span></div><strong>{clip.file?.name || `Clip ${index + 1}`}</strong><small>{isImageClip(clip) ? 'Image · Added' : 'Video · Added'}</small></button>)}</div> : <button type="button" className="editor-library-empty" onClick={onImportClick}><span><EditorIcon><path d="M12 16V4m0 0L8 8m4-4 4 4"/><path d="M5 15v4h14v-4"/></EditorIcon></span><strong>Import media</strong><small>Video, audio or image files from your device</small></button>}
+        {mediaItems.length ? (
+          <div className="st-media-grid">
+            {mediaItems.map((clip, index) => {
+              const audio = clip.type === 'audio';
+              const length = clip.duration || (clip.trimmedEnd - clip.trimmedStart) || 0;
+              return (
+                <button
+                  type="button"
+                  key={clip.id}
+                  className={`st-media-card ${selectedClipId === clip.id ? 'is-active' : ''}`}
+                  onClick={() => onSelectClip?.(clip.id)}
+                  title={clipName(clip, `Clip ${index + 1}`)}
+                >
+                  <span className={`st-media-thumb ${audio ? 'is-audio' : ''}`}>
+                    {audio ? <AudioThumb clip={clip} />
+                      : isImageClip(clip) ? <img src={clip.url || clip.remoteUrl} alt="" />
+                        : <video src={clip.url || clip.remoteUrl} muted preload="metadata" />}
+                    {clip.file?.nexFromLink ? <em className="st-badge-link">From link</em>
+                      : !isImageClip(clip) && length > 0 && <em className="st-badge-time">{formatShortDuration(length)}</em>}
+                  </span>
+                  <span className="st-media-name">{clipName(clip, `Clip ${index + 1}`)}</span>
+                </button>
+              );
+            })}
+          </div>
+        ) : (
+          <button type="button" className="st-media-empty" onClick={onImportClick}>
+            <Icon d={ICON.upload} size={20} />
+            <strong>Import media</strong>
+            <small>Video, audio or images - or drop files here</small>
+          </button>
+        )}
       </aside>
 
-      <section className="editor-canvas-area">
-        <header className="editor-canvas-toolbar" style={{ position: 'relative' }}>
-          <div>
-            <button type="button" className={viewMode === 'player' ? 'is-active' : ''} onClick={() => setViewMode('player')}>Player</button>
-            <button type="button" className={viewMode === 'preview' ? 'is-active' : ''} onClick={() => setViewMode('preview')} title="Clean view of the composited frame, no selection handles">Preview</button>
-          </div>
-          <div>
-            <button type="button" className={zoomMode === 'fit' ? 'is-active' : ''} onClick={() => setZoomMode('fit')}>Fit</button>
-            <button type="button" className={zoomMode === '100' ? 'is-active' : ''} onClick={() => setZoomMode('100')} title="Show the canvas at its true pixel size">100%</button>
-            <button type="button" title="Canvas settings" onClick={() => setCanvasSettingsOpen((v) => !v)}>•••</button>
-            {canvasSettingsOpen && <CanvasSettingsMenu canvasSize={canvasSize} onChange={onCanvasSizeChange} onClose={() => setCanvasSettingsOpen(false)} />}
-          </div>
-        </header>
-        <div className="editor-player-stage" style={{ overflow: 'auto' }}>
+      <section className="st-stage-col">
+        <div className={`st-stage ${dragOver ? 'is-drag' : ''}`} {...dropProps}>
           {hasContent ? (
             <div
-              className="editor-player-frame"
-              style={zoomMode === '100' ? { display: 'block', width: canvasSize?.width || 1920, height: canvasSize?.height || 1080, maxWidth: 'none' } : undefined}
+              className={`st-frame ${zoomMode === '100' ? 'is-actual' : ''}`}
+              style={zoomMode === '100'
+                ? { width: canvasSize?.width || 1920, height: canvasSize?.height || 1080 }
+                : { '--ar': (canvasSize?.width || 16) / (canvasSize?.height || 9) }}
             >
               <canvas
                 ref={canvasRef}
                 onMouseDown={handleOverlayDragStart}
-                style={zoomMode === '100'
-                  ? { width: canvasSize?.width || 1920, height: canvasSize?.height || 1080, display: 'block', cursor: isOverlayClip ? 'move' : 'default' }
-                  : { width: '100%', height: '100%', objectFit: 'contain', cursor: isOverlayClip ? 'move' : 'default' }}
+                style={{ cursor: isOverlayClip ? 'move' : 'default' }}
               />
-              {viewMode === 'player' && (
+              {isOverlayClip && (
                 <>
-                  <span className="editor-transform-corner top-left"/><span className="editor-transform-corner top-right"/><span className="editor-transform-corner bottom-left"/><span className="editor-transform-corner bottom-right"/>
+                  <span className="st-corner is-tl" /><span className="st-corner is-tr" /><span className="st-corner is-bl" /><span className="st-corner is-br" />
                 </>
               )}
             </div>
-          ) : <div className="editor-canvas-empty"><span><EditorIcon><rect x="3" y="5" width="18" height="14" rx="2"/><path d="m10 9 5 3-5 3z"/></EditorIcon></span><h2>Start creating</h2><p>Import a video to add it to your timeline.</p><button type="button" onClick={onImportClick}>Import media</button></div>}
+          ) : (
+            <button type="button" className="st-drop" onClick={onImportClick}>
+              <Icon d={ICON.image} size={34} strokeWidth={1.5} />
+              <span>Drop media here</span>
+              <small>or click to import</small>
+            </button>
+          )}
+          {hasContent && (
+            <div className="st-stage-tools" role="toolbar" aria-label="Viewer">
+              <button type="button" className={viewMode === 'player' ? 'is-active' : ''} onClick={() => setViewMode('player')} title="Editable view">Player</button>
+              <button type="button" className={viewMode === 'preview' ? 'is-active' : ''} onClick={() => setViewMode('preview')} title="Clean view of the frame, no handles">Preview</button>
+              <i />
+              <button type="button" className={zoomMode === 'fit' ? 'is-active' : ''} onClick={() => setZoomMode('fit')}>Fit</button>
+              <button type="button" className={zoomMode === '100' ? 'is-active' : ''} onClick={() => setZoomMode('100')} title="True pixel size">100%</button>
+            </div>
+          )}
         </div>
-        <footer className="editor-canvas-footer"><span>Preview quality</span><b>{canvasSize?.resolutionId ? canvasSize.resolutionId : `${canvasSize?.height || 1080}p`}</b><i/><span>Canvas</span><b>{canvasSize?.aspectRatioId || '16:9'}</b></footer>
-      </section>
-
-      {mediaClips.length > 0 && (
-        <div style={{ position:'absolute', bottom: 8, left: '50%', transform:'translateX(-50%)', display:'flex', alignItems:'center', gap:10, padding:'6px 12px', background:'rgba(0,0,0,.7)', borderRadius:10, backdropFilter:'blur(8px)', border:'1px solid rgba(255,255,255,.08)' }}>
-          <button onClick={onTogglePlayback} style={{ width:32, height:32, borderRadius:8, background:'var(--accent-violet)', border:'none', color:'#fff', cursor:'pointer', display:'flex', alignItems:'center', justifyContent:'center' }}>
-            <div style={{ width:14, height:14 }}>{isPlaying ? <EditorIcon><rect x="6" y="4" width="4" height="16"/><rect x="14" y="4" width="4" height="16"/></EditorIcon> : <EditorIcon><polygon points="6,3 18,12 6,21"/></EditorIcon>}</div>
+        <div className="st-transport">
+          <button type="button" className="st-play" aria-label={isPlaying ? 'Pause' : 'Play'} onClick={onTogglePlayback} disabled={!hasContent}>
+            <Icon d={isPlaying ? ICON.pause : ICON.play} size={15} filled />
           </button>
-          <div style={{ width:120, height:3, background:'rgba(255,255,255,.15)', borderRadius:99, cursor:'pointer', position:'relative' }} onClick={handleSeek}>
-            <div style={{ position:'absolute', left:0, top:0, bottom:0, background:'var(--accent-violet)', width:`${pct}%`, borderRadius:99 }} />
-            <div style={{ position:'absolute', left:`${pct}%`, top:'50%', width:8, height:8, borderRadius:'50%', background:'#fff', transform:'translate(-50%,-50%)', boxShadow:'0 0 4px rgba(0,0,0,.4)' }} />
-          </div>
-          <span style={{ fontSize:10, color:'rgba(255,255,255,.7)', minWidth:64, textAlign:'center', fontVariantNumeric:'tabular-nums' }}>{formatSeconds(currentTime)}s / {formatSeconds(videoDuration)}s</span>
+          <span className="st-timecode">{formatTimecode(currentTime, fps)} / {formatTimecode(videoDuration, fps)}</span>
+          {hasContent && onFullscreen && (
+            <button type="button" className="st-fullscreen" aria-label="Fullscreen" title="Fullscreen" onClick={onFullscreen}>
+              <Icon d={ICON.fullscreen} size={15} />
+            </button>
+          )}
         </div>
-      )}
+      </section>
     </div>
   );
 }
