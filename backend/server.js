@@ -22,6 +22,8 @@ import billingMomoRouter from './routes/billingMomo.js';
 import billingCardsRouter from './routes/billingCards.js';
 import accountRouter from './routes/account.js';
 import adminRouter from './routes/admin.js';
+import analyticsRouter from './routes/analytics.js';
+import adminAnalyticsRouter from './routes/adminAnalytics.js';
 import { jobStore, deleteJob } from './services/jobStore.js';
 import { initSocket, isOriginAllowed } from './socket.js';
 import { connectDB } from './db.js';
@@ -106,6 +108,8 @@ app.use('/api/jobs', jobsRouter);
 app.use('/api/billing/momo', billingMomoRouter);
 app.use('/api/billing/cards', billingCardsRouter);
 app.use('/api/account', accountRouter);
+app.use('/api/analytics', analyticsRouter);
+app.use('/api/admin/analytics', adminAnalyticsRouter);
 app.use('/api/admin', adminRouter);
 
 app.use((err, req, res, next) => {

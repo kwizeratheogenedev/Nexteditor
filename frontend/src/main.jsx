@@ -15,6 +15,7 @@ import AuthCallbackPage from './pages/AuthCallbackPage.jsx'
 import PricingPage from './pages/PricingPage.jsx'
 import AccountPage from './pages/AccountPage.jsx'
 import AdminPage from './pages/AdminPage.jsx'
+import AnalyticsTracker from './analytics/AnalyticsTracker.jsx'
 
 createRoot(document.getElementById('root')).render(
   <StrictMode>
@@ -23,6 +24,7 @@ createRoot(document.getElementById('root')).render(
         <BrowserRouter>
           <AuthProvider>
             <SocketProvider>
+              <AnalyticsTracker />
               <Routes>
                 <Route path="/" element={<LandingPage />} />
                 <Route path="/login" element={<LoginPage />} />

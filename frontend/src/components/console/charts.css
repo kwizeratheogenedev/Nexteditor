@@ -1,0 +1,227 @@
+/* Chart colours - validated with the dataviz palette checker against the
+   admin card surfaces (dark #17171d, light #f7f7f9): both slots pass the
+   lightness, chroma, colour-blind and contrast checks; light slot 2 sits at
+   2.99:1, so every chart also offers a Table view. Status colours (good /
+   critical) are only used for render success / failure. */
+:root {
+  --viz-1: #3987e5;
+  --viz-2: #d95926;
+  --viz-good: #0ca30c;
+  --viz-critical: #d03b3b;
+  --viz-grid: #2a2932;
+  --viz-baseline: #3a3842;
+  --viz-ink-muted: #9a97a4;
+  --viz-surface: #17171d;
+}
+
+:root[data-theme="light"] {
+  --viz-1: #2a78d6;
+  --viz-2: #eb6834;
+  --viz-grid: #e1e0d9;
+  --viz-baseline: #c3c2b7;
+  --viz-ink-muted: #67656f;
+  --viz-surface: #f7f7f9;
+}
+
+.viz {
+  position: relative;
+  width: 100%;
+  min-width: 0;
+}
+
+.viz-plot {
+  position: relative;
+}
+
+.viz svg {
+  display: block;
+  overflow: visible;
+  touch-action: pan-y;
+}
+
+.viz svg:focus-visible {
+  outline: 2px solid var(--accent);
+  outline-offset: 4px;
+  border-radius: 6px;
+}
+
+.viz-grid {
+  stroke: var(--viz-grid);
+  stroke-width: 1;
+}
+
+.viz-baseline {
+  stroke: var(--viz-baseline);
+  stroke-width: 1;
+}
+
+.viz-tick {
+  fill: var(--viz-ink-muted);
+  font-size: 11px;
+  font-variant-numeric: tabular-nums;
+}
+
+.viz-crosshair {
+  stroke: var(--panel-text-3);
+  stroke-width: 1;
+}
+
+.viz-dot {
+  stroke: var(--viz-surface);
+  stroke-width: 2;
+}
+
+.viz-dim {
+  opacity: 0.55;
+}
+
+.viz-legend {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 16px;
+  margin: -6px 0 12px;
+  font-size: 12px;
+  color: var(--panel-text-2);
+}
+
+.viz-legend span {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+}
+
+.viz-key {
+  display: inline-block;
+  flex-shrink: 0;
+}
+
+.viz-key-line {
+  width: 14px;
+  height: 2px;
+  border-radius: 2px;
+}
+
+.viz-key-bar {
+  width: 10px;
+  height: 10px;
+  border-radius: 2px;
+}
+
+.viz-tip {
+  position: absolute;
+  top: 0;
+  z-index: 5;
+  min-width: 130px;
+  padding: 8px 10px;
+  border: 1px solid var(--panel-border-strong);
+  border-radius: 8px;
+  background: var(--panel-surface-2);
+  box-shadow: 0 10px 30px rgba(0, 0, 0, 0.35);
+  font-size: 12px;
+  pointer-events: none;
+  transform: translateX(-50%);
+}
+
+.viz-tip-title {
+  margin-bottom: 4px;
+  color: var(--panel-text-3);
+}
+
+.viz-tip-row {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+}
+
+.viz-tip-row strong {
+  color: var(--panel-text-1);
+  font-size: 13px;
+}
+
+.viz-tip-row span {
+  color: var(--panel-text-2);
+}
+
+.viz-barlist {
+  display: flex;
+  flex-direction: column;
+  gap: 12px;
+  margin: 0;
+  padding: 0;
+  list-style: none;
+}
+
+.viz-barlist-head {
+  display: flex;
+  justify-content: space-between;
+  gap: 12px;
+  margin-bottom: 5px;
+  font-size: 13px;
+}
+
+.viz-barlist-head span {
+  color: var(--panel-text-1);
+}
+
+.viz-barlist-head strong {
+  font-variant-numeric: tabular-nums;
+}
+
+.viz-barlist-track {
+  height: 8px;
+}
+
+.viz-barlist-track span {
+  display: block;
+  height: 100%;
+  border-radius: 0 4px 4px 0;
+  background: var(--viz-1);
+}
+
+.viz-barlist small {
+  display: block;
+  margin-top: 4px;
+  font-size: 12px;
+  color: var(--panel-text-3);
+}
+
+.viz-empty {
+  padding: 24px 0;
+  color: var(--panel-text-3);
+  font-size: 13px;
+  text-align: center;
+}
+
+.viz-switch {
+  display: inline-flex;
+  flex-shrink: 0;
+  padding: 2px;
+  border: 1px solid var(--panel-border-strong);
+  border-radius: 8px;
+}
+
+.viz-switch button {
+  padding: 4px 10px;
+  border: 0;
+  border-radius: 6px;
+  background: none;
+  color: var(--panel-text-3);
+  font: inherit;
+  font-size: 12px;
+  cursor: pointer;
+}
+
+.viz-switch button[aria-pressed='true'] {
+  background: var(--panel-surface-4);
+  color: var(--panel-text-1);
+  font-weight: 600;
+}
+
+.viz-table {
+  max-height: 320px;
+  overflow: auto;
+}
+
+.viz-table td {
+  font-variant-numeric: tabular-nums;
+}

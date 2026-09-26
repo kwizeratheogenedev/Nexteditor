@@ -11,10 +11,12 @@ import Jobs from './admin/Jobs.jsx';
 import Projects from './admin/Projects.jsx';
 import Activity from './admin/Activity.jsx';
 import System from './admin/System.jsx';
+import Analytics from './admin/Analytics.jsx';
 import '../components/console/console.css';
 
 const SECTIONS = [
   { id: 'overview', label: 'Overview', icon: 'overview' },
+  { id: 'analytics', label: 'Analytics', icon: 'usage' },
   { id: 'users', label: 'Users', icon: 'users' },
   { id: 'payments', label: 'Payments', icon: 'payments' },
   { id: 'jobs', label: 'Renders', icon: 'jobs' },
@@ -60,6 +62,7 @@ export default function AdminPage() {
   return (
     <ConsoleLayout title="Admin" badge={<Badge tone="admin">Admin</Badge>} sections={SECTIONS} active={tab} onSelect={go}>
       {tab === 'overview' && <Overview {...shared} onGo={go} />}
+      {tab === 'analytics' && <Analytics {...shared} />}
       {tab === 'users' && <Users {...shared} refreshKey={refreshKey} />}
       {tab === 'payments' && <Payments {...shared} />}
       {tab === 'jobs' && <Jobs {...shared} />}

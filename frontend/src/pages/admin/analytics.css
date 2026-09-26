@@ -1,0 +1,245 @@
+.an-views {
+  display: flex;
+  gap: 4px;
+  border-bottom: 1px solid var(--panel-border);
+}
+
+.an-views .cs-tab {
+  display: inline-flex;
+  align-items: center;
+  gap: 8px;
+  font-size: 14px;
+}
+
+.an-live-dot {
+  width: 10px;
+  height: 10px;
+  border-radius: 50%;
+  background: var(--viz-critical);
+  box-shadow: 0 0 0 0 color-mix(in srgb, var(--viz-critical) 60%, transparent);
+  animation: an-pulse 2s infinite;
+}
+
+.an-live-dot.is-inline {
+  width: 8px;
+  height: 8px;
+}
+
+@keyframes an-pulse {
+  70% { box-shadow: 0 0 0 8px transparent; }
+  100% { box-shadow: 0 0 0 0 transparent; }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .an-live-dot { animation: none; }
+}
+
+.an-live-top {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) minmax(0, 1fr);
+  gap: 20px;
+}
+
+.an-live-top > .cs-card + .cs-card {
+  margin-top: 0;
+}
+
+.an-hero {
+  position: relative;
+  display: flex;
+  flex-direction: column;
+}
+
+.an-hero .an-live-dot {
+  position: absolute;
+  top: 26px;
+  right: 24px;
+}
+
+.an-hero-value {
+  margin-top: 4px;
+  font-size: 64px;
+  font-weight: 700;
+  line-height: 1.05;
+}
+
+.an-hero p {
+  margin: 6px 0 0;
+  color: var(--panel-text-2);
+}
+
+.an-mini-facts {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: 14px 24px;
+  margin: 22px 0 0;
+  padding-top: 18px;
+  border-top: 1px solid var(--panel-border);
+}
+
+.an-mini-facts dt {
+  font-size: 12px;
+  color: var(--panel-text-3);
+}
+
+.an-mini-facts dd {
+  margin: 2px 0 0;
+  font-size: 18px;
+  font-weight: 650;
+}
+
+.an-footnote {
+  margin: 0;
+}
+
+.an-filters {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 8px;
+}
+
+.an-day {
+  display: inline-flex;
+  align-items: center;
+  gap: 8px;
+  padding: 3px 4px 3px 12px;
+  border: 1px solid var(--panel-border-strong);
+  border-radius: 999px;
+  font-size: 13px;
+  color: var(--panel-text-2);
+}
+
+.an-day.is-active {
+  border-color: var(--accent);
+  background: var(--accent-dim);
+  color: var(--panel-text-1);
+}
+
+.an-day input {
+  padding: 4px 8px;
+  border: 0;
+  border-radius: 999px;
+  background: var(--panel-surface-0);
+  color: var(--panel-text-1);
+  font: inherit;
+  font-size: 13px;
+}
+
+.an-period {
+  margin: 0;
+  font-size: 18px;
+  font-weight: 650;
+}
+
+.an-period span {
+  font-size: 13px;
+  font-weight: 400;
+  color: var(--panel-text-3);
+}
+
+.an-note {
+  padding: 12px 14px;
+  border: 1px solid var(--accent-border);
+  border-radius: 10px;
+  background: var(--accent-dim);
+  font-size: 13px;
+  line-height: 1.5;
+}
+
+.an-refetching .an-kpis,
+.an-refetching .viz-card,
+.an-refetching .an-breakdowns {
+  opacity: 0.55;
+  transition: opacity 0.2s;
+}
+
+.an-kpis {
+  display: grid;
+  grid-template-columns: repeat(4, minmax(0, 1fr));
+  gap: 14px;
+}
+
+.an-kpi {
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+  min-width: 0;
+  padding: 16px 18px;
+  border: 1px solid var(--panel-border);
+  border-radius: var(--cs-radius);
+  background: var(--panel-surface-1);
+}
+
+.an-kpi-label {
+  font-size: 12px;
+  font-weight: 600;
+  color: var(--panel-text-3);
+}
+
+.an-kpi-value {
+  font-size: 26px;
+  font-weight: 700;
+  line-height: 1.2;
+}
+
+.an-kpi small {
+  font-size: 12px;
+  color: var(--panel-text-3);
+}
+
+.an-delta {
+  font-size: 12px;
+  font-weight: 600;
+}
+
+.an-delta.is-good {
+  color: var(--cs-ok);
+}
+
+.an-delta.is-bad {
+  color: var(--cs-danger);
+}
+
+.an-delta.is-flat {
+  font-weight: 400;
+  color: var(--panel-text-3);
+}
+
+.an-delta-vs {
+  font-weight: 400;
+  color: var(--panel-text-3);
+}
+
+.an-breakdowns {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: 20px;
+}
+
+.an-breakdowns > .cs-card + .cs-card {
+  margin-top: 0;
+}
+
+@media (max-width: 1100px) {
+  .an-kpis {
+    grid-template-columns: repeat(2, minmax(0, 1fr));
+  }
+}
+
+@media (max-width: 1000px) {
+  .an-live-top,
+  .an-breakdowns {
+    grid-template-columns: 1fr;
+  }
+}
+
+@media (max-width: 560px) {
+  .an-kpis {
+    grid-template-columns: 1fr;
+  }
+
+  .an-hero-value {
+    font-size: 52px;
+  }
+}

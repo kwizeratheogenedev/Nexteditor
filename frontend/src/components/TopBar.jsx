@@ -1,10 +1,14 @@
-import { useState } from 'react';
+import { useEffect, useState } from 'react';
 import { useAuth } from '../context/AuthContext.jsx';
 import ThemeToggle from './ThemeToggle.jsx';
 import UserMenu from './UserMenu.jsx';
+import { setWorkspace } from '../analytics/tracker.js';
 
 function TopBar({ activeTab, onExport, exporting = false, exportProgress = 0, projectName, currentProjectId, projectSyncStatus, onSaveProject, onOpenProjects, canvasSize }) {
   const { user } = useAuth();
+
+  // Lets usage analytics know which tool (Editor, Montage, ...) is open.
+  useEffect(() => { setWorkspace(activeTab); }, [activeTab]);
   const [saveError, setSaveError] = useState('');
   const [saving, setSaving] = useState(false);
 
