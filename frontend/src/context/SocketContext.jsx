@@ -6,7 +6,7 @@ const SocketContext = createContext(null);
 function getSocketUrlCandidates() {
   const configuredUrls = [import.meta.env.VITE_SOCKET_URL, import.meta.env.VITE_API_URL]
     .filter(Boolean)
-    .map((value) => value.trim());
+    .map((value) => value.trim().replace(/\/+$/, ''));
 
   if (typeof window === 'undefined') {
     return configuredUrls;

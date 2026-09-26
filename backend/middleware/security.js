@@ -37,7 +37,13 @@ export const securityHeaders = helmet({
 
 export function configureProxyTrust(app) {
   const raw = process.env.TRUST_PROXY;
-  if (!raw) return;
+  if (!raw) {
+    // Vercel sits exactly one proxy in front of the app. Without trusting it
+    // every visitor looks like the proxy's IP (one shared rate limit) and
+    // express-rate-limit logs a ValidationError on each request.
+    if (process.env.VERCEL) app.set('trust proxy', 1);
+    return;
+  }
   const hops = Number(raw);
   app.set('trust proxy', Number.isInteger(hops) && hops >= 0 ? hops : raw);
 }

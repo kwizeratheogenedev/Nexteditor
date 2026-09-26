@@ -1,6 +1,9 @@
 // Backend API configuration
 const getApiBaseUrl = () => {
-  const envUrl = import.meta.env.VITE_API_URL;
+  // A trailing "/" (easy to paste into a hosting dashboard) would turn every
+  // request into "...app//api/..", which Vercel answers with a redirect that
+  // browsers refuse to follow for cross-site requests.
+  const envUrl = (import.meta.env.VITE_API_URL || '').trim().replace(/\/+$/, '');
   if (envUrl) return envUrl;
 
   if (typeof window !== 'undefined') {

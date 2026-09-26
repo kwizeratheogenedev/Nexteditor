@@ -19,7 +19,7 @@ function normalizeAllowedOrigins(allowedOrigin) {
 
   return rawValue
     .split(',')
-    .map((entry) => entry.trim())
+    .map((entry) => entry.trim().replace(/\/+$/, ''))
     .filter(Boolean);
 }
 

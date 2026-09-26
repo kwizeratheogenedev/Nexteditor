@@ -46,10 +46,15 @@ app.use(requestLogger());
 // explicitly given, i.e. local dev.
 const explicitPort = process.env.PORT ? Number(process.env.PORT) : null;
 const port = explicitPort || 3000;
-const ALLOWED_ORIGINS = (process.env.CORS_ORIGIN || 'http://localhost:5173,http://127.0.0.1:5173')
-  .split(',')
-  .map((value) => value.trim())
-  .filter(Boolean);
+// The frontend's own address (FRONTEND_URL) is always allowed, and a
+// trailing "/" is ignored - browsers send the Origin header without one.
+const ALLOWED_ORIGINS = Array.from(new Set(
+  [process.env.CORS_ORIGIN || 'http://localhost:5173,http://127.0.0.1:5173', process.env.FRONTEND_URL || '']
+    .join(',')
+    .split(',')
+    .map((value) => value.trim().replace(/\/+$/, ''))
+    .filter(Boolean),
+));
 
 const isDev = process.env.NODE_ENV !== 'production';
 
