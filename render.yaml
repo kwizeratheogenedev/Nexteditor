@@ -1,0 +1,80 @@
+# Render Blueprint for the NexEditor backend (the frontend stays on Vercel).
+# Render -> New -> Blueprint -> pick this repo. Values marked `sync: false`
+# are asked for in the dashboard during setup and never stored in the repo.
+services:
+  - type: web
+    name: nexeditor-backend
+    runtime: node
+    rootDir: backend
+    # Frankfurt is Render's closest region to East Africa.
+    region: frankfurt
+    # Starter: always on (the free plan sleeps and can't have a disk).
+    plan: starter
+    buildCommand: npm ci
+    startCommand: npm start
+    healthCheckPath: /health
+    # uploads/ and clips/ live on this disk (see backend/storagePaths.js), so
+    # finished exports survive restarts and deploys.
+    disk:
+      name: nexeditor-storage
+      mountPath: /var/data
+      sizeGB: 5
+    envVars:
+      - key: NODE_VERSION
+        value: "24"
+      - key: NODE_ENV
+        value: production
+      - key: STORAGE_DIR
+        value: /var/data/nexeditor
+      - key: FRONTEND_URL
+        value: https://nexteditorv1.vercel.app
+      - key: GROQ_WHISPER_MODEL
+        value: whisper-large-v3-turbo
+      # Filled in during setup (secrets, or values that need this service's
+      # final onrender.com address).
+      - key: BACKEND_URL
+        sync: false
+      - key: MONGO_URI
+        sync: false
+      - key: JWT_SECRET
+        sync: false
+      - key: OWNER_EMAILS
+        sync: false
+      - key: GROQ_API_KEY
+        sync: false
+      - key: GOOGLE_CLIENT_ID
+        sync: false
+      - key: GOOGLE_CLIENT_SECRET
+        sync: false
+      - key: GOOGLE_LOGIN_REDIRECT_URI
+        sync: false
+      - key: YOUTUBE_CLIENT_ID
+        sync: false
+      - key: YOUTUBE_CLIENT_SECRET
+        sync: false
+      - key: YOUTUBE_REDIRECT_URI
+        sync: false
+      - key: FLW_SECRET_KEY
+        sync: false
+      - key: FLW_SECRET_HASH
+        sync: false
+      - key: FLW_CURRENCY
+        sync: false
+      - key: FLW_PRO_PRICE
+        sync: false
+      - key: MOMO_SUBSCRIPTION_KEY
+        sync: false
+      - key: MOMO_API_USER
+        sync: false
+      - key: MOMO_API_KEY
+        sync: false
+      - key: MOMO_TARGET_ENVIRONMENT
+        sync: false
+      - key: MOMO_BASE_URL
+        sync: false
+      - key: MOMO_CURRENCY
+        sync: false
+      - key: MOMO_PRO_PRICE
+        sync: false
+      - key: MOMO_CALLBACK_URL
+        sync: false
