@@ -1,16 +1,12 @@
 import { useState } from 'react';
 import { useAuth } from '../context/AuthContext.jsx';
 import ThemeToggle from './ThemeToggle.jsx';
+import UserMenu from './UserMenu.jsx';
 
 function TopBar({ activeTab, onExport, exporting = false, exportProgress = 0, projectName, currentProjectId, projectSyncStatus, onSaveProject, onOpenProjects, canvasSize }) {
-  const { user, logout } = useAuth();
+  const { user } = useAuth();
   const [saveError, setSaveError] = useState('');
   const [saving, setSaving] = useState(false);
-
-  const handleLogout = async () => {
-    await logout();
-    window.location.href = '/';
-  };
 
   const handleSaveProject = async () => {
     if (!onSaveProject || saving) return;
@@ -65,12 +61,7 @@ function TopBar({ activeTab, onExport, exporting = false, exportProgress = 0, pr
           </>
         )}
         <ThemeToggle />
-        {user && (
-          <span className="topbar-pill" title={user.email} style={{ display: 'flex', alignItems: 'center', gap: 8, cursor: 'pointer' }} onClick={handleLogout}>
-            {user.name || user.email}
-            <span style={{ opacity: 0.6 }}>Log out</span>
-          </span>
-        )}
+        {user && <UserMenu />}
       </div>
     </header>
   );

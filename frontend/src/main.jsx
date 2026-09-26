@@ -13,6 +13,8 @@ import LoginPage from './pages/LoginPage.jsx'
 import SignupPage from './pages/SignupPage.jsx'
 import AuthCallbackPage from './pages/AuthCallbackPage.jsx'
 import PricingPage from './pages/PricingPage.jsx'
+import AccountPage from './pages/AccountPage.jsx'
+import AdminPage from './pages/AdminPage.jsx'
 
 createRoot(document.getElementById('root')).render(
   <StrictMode>
@@ -28,6 +30,8 @@ createRoot(document.getElementById('root')).render(
                 <Route path="/auth/callback" element={<AuthCallbackPage />} />
                 <Route path="/pricing" element={<PricingPage />} />
                 <Route path="/app/*" element={<RequireAuth><App /></RequireAuth>} />
+                <Route path="/account" element={<RequireAuth><AccountPage /></RequireAuth>} />
+                <Route path="/admin" element={<RequireAuth><AdminPage /></RequireAuth>} />
               </Routes>
             </SocketProvider>
           </AuthProvider>

@@ -2,6 +2,8 @@ import jwt from 'jsonwebtoken';
 import User from '../models/User.js';
 import { isOwnerEmail } from '../services/owners.js';
 import { isPro } from '../services/planLimits.js';
+import { isSuspended } from '../services/roles.js';
+import { PRO_PERIOD_DAYS, extendProPeriod } from '../services/subscription.js';
 
 // Owner accounts (OWNER_EMAILS in backend/.env - see services/owners.js)
 // always get full Pro access regardless of payment status. This keeps the
@@ -15,6 +17,14 @@ import { isPro } from '../services/planLimits.js';
 export async function ensureOwnerAccess(user) {
   if (!user) return user;
   if (!isOwnerEmail(user.email)) {
+    // Card payments used to grant Pro with no end date (i.e. forever). They
+    // now buy 30 days like MoMo; accounts upgraded under the old behaviour
+    // get 30 days from their next visit instead of keeping Pro forever.
+    if (user.subscription?.plan === 'pro' && !user.subscription.currentPeriodEnd && user.subscription.cardCustomerId && !user.subscription.cardLastAppliedRef) {
+      extendProPeriod(user, PRO_PERIOD_DAYS);
+      user.subscription.cardLastAppliedRef = 'legacy-card-migration';
+      await user.save();
+    }
     // Lapsed period-based (MoMo) Pro: keep the stored plan in step with what
     // isPro() already enforces, so the UI stops showing Pro too.
     const end = user.subscription?.currentPeriodEnd;
@@ -46,6 +56,10 @@ export async function requireAuth(req, res, next) {
       res.status(401).json({ error: 'Not signed in.' });
       return;
     }
+    if (isSuspended(user)) {
+      res.status(403).json({ error: 'This account has been suspended. Contact support if you think this is a mistake.', code: 'ACCOUNT_SUSPENDED' });
+      return;
+    }
     req.user = await ensureOwnerAccess(user);
     next();
   } catch (_err) {
@@ -66,7 +80,7 @@ export async function optionalAuth(req, _res, next) {
   try {
     const payload = jwt.verify(token, process.env.JWT_SECRET);
     const user = await User.findById(payload.sub);
-    if (user) req.user = await ensureOwnerAccess(user);
+    if (user && !isSuspended(user)) req.user = await ensureOwnerAccess(user);
   } catch (_err) {
     // Invalid/expired token - proceed unauthenticated rather than failing.
   }

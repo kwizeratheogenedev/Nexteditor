@@ -5,6 +5,7 @@
   "main": "server.js",
   "scripts": {
     "test": "node --test \"tests/*.test.js\"",
+    "create-admin": "node scripts/createAdmin.js",
     "start": "node server.js",
     "dev": "nodemon --config nodemon.json server.js"
   },

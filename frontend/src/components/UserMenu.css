@@ -1,0 +1,108 @@
+.um-root {
+  position: relative;
+}
+
+.um-trigger {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  max-width: 220px;
+  padding: 3px 10px 3px 3px;
+  border: 1px solid var(--panel-border);
+  border-radius: 999px;
+  background: var(--panel-surface-2);
+  color: var(--panel-text-1);
+  font: inherit;
+  font-size: 13px;
+  cursor: pointer;
+  transition: border-color 0.15s, background 0.15s;
+}
+
+.um-trigger:hover,
+.um-trigger[aria-expanded='true'] {
+  border-color: var(--accent-border);
+  background: var(--panel-surface-3);
+}
+
+.um-name {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.um-menu {
+  position: absolute;
+  top: calc(100% + 8px);
+  right: 0;
+  z-index: 1000;
+  width: 260px;
+  padding: 6px;
+  border: 1px solid var(--panel-border-strong);
+  border-radius: 12px;
+  background: var(--panel-surface-1);
+  box-shadow: 0 18px 50px rgba(0, 0, 0, 0.45);
+}
+
+.um-head {
+  display: flex;
+  gap: 10px;
+  padding: 10px 10px 12px;
+  margin-bottom: 4px;
+  border-bottom: 1px solid var(--panel-border);
+}
+
+.um-head > div {
+  display: flex;
+  flex-direction: column;
+  min-width: 0;
+}
+
+.um-head strong {
+  font-size: 14px;
+  color: var(--panel-text-1);
+}
+
+.um-head span {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  font-size: 12px;
+  color: var(--panel-text-3);
+}
+
+.um-badges {
+  display: flex;
+  gap: 6px;
+  margin-top: 6px;
+}
+
+.um-item {
+  display: block;
+  width: 100%;
+  padding: 9px 10px;
+  border: 0;
+  border-radius: 8px;
+  background: none;
+  color: var(--panel-text-1);
+  font: inherit;
+  font-size: 13px;
+  text-align: left;
+  text-decoration: none;
+  cursor: pointer;
+}
+
+.um-item:hover,
+.um-item:focus-visible {
+  background: var(--panel-surface-3);
+  outline: none;
+}
+
+.um-upgrade {
+  color: var(--accent);
+  font-weight: 600;
+}
+
+.um-sep {
+  height: 1px;
+  margin: 4px 0;
+  background: var(--panel-border);
+}

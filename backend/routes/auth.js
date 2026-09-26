@@ -4,6 +4,7 @@ import jwt from 'jsonwebtoken';
 import { google } from 'googleapis';
 import User from '../models/User.js';
 import { requireAuth, ensureOwnerAccess } from '../middleware/auth.js';
+import { isAdmin, isSuspended } from '../services/roles.js';
 
 const router = express.Router();
 
@@ -20,6 +21,12 @@ function issueSession(res, user) {
     maxAge: SESSION_MAX_AGE_MS,
     domain: process.env.COOKIE_DOMAIN || undefined,
   });
+}
+
+// The session user plus whether they can open the admin panel, so the
+// frontend can show the Admin link without a second request.
+function withRole(user) {
+  return { ...user.toJSON(), isAdmin: isAdmin(user) };
 }
 
 function clearSession(res) {
@@ -56,7 +63,7 @@ router.post('/signup', async (req, res) => {
     });
     await ensureOwnerAccess(user);
     issueSession(res, user);
-    res.status(201).json({ user });
+    res.status(201).json({ user: withRole(user) });
   } catch (err) {
     console.error('Signup failed:', err);
     res.status(500).json({ error: 'Signup failed. Please try again.' });
@@ -80,9 +87,15 @@ router.post('/login', async (req, res) => {
       res.status(401).json({ error: 'Incorrect email or password.' });
       return;
     }
+    if (isSuspended(user)) {
+      res.status(403).json({ error: 'This account has been suspended. Contact support if you think this is a mistake.', code: 'ACCOUNT_SUSPENDED' });
+      return;
+    }
+    user.lastLoginAt = new Date();
+    await user.save();
     await ensureOwnerAccess(user);
     issueSession(res, user);
-    res.json({ user });
+    res.json({ user: withRole(user) });
   } catch (err) {
     console.error('Login failed:', err);
     res.status(500).json({ error: 'Login failed. Please try again.' });
@@ -103,8 +116,13 @@ router.get('/me', async (req, res) => {
   try {
     const payload = jwt.verify(token, process.env.JWT_SECRET);
     const user = await User.findById(payload.sub);
+    if (user && isSuspended(user)) {
+      clearSession(res);
+      res.json({ user: null, suspended: true });
+      return;
+    }
     if (user) await ensureOwnerAccess(user);
-    res.json({ user: user || null });
+    res.json({ user: user ? withRole(user) : null });
   } catch (_err) {
     res.json({ user: null });
   }
@@ -177,6 +195,12 @@ router.get('/google/callback', async (req, res) => {
         authProviders: ['google'],
       });
     }
+    if (isSuspended(user)) {
+      res.redirect(`${frontendUrl}/login?error=account_suspended`);
+      return;
+    }
+    user.lastLoginAt = new Date();
+    await user.save();
     await ensureOwnerAccess(user);
     issueSession(res, user);
     res.redirect(`${frontendUrl}/auth/callback`);

@@ -102,6 +102,17 @@ export function applyRateLimits(app, overrides = {}) {
     message: 'Too many failed login attempts. Please wait 15 minutes and try again.',
   }));
 
+  // Password checks outside login (change password, delete account, admin
+  // password resets) - same failed-attempts budget as login, so they can't be
+  // used to guess a password instead.
+  app.use('/api/account', limiter({
+    windowMs: 15 * MIN,
+    limit: loginFails,
+    skipSuccessfulRequests: true,
+    skip: (req) => !(req.method === 'POST' || req.method === 'DELETE'),
+    message: 'Too many failed attempts. Please wait 15 minutes and try again.',
+  }));
+
   app.use('/api/auth/signup', limiter({
     windowMs: HOUR,
     limit: signups,

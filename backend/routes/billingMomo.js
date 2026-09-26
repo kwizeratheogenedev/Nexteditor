@@ -2,6 +2,7 @@ import express from 'express';
 import { requestToPay, getRequestToPayStatus } from '../services/momoClient.js';
 import { requireAuth } from '../middleware/auth.js';
 import User from '../models/User.js';
+import { recordPayment } from '../services/payments.js';
 
 const router = express.Router();
 
@@ -36,6 +37,14 @@ async function applyProUpgrade(user, momoPaymentRef) {
   user.subscription.momoLastAppliedRef = momoPaymentRef;
   user.subscription.currentPeriodEnd = new Date(base + PERIOD_MS);
   await user.save();
+  await recordPayment({
+    user,
+    provider: 'momo',
+    reference: momoPaymentRef,
+    amount: PRO_PRICE_AMOUNT,
+    currency: process.env.MOMO_CURRENCY || 'EUR',
+    periodEnd: user.subscription.currentPeriodEnd,
+  });
 }
 
 // Never trusts the caller: asks MTN for the payment's real state, and only

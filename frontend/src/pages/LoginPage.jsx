@@ -8,6 +8,7 @@ const GOOGLE_ERROR_MESSAGES = {
   google_failed: 'Google sign-in failed. Please try again.',
   no_email: 'Your Google account has no email address to sign in with.',
   access_denied: 'Google sign-in was cancelled.',
+  account_suspended: 'This account has been suspended. Contact support if you think this is a mistake.',
 };
 
 export default function LoginPage() {

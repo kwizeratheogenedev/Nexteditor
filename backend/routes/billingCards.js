@@ -3,6 +3,8 @@ import { randomUUID } from 'crypto';
 import { createCheckoutSession, verifyTransaction, CURRENCY, PRO_PRICE_AMOUNT } from '../services/flutterwaveClient.js';
 import { requireAuth } from '../middleware/auth.js';
 import User from '../models/User.js';
+import { PRO_PERIOD_DAYS, extendProPeriod } from '../services/subscription.js';
+import { recordPayment } from '../services/payments.js';
 
 const router = express.Router();
 
@@ -15,11 +17,26 @@ function userIdFromTxRef(txRef) {
   return match ? match[1] : null;
 }
 
-async function applyProUpgrade(user, cardCustomerId) {
-  user.subscription.plan = 'pro';
-  user.subscription.status = 'active';
+// Each successful card payment buys 30 days of Pro, stacking on any time
+// left - the same as MoMo (it used to grant Pro with no end date, i.e.
+// forever, for a one-off payment). Idempotent per transaction, so the
+// redirect-driven /verify and the webhook confirming the same payment can't
+// extend the period twice.
+async function applyProUpgrade(user, cardCustomerId, transaction) {
+  const reference = String(transaction.tx_ref || transaction.id);
+  if (user.subscription.cardLastAppliedRef === reference) return;
+  extendProPeriod(user, PRO_PERIOD_DAYS);
   user.subscription.cardCustomerId = cardCustomerId;
+  user.subscription.cardLastAppliedRef = reference;
   await user.save();
+  await recordPayment({
+    user,
+    provider: 'card',
+    reference,
+    amount: transaction.amount,
+    currency: transaction.currency,
+    periodEnd: user.subscription.currentPeriodEnd,
+  });
 }
 
 router.post('/checkout-session', requireAuth, async (req, res) => {
@@ -59,7 +76,7 @@ router.get('/verify', requireAuth, async (req, res) => {
     const transaction = await verifyTransaction(transactionId);
     const amountOk = Number(transaction.amount) >= Number(PRO_PRICE_AMOUNT) && transaction.currency === CURRENCY;
     if (transaction.status === 'successful' && amountOk && transaction.tx_ref === txRef) {
-      await applyProUpgrade(req.user, String(transaction.customer?.id || transactionId));
+      await applyProUpgrade(req.user, String(transaction.customer?.id || transactionId), transaction);
       res.json({ status: 'success' });
       return;
     }
@@ -86,11 +103,11 @@ router.post('/webhook', async (req, res) => {
     const ownerId = userIdFromTxRef(data?.tx_ref);
     if (data?.status === 'successful' && ownerId) {
       const user = await User.findById(ownerId);
-      if (user && user.subscription.plan !== 'pro') {
+      if (user) {
         // Re-verify server-side rather than trusting the webhook payload directly.
         const transaction = await verifyTransaction(data.id);
         if (transaction.status === 'successful') {
-          await applyProUpgrade(user, String(transaction.customer?.id || data.id));
+          await applyProUpgrade(user, String(transaction.customer?.id || data.id), transaction);
         }
       }
     }

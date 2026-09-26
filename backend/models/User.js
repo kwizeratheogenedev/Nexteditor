@@ -10,6 +10,13 @@ const userSchema = new Schema({
   avatarUrl: { type: String, default: '' },
   authProviders: [{ type: String, enum: ['local', 'google'] }],
 
+  // 'admin' opens the admin panel (OWNER_EMAILS accounts are admins too -
+  // see services/roles.js). A 'suspended' account can't sign in or use the app.
+  role: { type: String, enum: ['user', 'admin'], default: 'user', index: true },
+  status: { type: String, enum: ['active', 'suspended'], default: 'active', index: true },
+  suspendedReason: { type: String, default: '' },
+  lastLoginAt: { type: Date, default: null },
+
   youtube: {
     accessToken: { type: String, default: null },
     refreshToken: { type: String, default: null },
@@ -24,6 +31,7 @@ const userSchema = new Schema({
     status: { type: String, enum: ['none', 'active', 'trialing', 'past_due', 'canceled'], default: 'none' },
     momoPaymentRef: { type: String, default: null },
     momoLastAppliedRef: { type: String, default: null },
+    cardLastAppliedRef: { type: String, default: null },
     cardCustomerId: { type: String, default: null },
     cardSubscriptionId: { type: String, default: null },
     currentPeriodEnd: { type: Date, default: null },
