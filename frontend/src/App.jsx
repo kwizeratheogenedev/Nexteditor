@@ -23,6 +23,7 @@ import MontageTab from './components/MontageTab';
 import BottomTimeline, { PX_PER_SECOND, laneHeight } from './components/BottomTimeline';
 import ExportCompleteDialog from './components/ExportCompleteDialog';
 import { laneCode, laneName } from './timeline/laneNames';
+import { fitZoom } from './timeline/zoom';
 import './styles/studio.css';
 
 const VALID_TABS = ['media', 'captions', 'shorts', 'longmix', 'editor'];
@@ -566,8 +567,7 @@ function App() {
     if (!total || total <= 0) return;
 
     const containerWidth = 1100;
-    const targetMaxWidth = containerWidth * 0.9;
-    const autoZoom = Math.max(10, Math.min(400, Math.floor((targetMaxWidth / (total * PX_PER_SECOND)) * 100)));
+    const autoZoom = fitZoom(total, containerWidth * 0.9);
 
     setTimelineZoom((currentZoom) => (
       currentZoom > autoZoom * 1.5 || currentZoom < autoZoom * 0.5 ? autoZoom : currentZoom
@@ -1745,6 +1745,15 @@ function App() {
     // placement where clips can end up overlapping.
     const useInsertMode = insertMode || e.altKey;
 
+    // Which lane types the drag goes past the outermost lane of - worked out
+    // here, before the update, because React may run the updater below later.
+    const lanesToAdd = {};
+    originals.forEach((original) => {
+      const rowHeight = laneHeight(expandedTracks?.[original.type]);
+      const direction = original.type === 'audio' ? 1 : -1;
+      const wanted = original.trackIndex + Math.round(deltaY / rowHeight) * direction;
+      if (wanted > (trackMeta[original.type]?.length || 1) - 1) lanesToAdd[original.type] = 1;
+    });
     commitEditorTimeline((prev) => {
       const moves = new Map();
       prev.forEach((clip) => {
@@ -1765,12 +1774,16 @@ function App() {
         const laneDirection = metaType === 'audio' ? 1 : -1;
         const laneDelta = Math.round(deltaY / rowHeight) * laneDirection;
         const laneCount = trackMeta[metaType]?.length || 1;
-        let newTrackIndex = Math.max(0, Math.min(original.trackIndex + laneDelta, laneCount - 1));
+        // Dragging past the outermost lane (above the top video/text track,
+        // below the last audio track) creates one new track there - the
+        // CapCut way of putting a clip above another.
+        const wanted = original.trackIndex + laneDelta;
+        let newTrackIndex = Math.max(0, Math.min(wanted, laneCount - 1 + (lanesToAdd[metaType] || 0)));
         // Reject a drop onto a locked destination lane - keep the clip on
         // its original lane (only startTime still moves) rather than
         // bypassing the same lock rule already enforced at drag-start for
         // the source lane.
-        if (trackMeta[metaType]?.[newTrackIndex]?.locked) {
+        if (newTrackIndex < laneCount && trackMeta[metaType]?.[newTrackIndex]?.locked) {
           newTrackIndex = original.trackIndex;
         }
         moves.set(clip.id, { startTime: snappedStart, trackIndex: newTrackIndex, type: original.type, duration: clipDuration(clip) });
@@ -1796,7 +1809,86 @@ function App() {
 
       return next;
     });
+    const addTypes = Object.keys(lanesToAdd);
+    if (addTypes.length) {
+      setTrackMeta((prev) => {
+        const next = { ...prev };
+        addTypes.forEach((type) => { next[type] = [...prev[type], { locked: false, hidden: false, name: null }]; });
+        return next;
+      });
+    }
     setDragState({ active: false, clipId: null, startX: 0, startY: 0, selectedIds: [], originals: null });
+  };
+
+  // A media-bin item dropped on the timeline (see BottomTimeline's
+  // resolveDrop): a fresh clip of that source, full length, at the drop
+  // point. If that stretch of the lane is taken (or the lane is locked) it
+  // goes onto the next lane up that's free - creating a new track when none
+  // is, the way CapCut stacks a drop above what's already there.
+  const handleDropMedia = ({ mediaId, type, lane, newLane, time }) => {
+    const source = editorTimeline.find((clip) => clip.id === mediaId);
+    if (!source) return;
+    const startTime = Math.max(0, snapTime(time, null));
+    const length = source.type === 'image'
+      ? DEFAULT_IMAGE_CLIP_SECONDS
+      : source.duration || Math.max(clipDuration(source), ...editorTimeline
+        .filter((clip) => clip.sourceId && clip.sourceId === source.sourceId)
+        .map((clip) => clip.trimmedEnd || 0));
+    const lanes = trackMeta[type] || [];
+    const taken = (laneIndex) => Boolean(lanes[laneIndex]?.locked) || editorTimeline.some((clip) => (
+      laneTypeForClip(clip) === type
+      && (clip.trackIndex || 0) === laneIndex
+      && clip.startTime < startTime + length - 0.001
+      && clip.startTime + clipDuration(clip) > startTime + 0.001
+    ));
+    let target = newLane ? lanes.length : lane;
+    while (target < lanes.length && taken(target)) target += 1;
+
+    const origin = { sourceId: source.sourceId, file: source.file, url: source.url };
+    const remote = source.remoteUrl ? { remoteUrl: source.remoteUrl } : {};
+    let clip;
+    if (source.type === 'audio') {
+      clip = { ...createAudioClip({ ...origin, trackIndex: target, startTime, trimmedStart: 0, trimmedEnd: length }), ...remote };
+    } else if (source.type === 'image') {
+      clip = {
+        ...createImageClip({
+          ...origin,
+          trackIndex: target,
+          startTime,
+          duration: DEFAULT_IMAGE_CLIP_SECONDS,
+          motionKeyframes: applyMotionPreset(
+            { x: [], y: [], rotation: [], opacity: [], volume: [], speed: [], scaleX: [], scaleY: [] },
+            DEFAULT_IMAGE_MOTION_PRESET_ID,
+            DEFAULT_IMAGE_CLIP_SECONDS,
+          ),
+        }),
+        ...remote,
+      };
+    } else {
+      clip = normalizeClip({
+        id: `${Date.now()}-drop-${Math.random().toString(16).slice(2, 8)}`,
+        type: 'video',
+        ...origin,
+        ...remote,
+        duration: source.duration || length,
+        trackIndex: target,
+        startTime,
+        trimmedStart: 0,
+        trimmedEnd: length,
+      });
+    }
+
+    if (target >= lanes.length) {
+      setTrackMeta((prev) => {
+        const current = prev[type] || [];
+        const extra = Array.from({ length: target - current.length + 1 }, () => ({ locked: false, hidden: false, name: null }));
+        return { ...prev, [type]: [...current, ...extra] };
+      });
+    }
+    commitEditorTimeline((prev) => [...prev, clip]);
+    setSelectedClipId(clip.id);
+    setSelectedClipIds([clip.id]);
+    setEditorPane('edit');
   };
 
   const handleTrimDragMove = (e) => {
@@ -1876,7 +1968,7 @@ function App() {
 
   const handlePlayheadDragMove = (e) => {
     if (!playheadDrag) return;
-    const trackSurface = document.querySelector('.timeline-track-surface');
+    const trackSurface = document.querySelector('.st-track-surface');
     if (!trackSurface) return;
     const rect = trackSurface.getBoundingClientRect();
     // Absolute pixel positioning (M7) means the surface can be wider than
@@ -2808,6 +2900,7 @@ function App() {
         onRemoveMarker={handleRemoveMarker}
         onRenameMarker={handleRenameMarker}
         onJumpToMarker={handleJumpToMarker}
+        onDropMedia={handleDropMedia}
       />}
         </div>
       </div>

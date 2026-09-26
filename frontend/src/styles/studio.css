@@ -1249,10 +1249,125 @@
   white-space: nowrap;
 }
 
+.st-zoom-group {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+}
+
+.st-zoom-btn {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 28px;
+  height: 28px;
+  border-radius: 7px;
+  background: none;
+  color: var(--st-text-3);
+  cursor: pointer;
+}
+
+.st-zoom-btn:hover {
+  background: var(--st-raised);
+  color: var(--st-text);
+}
+
 .st-zoom {
   --fill: 50%;
+  -webkit-appearance: none;
+  appearance: none;
   width: 140px;
-  accent-color: #fff;
+  height: 16px;
+  background: transparent;
+  cursor: pointer;
+}
+
+.st-zoom::-webkit-slider-runnable-track {
+  height: 4px;
+  border-radius: 99px;
+  background: linear-gradient(90deg, var(--st-text-3) var(--fill), var(--st-raised-2) var(--fill));
+}
+
+.st-zoom::-moz-range-track {
+  height: 4px;
+  border-radius: 99px;
+  background: var(--st-raised-2);
+}
+
+.st-zoom::-webkit-slider-thumb {
+  -webkit-appearance: none;
+  width: 16px;
+  height: 16px;
+  margin-top: -6px;
+  border-radius: 50%;
+  background: #fff;
+  box-shadow: 0 1px 4px rgba(0, 0, 0, 0.45);
+}
+
+.st-zoom::-moz-range-thumb {
+  width: 16px;
+  height: 16px;
+  border: 0;
+  border-radius: 50%;
+  background: #fff;
+}
+
+.st-tick.is-frame {
+  color: var(--st-text-3);
+  opacity: 0.75;
+  font-size: 12px;
+}
+
+/* A media-bin item being dragged over the timeline: a ghost of the clip
+   where it will land, or a line where a new track will be created. */
+.st-drop-ghost {
+  position: absolute;
+  z-index: 4;
+  display: flex;
+  align-items: flex-end;
+  padding: 0 10px 6px;
+  border: 2px dashed var(--st-accent);
+  border-radius: 7px;
+  background: color-mix(in srgb, var(--st-accent) 16%, transparent);
+  pointer-events: none;
+}
+
+.st-drop-ghost.is-audio {
+  border-color: #22c55e;
+  background: color-mix(in srgb, #22c55e 16%, transparent);
+}
+
+.st-drop-ghost span {
+  overflow: hidden;
+  color: var(--st-text);
+  font-size: 13px;
+  font-weight: 700;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.st-drop-newlane {
+  position: absolute;
+  left: 0;
+  right: 0;
+  z-index: 4;
+  height: 3px;
+  background: var(--st-accent);
+  box-shadow: 0 0 10px var(--st-accent);
+  pointer-events: none;
+}
+
+.st-drop-newlane span {
+  position: absolute;
+  top: -22px;
+  left: 12px;
+  padding: 1px 8px;
+  border-radius: 5px;
+  background: var(--st-accent);
+  color: #001018;
+  font-size: 12px;
+  font-weight: 700;
+  white-space: nowrap;
 }
 
 .st-markers {

@@ -1,8 +1,10 @@
-import { useEffect, useRef, useState } from 'react';
+import { useEffect, useLayoutEffect, useRef, useState } from 'react';
 import { getWaveformForClip, sliceWaveform } from '../timeline/waveform';
 import { getThumbnailStripForClip, framesForTrimWindow } from '../timeline/thumbnails';
 import { formatTimecode } from '../timeline/timecode';
 import { laneCode, laneName } from '../timeline/laneNames';
+import { PX_PER_SECOND, ZOOM_STEP, fitZoom, pxPerSecondFor, rulerTicks, sliderToZoom, zoomToSlider, SLIDER_RANGE, clampZoom } from '../timeline/zoom';
+import { MEDIA_DRAG_TYPE, getMediaDrag } from '../timeline/mediaDrag';
 
 function HoverScrubPreview({ preview }) {
   if (!preview) return null;
@@ -13,9 +15,9 @@ function HoverScrubPreview({ preview }) {
   );
 }
 
-// Pixels-per-second at 100% zoom - shared with App.jsx's drag/trim math
-// (imported there) so screen deltas and stored time deltas agree.
-export const PX_PER_SECOND = 24;
+// Pixels-per-second at 100% zoom (see timeline/zoom.js) - re-exported for
+// App.jsx's drag/trim math so screen deltas and stored time deltas agree.
+export { PX_PER_SECOND };
 
 // Auto-switches to H:MM:SS once the value crosses an hour (matches CapCut -
 // a short clip's timeline never shows a leading "0:", but a multi-hour
@@ -31,39 +33,6 @@ function formatTime(seconds, decimals = 0) {
     ? secs.toFixed(decimals).padStart(3 + decimals, '0')
     : String(Math.floor(secs)).padStart(2, '0');
   return hours > 0 ? `${hours}:${String(mins).padStart(2, '0')}:${secsStr}` : `${mins}:${secsStr}`;
-}
-
-// CapCut-style ruler: the tick interval is chosen purely from the current
-// zoom level (pxPerSecond), not from total duration - a 5-second clip and a
-// 2-hour timeline use the exact same rule, picking the smallest "nice"
-// interval whose ticks land at least MIN_TICK_PX_GAP apart on screen. That
-// means zooming in on a short clip reveals sub-second ticks, and zooming
-// out on a long project collapses down to minute/hour ticks - the interval
-// tracks pixel density, not how long the footage happens to be.
-const NICE_TICK_INTERVALS_SECONDS = [
-  0.1, 0.2, 0.5, 1, 2, 5, 10, 15, 30,
-  60, 2 * 60, 5 * 60, 10 * 60, 15 * 60, 30 * 60,
-  3600, 2 * 3600, 5 * 3600, 10 * 3600,
-];
-const MIN_TICK_PX_GAP = 70;
-
-function getRulerConfig(totalDuration, pxPerSecond) {
-  const safe = Math.max(0, Number(totalDuration) || 0);
-  let step = NICE_TICK_INTERVALS_SECONDS[NICE_TICK_INTERVALS_SECONDS.length - 1];
-  for (const interval of NICE_TICK_INTERVALS_SECONDS) {
-    if (interval * pxPerSecond >= MIN_TICK_PX_GAP) {
-      step = interval;
-      break;
-    }
-  }
-  const markers = [];
-  for (let t = 0; t <= safe; t += step) {
-    markers.push(t);
-  }
-  if (markers[markers.length - 1] !== safe && safe > 0) {
-    markers.push(safe);
-  }
-  return { step, markers, max: safe, decimals: step < 1 ? 1 : 0 };
 }
 
 const Icon = ({ d, size = 16 }) => (
@@ -88,6 +57,8 @@ const ICON = {
   down: 'm6 9 6 6 6-6',
   close: 'M6 6l12 12 M18 6 6 18',
   expand: 'M4 9V4h5 M20 9V4h-5 M4 15v5h5 M20 15v5h-5',
+  zoomOut: 'M11 18a7 7 0 1 0 0-14 7 7 0 0 0 0 14z M21 21l-4.35-4.35 M8 11h6',
+  zoomIn: 'M11 18a7 7 0 1 0 0-14 7 7 0 0 0 0 14z M21 21l-4.35-4.35 M8 11h6 M11 8v6',
 };
 
 export const LANE_ROW_HEIGHT = 64;
@@ -252,8 +223,11 @@ function ClipWaveform({ clip, width, height }) {
   useEffect(() => {
     const canvas = canvasRef.current;
     if (!canvas || !waveform) return;
-    const dpr = window.devicePixelRatio || 1;
-    const bucketCount = Math.max(1, Math.round(width));
+    // At deep zoom a clip can be hundreds of thousands of pixels wide - far
+    // past what a canvas can hold - so the bar count is capped and the
+    // canvas is stretched to the clip's width instead.
+    const bucketCount = Math.max(1, Math.min(4096, Math.round(width)));
+    const dpr = bucketCount * (window.devicePixelRatio || 1) > 8192 ? 1 : (window.devicePixelRatio || 1);
     canvas.width = bucketCount * dpr;
     canvas.height = height * dpr;
     const ctx = canvas.getContext('2d');
@@ -553,6 +527,64 @@ function LaneRows({
   ));
 }
 
+// The time ruler. Only the ticks inside the visible window (plus a margin)
+// are rendered - a zoomed-in multi-hour project would otherwise mean
+// hundreds of thousands of tick elements. It follows the track surface's
+// horizontal scroll directly (a style write on every scroll event, so it
+// never lags) and re-picks its visible ticks at most once per frame.
+function Ruler({ surfaceRef, pxPerSecond, fps, totalWidth, currentTime, onSeek, onPlayheadDragStart }) {
+  const trackRef = useRef(null);
+  const [view, setView] = useState({ left: 0, width: 1600 });
+
+  useEffect(() => {
+    const surface = surfaceRef.current;
+    if (!surface) return undefined;
+    let frame = 0;
+    const sync = () => {
+      frame = 0;
+      setView((prev) => (prev.left === surface.scrollLeft && prev.width === surface.clientWidth ? prev : { left: surface.scrollLeft, width: surface.clientWidth }));
+    };
+    const onScroll = () => {
+      if (trackRef.current) trackRef.current.style.transform = `translateX(${-surface.scrollLeft}px)`;
+      if (!frame) frame = requestAnimationFrame(sync);
+    };
+    frame = requestAnimationFrame(sync);
+    surface.addEventListener('scroll', onScroll, { passive: true });
+    const observer = typeof ResizeObserver === 'function' ? new ResizeObserver(onScroll) : null;
+    observer?.observe(surface);
+    return () => {
+      surface.removeEventListener('scroll', onScroll);
+      observer?.disconnect();
+      cancelAnimationFrame(frame);
+    };
+  }, [surfaceRef]);
+
+  const margin = 240;
+  const from = Math.max(0, (view.left - margin) / pxPerSecond);
+  const to = (view.left + view.width + margin) / pxPerSecond;
+  const { major, minor } = rulerTicks(pxPerSecond, fps, from, to);
+
+  return (
+    <div
+      className="st-ruler-track"
+      ref={trackRef}
+      style={{ width: `${totalWidth}px`, transform: `translateX(${-view.left}px)` }}
+      onClick={(e) => {
+        const rect = e.currentTarget.getBoundingClientRect();
+        onSeek(Math.max(0, (e.clientX - rect.left) / pxPerSecond));
+      }}
+    >
+      {minor.map((t) => <i key={`m${t}`} className="st-tick-minor" style={{ left: `${t * pxPerSecond}px` }} />)}
+      {major.map((tick) => (
+        <span key={tick.t} className={`st-tick ${tick.label.endsWith('f') ? 'is-frame' : ''}`} style={{ left: `${tick.t * pxPerSecond}px` }}>
+          {tick.label}
+        </span>
+      ))}
+      <span className="st-playhead-pin" style={{ left: `${currentTime * pxPerSecond}px` }} onMouseDown={(e) => { e.stopPropagation(); onPlayheadDragStart?.(e); }} />
+    </div>
+  );
+}
+
 // The "⋯" menu: every timeline tool that isn't one of the four toolbar
 // icons, grouped, so the toolbar stays as clean as the studio design while
 // nothing that existed before is lost.
@@ -597,12 +629,15 @@ function BottomTimeline({
   onTrimStart, onTrimEnd, timelineHeight, onTimelineHeightChange, laneLabels, fps = 30, contentDuration,
   selectedClipId, selectedClipIds, onSelectClip, onClipDragStart, snapEnabled, onSnapToggle, expandedTracks, onTrackExpand, autoFollowPlayhead, onAutoFollowToggle, onPlayheadDragStart, onUndo, onRedo, onAddTextClip, onAddAudioClip, onAddTrack, trackState, onToggleLock, onToggleHidden, onRemoveTrack, onRenameTrack, onReorderTrack,
   onRippleDelete, insertMode, onInsertModeToggle, onGapContextMenu, onGroupSelected, onUngroupSelected, onFreezeFrame, onAddAdjustmentLayer,
-  markers, onAddMarker, onRemoveMarker, onRenameMarker, onJumpToMarker,
+  markers, onAddMarker, onRemoveMarker, onRenameMarker, onJumpToMarker, onDropMedia,
 }) {
-  const pxPerSecond = PX_PER_SECOND * (zoom / 100);
-  const ruler = getRulerConfig(totalDuration, pxPerSecond);
-  const duration = ruler.max;
-  const totalWidth = Math.max(1100, duration * pxPerSecond);
+  const pxPerSecond = pxPerSecondFor(zoom);
+  const duration = Math.max(0, Number(totalDuration) || 0);
+  const [surfaceWidth, setSurfaceWidth] = useState(1100);
+  // Always a screen's worth of empty timeline after the end (like CapCut):
+  // it keeps the last clip off the edge, and it's what lets zooming stay
+  // anchored on the playhead even when the project is shorter than the view.
+  const totalWidth = Math.max(surfaceWidth, duration * pxPerSecond + surfaceWidth * 0.9);
   const playheadLeft = `${currentTime * pxPerSecond}px`;
   const minHeight = 48 + 32 + 64 * 3 + 12;
   const maxHeight = 560;
@@ -638,10 +673,177 @@ function BottomTimeline({
   // style write, not React state, so scrolling never re-renders).
   const labelsRef = useRef(null);
   const trackSurfaceRef = useRef(null);
-  const rulerTrackRef = useRef(null);
+  const rulerBodyRef = useRef(null);
   const handleSurfaceScroll = (e) => {
     if (labelsRef.current) labelsRef.current.scrollTop = e.currentTarget.scrollTop;
-    if (rulerTrackRef.current) rulerTrackRef.current.style.transform = `translateX(${-e.currentTarget.scrollLeft}px)`;
+  };
+
+  useEffect(() => {
+    const surface = trackSurfaceRef.current;
+    if (!surface || typeof ResizeObserver !== 'function') return undefined;
+    const observer = new ResizeObserver(() => setSurfaceWidth(surface.clientWidth || 1100));
+    observer.observe(surface);
+    return () => observer.disconnect();
+  }, []);
+
+  // ---- Zoom -------------------------------------------------------------
+  // Every zoom change keeps one point of the timeline still on screen: the
+  // mouse position for Ctrl+wheel / pinch, otherwise the playhead (or the
+  // middle of the view when the playhead is scrolled out of sight). The
+  // scroll correction runs right after the new widths are laid out, so the
+  // content never visibly jumps.
+  const zoomRef = useRef(zoom);
+  const pxRef = useRef(pxPerSecond);
+  const timeRef = useRef(currentTime);
+  const anchorRef = useRef(null);
+  const onZoomChangeRef = useRef(onZoomChange);
+  useEffect(() => {
+    zoomRef.current = zoom;
+    timeRef.current = currentTime;
+    onZoomChangeRef.current = onZoomChange;
+  });
+
+  useLayoutEffect(() => {
+    const surface = trackSurfaceRef.current;
+    const previousPx = pxRef.current;
+    pxRef.current = pxPerSecond;
+    if (!surface || previousPx === pxPerSecond) return;
+    let anchor = anchorRef.current;
+    anchorRef.current = null;
+    if (!anchor) {
+      const playheadX = timeRef.current * previousPx - surface.scrollLeft;
+      anchor = playheadX >= 0 && playheadX <= surface.clientWidth
+        ? { time: timeRef.current, x: playheadX }
+        : { time: (surface.scrollLeft + surface.clientWidth / 2) / previousPx, x: surface.clientWidth / 2 };
+    }
+    surface.scrollLeft = Math.max(0, anchor.time * pxPerSecond - anchor.x);
+  }, [pxPerSecond]);
+
+  const zoomTo = (nextZoom, anchor = null) => {
+    const clamped = clampZoom(nextZoom);
+    if (Math.abs(clamped - zoomRef.current) < 1e-6) return;
+    anchorRef.current = anchor;
+    zoomRef.current = clamped;
+    onZoomChangeRef.current?.(clamped);
+  };
+  const zoomToRef = useRef(zoomTo);
+  useEffect(() => { zoomToRef.current = zoomTo; });
+
+  // Ctrl/Cmd + wheel (and trackpad pinch, which browsers report as a
+  // ctrl+wheel) zooms around the pointer. Registered by hand because React's
+  // onWheel is passive and can't stop the browser's own page zoom.
+  useEffect(() => {
+    const targets = [trackSurfaceRef.current, rulerBodyRef.current].filter(Boolean);
+    const onWheel = (e) => {
+      if (!(e.ctrlKey || e.metaKey)) return;
+      e.preventDefault();
+      const surface = trackSurfaceRef.current;
+      if (!surface) return;
+      const rect = surface.getBoundingClientRect();
+      const x = Math.min(Math.max(e.clientX - rect.left, 0), rect.width);
+      const time = (surface.scrollLeft + x) / pxRef.current;
+      const delta = e.deltaMode === 1 ? e.deltaY * 16 : e.deltaY;
+      zoomToRef.current(zoomRef.current * Math.exp(-delta * 0.0025), { time, x });
+    };
+    targets.forEach((target) => target.addEventListener('wheel', onWheel, { passive: false }));
+    return () => targets.forEach((target) => target.removeEventListener('wheel', onWheel));
+  }, []);
+
+  const handleFitToWindow = () => {
+    const visibleWidth = trackSurfaceRef.current?.clientWidth;
+    const length = contentDuration || totalDuration;
+    if (!visibleWidth || !length) return;
+    zoomTo(fitZoom(length, visibleWidth - 32), { time: 0, x: 0 });
+  };
+  const fitRef = useRef(handleFitToWindow);
+  useEffect(() => { fitRef.current = handleFitToWindow; });
+
+  // CapCut's shortcuts: Ctrl/Cmd + = zoom in, Ctrl/Cmd + - zoom out (these
+  // replace the browser's page zoom while the editor is open), Shift+Z fit.
+  useEffect(() => {
+    if (activeTab !== 'editor') return undefined;
+    const onKey = (e) => {
+      const mod = e.ctrlKey || e.metaKey;
+      const el = document.activeElement;
+      const typing = el?.tagName === 'TEXTAREA' || el?.isContentEditable || (el?.tagName === 'INPUT' && !['range', 'checkbox', 'button'].includes(el.type));
+      if (mod && !e.altKey && (e.key === '=' || e.key === '+' || e.code === 'NumpadAdd')) {
+        e.preventDefault();
+        zoomToRef.current(zoomRef.current * ZOOM_STEP);
+      } else if (mod && !e.altKey && (e.key === '-' || e.key === '_' || e.code === 'NumpadSubtract')) {
+        e.preventDefault();
+        zoomToRef.current(zoomRef.current / ZOOM_STEP);
+      } else if (!mod && !e.altKey && e.shiftKey && e.key.toLowerCase() === 'z' && !typing) {
+        e.preventDefault();
+        fitRef.current();
+      }
+    };
+    window.addEventListener('keydown', onKey);
+    return () => window.removeEventListener('keydown', onKey);
+  }, [activeTab]);
+
+  // ---- Media dropped from the bin ----------------------------------------
+  // Where a dragged media-bin item would land: its own kind of lane under
+  // the pointer, or - dropped in the top quarter of the highest video lane,
+  // or on a text lane above it - a brand-new video track on top (how you
+  // put a video above another, CapCut-style).
+  const [dropGhost, setDropGhost] = useState(null);
+  const resolveDrop = (e) => {
+    const item = getMediaDrag();
+    const surface = trackSurfaceRef.current;
+    if (!item || !surface) return null;
+    const rect = surface.getBoundingClientRect();
+    const time = Math.max(0, (e.clientX - rect.left + surface.scrollLeft) / pxPerSecond);
+    const type = item.kind === 'audio' ? 'audio' : 'video';
+    const row = e.target?.closest?.('.st-track-row');
+    let lane = 0;
+    let newLane = false;
+    if (row) {
+      const rowType = row.dataset.trackType;
+      const rowLane = Number(row.dataset.trackLane) || 0;
+      if (rowType === type) {
+        lane = rowLane;
+        const box = row.getBoundingClientRect();
+        if (type === 'video' && rowLane === tracks.video.length - 1 && e.clientY < box.top + box.height * 0.25) newLane = true;
+      } else if (type === 'video' && rowType === 'text') {
+        newLane = true;
+      }
+    }
+    return { type, lane, newLane, time, duration: item.duration || 5, label: item.name, mediaId: item.id };
+  };
+
+  const ghostFor = (target) => {
+    const surface = trackSurfaceRef.current;
+    const lane = target.newLane ? tracks[target.type].length - 1 : target.lane;
+    const row = surface?.querySelector(`.st-track-row[data-track-type="${target.type}"][data-track-lane="${lane}"]`);
+    if (!row) return null;
+    return {
+      left: Math.round(target.time * pxPerSecond),
+      width: Math.max(40, Math.round(target.duration * pxPerSecond)),
+      top: target.newLane ? row.offsetTop - 3 : row.offsetTop + 4,
+      height: target.newLane ? 0 : row.offsetHeight - 8,
+      newLane: target.newLane,
+      label: target.label,
+      kind: target.type,
+    };
+  };
+
+  const handleMediaDragOver = (e) => {
+    if (!onDropMedia || !e.dataTransfer?.types?.includes(MEDIA_DRAG_TYPE)) return;
+    e.preventDefault();
+    e.dataTransfer.dropEffect = 'copy';
+    const target = resolveDrop(e);
+    const ghost = target && ghostFor(target);
+    setDropGhost((prev) => (
+      prev && ghost && prev.left === ghost.left && prev.top === ghost.top && prev.newLane === ghost.newLane ? prev : ghost
+    ));
+  };
+
+  const handleMediaDrop = (e) => {
+    if (!onDropMedia || !e.dataTransfer?.types?.includes(MEDIA_DRAG_TYPE)) return;
+    e.preventDefault();
+    const target = resolveDrop(e);
+    setDropGhost(null);
+    if (target) onDropMedia(target);
   };
 
   // Floating frame preview on hover - separate from click-to-seek, never
@@ -684,29 +886,6 @@ function BottomTimeline({
   };
   const handleSurfaceMouseLeave = () => setHoverPreview(null);
 
-  // Zoom that makes the real content length exactly fill the visible width.
-  const handleFitToWindow = () => {
-    const visibleWidth = trackSurfaceRef.current?.clientWidth;
-    if (!visibleWidth || !totalDuration) return;
-    const fitZoom = (visibleWidth / totalDuration / PX_PER_SECOND) * 100;
-    onZoomChange(Math.max(10, Math.min(400, Math.floor(fitZoom))));
-  };
-
-  const seekFromRuler = (e) => {
-    const rect = e.currentTarget.getBoundingClientRect();
-    onSeek(Math.max(0, (e.clientX - rect.left) / pxPerSecond));
-  };
-
-  // Minor ticks between labelled ones: five per interval when there's room
-  // (0:00 ... 0:05 with a tick each second), otherwise two.
-  const minorDivisions = ruler.step * pxPerSecond >= 60 ? 5 : 2;
-  const minorTicks = [];
-  ruler.markers.forEach((marker) => {
-    for (let k = 1; k < minorDivisions; k += 1) {
-      const t = marker + (ruler.step * k) / minorDivisions;
-      if (t < duration) minorTicks.push(t);
-    }
-  });
 
   const menuItems = [
     {
@@ -735,7 +914,7 @@ function BottomTimeline({
       items: [
         { label: 'Follow playhead', checked: Boolean(autoFollowPlayhead), onClick: onAutoFollowToggle },
         { label: 'Insert mode (push clips)', checked: Boolean(insertMode), onClick: onInsertModeToggle },
-        { label: 'Fit timeline to window', onClick: handleFitToWindow },
+        { label: 'Fit timeline to window', hint: 'Shift+Z', onClick: handleFitToWindow },
       ],
     },
   ];
@@ -760,7 +939,21 @@ function BottomTimeline({
         </div>
         <div className="st-timeline-meta">
           <span>{laneCount} tracks · {formatTimecode(contentDuration ?? totalDuration, fps)}</span>
-          <input className="st-zoom" aria-label="Timeline zoom" type="range" min="10" max="400" value={zoom} onChange={(event) => onZoomChange(Number(event.target.value))} />
+          <span className="st-zoom-group">
+            <button type="button" className="st-zoom-btn" title="Zoom out (Ctrl + -)" aria-label="Zoom out" onClick={() => zoomTo(zoom / ZOOM_STEP)}><Icon d={ICON.zoomOut} size={16} /></button>
+            <input
+              className="st-zoom"
+              aria-label="Timeline zoom"
+              title="Zoom - Ctrl + wheel over the timeline, Ctrl + / Ctrl -, Shift+Z to fit"
+              type="range"
+              min="0"
+              max={SLIDER_RANGE}
+              value={zoomToSlider(zoom)}
+              style={{ '--fill': `${(zoomToSlider(zoom) / SLIDER_RANGE) * 100}%` }}
+              onChange={(event) => zoomTo(sliderToZoom(Number(event.target.value)))}
+            />
+            <button type="button" className="st-zoom-btn" title="Zoom in (Ctrl + =)" aria-label="Zoom in" onClick={() => zoomTo(zoom * ZOOM_STEP)}><Icon d={ICON.zoomIn} size={16} /></button>
+          </span>
         </div>
       </div>
       {activeTab === 'editor' && markers?.length > 0 && (
@@ -772,21 +965,8 @@ function BottomTimeline({
       )}
       <div className="st-ruler">
         <div className="st-ruler-gutter" />
-        <div className="st-ruler-body">
-          <div className="st-ruler-track" ref={rulerTrackRef} style={{ width: `${totalWidth}px` }} onClick={seekFromRuler}>
-            {minorTicks.map((t) => <i key={`m${t}`} className="st-tick-minor" style={{ left: `${t * pxPerSecond}px` }} />)}
-            {ruler.markers.map((marker, i) => {
-              // The ruler always ends on the exact project length; drop that
-              // last label when it would crowd the one before it.
-              const crowded = i === ruler.markers.length - 1 && i > 0 && (marker - ruler.markers[i - 1]) * pxPerSecond < 56;
-              return crowded ? null : (
-                <span key={marker} className="st-tick" style={{ left: `${marker * pxPerSecond}px` }}>
-                  {formatTime(marker, ruler.decimals)}
-                </span>
-              );
-            })}
-            <span className="st-playhead-pin" style={{ left: playheadLeft }} onMouseDown={(e) => { e.stopPropagation(); onPlayheadDragStart?.(e); }} />
-          </div>
+        <div className="st-ruler-body" ref={rulerBodyRef}>
+          <Ruler surfaceRef={trackSurfaceRef} pxPerSecond={pxPerSecond} fps={fps} totalWidth={totalWidth} currentTime={currentTime} onSeek={onSeek} onPlayheadDragStart={onPlayheadDragStart} />
         </div>
       </div>
       <div className="st-tracks">
@@ -801,12 +981,22 @@ function BottomTimeline({
           onScroll={handleSurfaceScroll}
           onMouseMove={handleSurfaceMouseMove}
           onMouseLeave={handleSurfaceMouseLeave}
+          onDragOver={handleMediaDragOver}
+          onDragLeave={(e) => { if (!e.currentTarget.contains(e.relatedTarget)) setDropGhost(null); }}
+          onDrop={handleMediaDrop}
           onClick={(e) => {
             const rect = e.currentTarget.getBoundingClientRect();
             onSeek(Math.max(0, (e.clientX - rect.left + e.currentTarget.scrollLeft) / pxPerSecond));
           }}
         >
           <div className="st-playhead" style={{ left: playheadLeft }} onMouseDown={onPlayheadDragStart} />
+          {dropGhost && (dropGhost.newLane ? (
+            <div className="st-drop-newlane" style={{ top: dropGhost.top }}><span>New track above</span></div>
+          ) : (
+            <div className={`st-drop-ghost is-${dropGhost.kind}`} style={{ left: dropGhost.left, top: dropGhost.top, width: dropGhost.width, height: dropGhost.height }}>
+              <span>{dropGhost.label}</span>
+            </div>
+          ))}
           {activeTab === 'editor' && markers?.map((marker) => (
             <MarkerTick key={marker.id} marker={marker} pxPerSecond={pxPerSecond} onJump={onJumpToMarker} onRemove={onRemoveMarker} />
           ))}

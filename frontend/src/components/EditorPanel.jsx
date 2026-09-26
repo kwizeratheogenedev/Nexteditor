@@ -3,6 +3,7 @@ import './EditorWorkspace.css';
 import { isVideoLikeClip, isImageClip } from '../timeline/clipKinds';
 import { getWaveformForClip, sliceWaveform } from '../timeline/waveform';
 import { formatTimecode, formatShortDuration } from '../timeline/timecode';
+import { MEDIA_DRAG_TYPE, setMediaDrag } from '../timeline/mediaDrag';
 
 const Icon = ({ d, size = 18, strokeWidth = 1.8, filled = false }) => (
   <svg viewBox="0 0 24 24" width={size} height={size} fill={filled ? 'currentColor' : 'none'} stroke={filled ? 'none' : 'currentColor'} strokeWidth={strokeWidth} strokeLinecap="round" strokeLinejoin="round" aria-hidden="true">
@@ -105,6 +106,15 @@ function EditorPanel({
   const hasContent = timeline.length > 0;
   const overlayDragRef = useRef(null);
 
+  // Full length of a source, not of whichever (possibly trimmed) clip stands
+  // for it in the bin: video clips carry it as `duration`; for audio the
+  // longest trim window seen for that source is the best known length.
+  const sourceLength = (clip) => {
+    if (clip.duration) return clip.duration;
+    const sameSource = [...timeline, ...audioClips].filter((c) => (c.sourceId || c.id) === (clip.sourceId || clip.id));
+    return Math.max(0, ...sameSource.map((c) => c.trimmedEnd || 0));
+  };
+
   // Pressing "Media" in the sidebar brings the bin into focus.
   useEffect(() => {
     if (mediaFocus) mediaRef.current?.focus();
@@ -167,7 +177,12 @@ function EditorPanel({
   };
 
   const dropProps = {
-    onDragOver: (event) => { event.preventDefault(); if (!dragOver) setDragOver(true); },
+    onDragOver: (event) => {
+      // Only files from the computer - not a media card being dragged to the timeline.
+      if (!event.dataTransfer?.types?.includes('Files')) return;
+      event.preventDefault();
+      if (!dragOver) setDragOver(true);
+    },
     onDragLeave: (event) => { if (!event.currentTarget.contains(event.relatedTarget)) setDragOver(false); },
     onDrop: handleDrop,
   };
@@ -201,14 +216,23 @@ function EditorPanel({
           <div className="st-media-grid">
             {mediaItems.map((clip, index) => {
               const audio = clip.type === 'audio';
-              const length = clip.duration || (clip.trimmedEnd - clip.trimmedStart) || 0;
+              const length = sourceLength(clip);
+              const name = clipName(clip, `Clip ${index + 1}`);
               return (
                 <button
                   type="button"
                   key={clip.id}
                   className={`st-media-card ${selectedClipId === clip.id ? 'is-active' : ''}`}
                   onClick={() => onSelectClip?.(clip.id)}
-                  title={clipName(clip, `Clip ${index + 1}`)}
+                  title={`${name} - drag onto the timeline to add it`}
+                  draggable
+                  onDragStart={(event) => {
+                    event.dataTransfer.effectAllowed = 'copy';
+                    event.dataTransfer.setData(MEDIA_DRAG_TYPE, clip.id);
+                    event.dataTransfer.setData('text/plain', name);
+                    setMediaDrag({ id: clip.id, kind: audio ? 'audio' : 'video', duration: isImageClip(clip) ? 5 : length, name });
+                  }}
+                  onDragEnd={() => setMediaDrag(null)}
                 >
                   <span className={`st-media-thumb ${audio ? 'is-audio' : ''}`}>
                     {audio ? <AudioThumb clip={clip} />
@@ -217,7 +241,7 @@ function EditorPanel({
                     {clip.file?.nexFromLink ? <em className="st-badge-link">From link</em>
                       : !isImageClip(clip) && length > 0 && <em className="st-badge-time">{formatShortDuration(length)}</em>}
                   </span>
-                  <span className="st-media-name">{clipName(clip, `Clip ${index + 1}`)}</span>
+                  <span className="st-media-name">{name}</span>
                 </button>
               );
             })}
