@@ -3,6 +3,7 @@ import { resolveKeyframedValue } from './keyframes';
 import { resolveActiveInLane, clipDuration, laneTotalDuration } from './transitions';
 import { hasSpeedCurve, sourceTimeForOutputElapsed } from './speedCurve';
 import { isVideoLikeClip, isImageClip } from './clipKinds';
+import { drawCaption } from './captionStyles';
 
 // Default canvas size (matches the pre-schema-v4 fixed 1080p/16:9 canvas) -
 // used only as a fallback when no canvasSize is supplied. The real value
@@ -669,7 +670,9 @@ export function useTimelinePlayer({ timeline, currentTime, isPlaying, onTimeUpda
       const laneIndex = laneClips[0]?.trackIndex || 0;
       if (trackMeta?.text?.[laneIndex]?.hidden) return;
       const activeText = findActiveTextInLane(laneClips, time);
-      if (activeText) drawTextClip(ctx, activeText, canvas);
+      if (!activeText) return;
+      if (activeText.text?.caption) drawCaption(ctx, activeText, canvas, time - activeText.startTime + (activeText.trimmedStart || 0));
+      else drawTextClip(ctx, activeText, canvas);
     });
 
     ctx.restore();

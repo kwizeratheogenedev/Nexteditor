@@ -52,6 +52,7 @@ const HEAVY_PATHS = [
   '/api/fetch-url',
   '/api/create-montage',
   '/api/editor/export',
+  '/api/editor/captions',
 ];
 
 function isPolling(req) {

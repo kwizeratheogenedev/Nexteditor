@@ -600,6 +600,12 @@ function MoreMenu({ items, onClose }) {
       document.removeEventListener('keydown', onKey);
     };
   }, [onClose]);
+  // The menu opens upward from the toolbar; it gets exactly the room between
+  // the toolbar and the app's top bar and scrolls if it needs more.
+  useLayoutEffect(() => {
+    const top = ref.current?.parentElement?.getBoundingClientRect().top;
+    if (Number.isFinite(top)) ref.current.style.maxHeight = `${Math.max(160, top - 76)}px`;
+  }, []);
   return (
     <div className="st-menu" role="menu" ref={ref}>
       {items.map((group) => (
@@ -628,7 +634,7 @@ function BottomTimeline({
   activeTab, tracks, currentTime, totalDuration, zoom, onZoomChange, onSeek, onSplit, onDelete,
   onTrimStart, onTrimEnd, timelineHeight, onTimelineHeightChange, laneLabels, fps = 30, contentDuration,
   selectedClipId, selectedClipIds, onSelectClip, onClipDragStart, snapEnabled, onSnapToggle, expandedTracks, onTrackExpand, autoFollowPlayhead, onAutoFollowToggle, onPlayheadDragStart, onUndo, onRedo, onAddTextClip, onAddAudioClip, onAddTrack, trackState, onToggleLock, onToggleHidden, onRemoveTrack, onRenameTrack, onReorderTrack,
-  onRippleDelete, insertMode, onInsertModeToggle, onGapContextMenu, onGroupSelected, onUngroupSelected, onFreezeFrame, onAddAdjustmentLayer,
+  onRippleDelete, insertMode, onInsertModeToggle, onGapContextMenu, onGroupSelected, onUngroupSelected, onFreezeFrame, onAddAdjustmentLayer, onAutoCaptions, captionsStatus,
   markers, onAddMarker, onRemoveMarker, onRenameMarker, onJumpToMarker, onDropMedia,
 }) {
   const pxPerSecond = pxPerSecondFor(zoom);
@@ -903,6 +909,7 @@ function BottomTimeline({
       title: 'Add',
       items: [
         onAddTextClip && { label: 'Text', onClick: onAddTextClip },
+        onAutoCaptions && { label: captionsStatus ? 'Auto captions (working...)' : 'Auto captions', onClick: onAutoCaptions },
         onAddAudioClip && { label: 'Audio', onClick: onAddAudioClip },
         onAddTrack && { label: 'Video track', onClick: () => onAddTrack('video') },
         onAddTrack && { label: 'Text track', onClick: () => onAddTrack('text') },
@@ -938,6 +945,7 @@ function BottomTimeline({
           </div>
         </div>
         <div className="st-timeline-meta">
+          {captionsStatus && <span className="st-busy" role="status">Captions: {captionsStatus}</span>}
           <span>{laneCount} tracks · {formatTimecode(contentDuration ?? totalDuration, fps)}</span>
           <span className="st-zoom-group">
             <button type="button" className="st-zoom-btn" title="Zoom out (Ctrl + -)" aria-label="Zoom out" onClick={() => zoomTo(zoom / ZOOM_STEP)}><Icon d={ICON.zoomOut} size={16} /></button>

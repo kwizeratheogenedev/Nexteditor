@@ -13,7 +13,10 @@ const GROQ_API_URL = 'https://api.groq.com/openai/v1/audio/transcriptions';
 const GROQ_MODEL = process.env.GROQ_WHISPER_MODEL || 'whisper-large-v3-turbo';
 const REQUEST_TIMEOUT_MS = Number.parseInt(process.env.GROQ_TRANSCRIBE_TIMEOUT || '300000', 10);
 
-async function transcribeChunkWithGroq(chunkPath, { language, prompt }) {
+// One Groq request. `words: true` also asks for per-word start/end times
+// (timestamp_granularities[]=word) - what word-highlighting caption styles
+// in the editor are built from.
+async function requestGroqTranscription(chunkPath, { language, prompt, words = false }) {
   const apiKey = process.env.GROQ_API_KEY;
   if (!apiKey) {
     throw new Error('Captions aren\'t configured yet - add GROQ_API_KEY to backend/.env (free at console.groq.com/keys).');
@@ -27,6 +30,10 @@ async function transcribeChunkWithGroq(chunkPath, { language, prompt }) {
   form.append('temperature', '0');
   if (language) form.append('language', language);
   if (prompt) form.append('prompt', prompt);
+  if (words) {
+    form.append('timestamp_granularities[]', 'word');
+    form.append('timestamp_granularities[]', 'segment');
+  }
 
   const controller = new AbortController();
   const timer = setTimeout(() => controller.abort(), REQUEST_TIMEOUT_MS);
@@ -45,8 +52,7 @@ async function transcribeChunkWithGroq(chunkPath, { language, prompt }) {
       } catch { /* body wasn't JSON - keep the generic message */ }
       throw new Error(message);
     }
-    const data = await response.json();
-    return segmentsToSrt(data.segments || []);
+    return await response.json();
   } catch (err) {
     if (err.name === 'AbortError') {
       throw new Error(`Groq transcription timed out after ${Math.round(REQUEST_TIMEOUT_MS / 60000)} minutes.`);
@@ -55,6 +61,11 @@ async function transcribeChunkWithGroq(chunkPath, { language, prompt }) {
   } finally {
     clearTimeout(timer);
   }
+}
+
+async function transcribeChunkWithGroq(chunkPath, options) {
+  const data = await requestGroqTranscription(chunkPath, options);
+  return segmentsToSrt(data.segments || []);
 }
 
 // verbose_json's segments give start/end in seconds (float) - reuses the
@@ -91,6 +102,30 @@ export async function transcribeChunks(chunkPaths, { language, prompt, onProgres
 
   if (!combined.length) throw new Error('Whisper could not detect any spoken audio in this video.');
   return `${combined.join('\n\n')}\n`;
+}
+
+// Word-level transcription of audio split into `chunkSeconds`-long pieces:
+// every word with its start/end on the whole recording's own timeline, plus
+// the language Whisper detected. Used by the editor's captions (see
+// routes/editorCaptions.js), which build their own lines from the words.
+export async function transcribeWords(chunkPaths, { language, prompt, onProgress, chunkSeconds = 1200 } = {}) {
+  const words = [];
+  let detectedLanguage = language || null;
+  for (let index = 0; index < chunkPaths.length; index += 1) {
+    onProgress?.(index, chunkPaths.length);
+    // eslint-disable-next-line no-await-in-loop
+    const data = await requestGroqTranscription(chunkPaths[index], { language, prompt, words: true });
+    const offset = index * chunkSeconds;
+    (data.words || []).forEach((word) => {
+      const text = String(word.word || '').trim();
+      if (!text || !Number.isFinite(word.start) || !Number.isFinite(word.end)) return;
+      words.push({ text, start: +(word.start + offset).toFixed(3), end: +(Math.max(word.end, word.start) + offset).toFixed(3) });
+    });
+    if (data.language) detectedLanguage = data.language;
+    onProgress?.(index + 1, chunkPaths.length);
+  }
+  if (!words.length) throw new Error('No speech was found in the timeline audio.');
+  return { words, language: detectedLanguage };
 }
 
 function parseTimestamp(value) {

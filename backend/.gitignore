@@ -1,5 +1,7 @@
 *.log
 .env
+# Backup copy of .env from before the ngrok removal - contains live secrets.
+.env.before-ngrok-removal
 uploads/*
 !uploads/.gitkeep
 clips/*

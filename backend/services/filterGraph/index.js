@@ -6,6 +6,7 @@ import { applyVideoColor } from './effects/color.js';
 import { applyVignette } from './effects/vignette.js';
 import { applyAudioLevels, silentAudio } from './effects/audio.js';
 import { applyTextOverlay } from './effects/textOverlay.js';
+import { applyCaptions } from './effects/captionAss.js';
 import { chainVideoClips } from './effects/transition.js';
 import { buildAudioTrackClip } from './effects/audioTrack.js';
 import { buildOverlayClip, compositeOverlayClip } from './effects/overlayTrack.js';
@@ -206,10 +207,13 @@ export function buildEditorExportGraph(clips, inputIndexByClipId, sourceHasAudio
 
   // Text clips (any lane) are drawn at their own absolute [startTime,
   // startTime+duration) window, exactly like the frontend canvas compositor.
-  textClips.forEach((clip) => {
+  // Caption clips (text.caption set - the editor's auto-captions) are drawn
+  // all together by the subtitle renderer; see effects/captionAss.js.
+  textClips.filter((clip) => !clip.text?.caption).forEach((clip) => {
     const duration = Math.max(0.05, (clip.trimmedEnd - clip.trimmedStart) / (clip.speed || 1));
     videoLabel = applyTextOverlay(graph, videoLabel, clip, canvas, clip.startTime, clip.startTime + duration, jobDir);
   });
+  videoLabel = applyCaptions(graph, videoLabel, textClips.filter((clip) => clip.text?.caption), canvas, jobDir);
 
   if (freeTier) {
     videoLabel = applyFreeTierWatermark(graph, videoLabel, canvas);

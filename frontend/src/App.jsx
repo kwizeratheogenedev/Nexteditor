@@ -24,6 +24,8 @@ import BottomTimeline, { PX_PER_SECOND, laneHeight } from './components/BottomTi
 import ExportCompleteDialog from './components/ExportCompleteDialog';
 import { laneCode, laneName } from './timeline/laneNames';
 import { fitZoom } from './timeline/zoom';
+import { requestTimelineCaptions } from './timeline/captionsRequest';
+import { captionClipsFromWords, isCaptionClip, CAPTIONS_LANE_NAME } from './timeline/captionClips';
 import './styles/studio.css';
 
 const VALID_TABS = ['media', 'captions', 'shorts', 'longmix', 'editor'];
@@ -196,6 +198,8 @@ function App() {
   const [editorPane, setEditorPane] = useState('edit');
   const [mediaFocusTick, setMediaFocusTick] = useState(0);
   const [exportDone, setExportDone] = useState(null);
+  // Auto captions: null when idle, else the status line shown in the timeline.
+  const [captionsStatus, setCaptionsStatus] = useState(null);
 
   // LongMix Studio (the songs/scenes/settings the wizard is collecting, and
   // whatever render is or was in flight) - persisted across a reload or
@@ -2008,6 +2012,49 @@ function App() {
     setSelectedClipIds([clip.id]);
   };
 
+  // Auto captions: the timeline's audio is transcribed word by word on the
+  // server, then turned into caption clips on a text lane named "Captions"
+  // (reused if it exists, else lane 0 when it holds no text, else a new
+  // lane). Earlier caption clips are replaced; one undo brings them back.
+  const handleAutoCaptions = async ({ language = 'auto', styleId = 'karaoke' } = {}) => {
+    if (captionsStatus) return;
+    const sounding = editorTimeline.filter((clip) => {
+      const type = laneTypeForClip(clip);
+      return (clip.type === 'video' || clip.type === 'audio')
+        && !trackMeta?.[type]?.[clip.trackIndex || 0]?.hidden
+        && clip.enabled !== false;
+    });
+    setErrorText(null);
+    setCaptionsStatus('Preparing audio...');
+    try {
+      const { words } = await requestTimelineCaptions({
+        clips: sounding,
+        canvasSize: editorCanvasSize,
+        language,
+        socketId,
+        onProgress: ({ message }) => { if (message) setCaptionsStatus(message); },
+      });
+      let laneIndex = trackMeta.text.findIndex((lane) => lane.name === CAPTIONS_LANE_NAME);
+      const nonCaptionText = editorTextClips.filter((clip) => !isCaptionClip(clip));
+      if (laneIndex < 0 && !nonCaptionText.some((clip) => (clip.trackIndex || 0) === 0)) laneIndex = 0;
+      if (laneIndex < 0) laneIndex = trackMeta.text.length;
+      setTrackMeta((prev) => {
+        const lanes = [...prev.text];
+        while (lanes.length <= laneIndex) lanes.push({ locked: false, hidden: false, name: null });
+        lanes[laneIndex] = { ...lanes[laneIndex], name: CAPTIONS_LANE_NAME, hidden: false };
+        return { ...prev, text: lanes };
+      });
+      const captions = captionClipsFromWords(words, { styleId, trackIndex: laneIndex });
+      commitEditorTimeline((prev) => [...prev.filter((clip) => !isCaptionClip(clip)), ...captions]);
+      setSelectedClipId(null);
+      setSelectedClipIds([]);
+    } catch (error) {
+      setErrorText(error.message || 'Could not generate captions.');
+    } finally {
+      setCaptionsStatus(null);
+    }
+  };
+
   // Adjustment layers (M13) always land on a brand-new video lane above
   // everything else - never lane 0, which stays the pure "base program"
   // (see editorLaneZeroVideoClips) - so a fresh layer never accidentally
@@ -2895,6 +2942,8 @@ function App() {
         onUngroupSelected={handleUngroupSelected}
         onFreezeFrame={handleFreezeFrame}
         onAddAdjustmentLayer={handleAddAdjustmentLayer}
+        onAutoCaptions={() => handleAutoCaptions()}
+        captionsStatus={captionsStatus}
         markers={markers}
         onAddMarker={handleAddMarker}
         onRemoveMarker={handleRemoveMarker}
