@@ -11,6 +11,7 @@ import { isVideoLikeClip, isImageClip } from '../services/filterGraph/clipKinds.
 import { clipOutputDuration } from '../services/filterGraph/effects/speedCurve.js';
 import { buildCaptionAudioGraph } from '../services/filterGraph/captionAudio.js';
 import { transcribeWords } from '../services/captionTranscription.js';
+import { UPLOADS_DIR, CLIPS_DIR } from '../storagePaths.js';
 
 // POST /api/editor/captions - auto-captions for the editor timeline.
 // Receives the same multipart upload as an export (timeline JSON plus one
@@ -19,8 +20,8 @@ import { transcribeWords } from '../services/captionTranscription.js';
 // lines and clips happens in the browser (timeline/captionLines.js), so
 // switching caption style re-flows the lines without transcribing again.
 const router = express.Router();
-const uploadsDir = path.resolve(process.cwd(), 'uploads');
-const clipsDir = path.resolve(process.cwd(), 'clips');
+const uploadsDir = UPLOADS_DIR;
+const clipsDir = CLIPS_DIR;
 const CHUNK_SECONDS = 1200;
 
 // Whisper language codes offered in the editor. '' = auto-detect.

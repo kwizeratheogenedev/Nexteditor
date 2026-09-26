@@ -5,9 +5,10 @@ import upload from '../middleware/upload.js';
 import { probeDuration, runFFmpeg } from '../services/ffmpeg.js';
 import { deleteJob, registerJob, resolveJob } from '../services/jobStore.js';
 import { getIo } from '../socket.js';
+import { CLIPS_DIR } from '../storagePaths.js';
 
 const router = express.Router();
-const clipsDir = path.resolve(process.cwd(), 'clips');
+const clipsDir = CLIPS_DIR;
 const BACKEND_URL = process.env.BACKEND_URL || 'http://localhost:3000';
 const progressByJob = new Map();
 

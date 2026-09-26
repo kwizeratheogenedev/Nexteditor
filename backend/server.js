@@ -5,7 +5,6 @@ import cookieParser from 'cookie-parser';
 import fs from 'fs';
 import path from 'path';
 import http from 'http';
-import { fileURLToPath } from 'url';
 import convertRouter from './routes/convert.js';
 import burnSubtitlesRouter from './routes/burnSubtitles.js';
 import extractShortsRouter from './routes/extractShorts.js';
@@ -34,9 +33,8 @@ import { createDiskGuard } from './middleware/diskGuard.js';
 import { requestLogger } from './middleware/requestLog.js';
 import { installCrashHandlers } from './services/crashHandlers.js';
 import healthRouter from './routes/health.js';
+import { UPLOADS_DIR, CLIPS_DIR } from './storagePaths.js';
 
-const __filename = fileURLToPath(import.meta.url);
-const __dirname = path.dirname(__filename);
 const app = express();
 installCrashHandlers();
 configureProxyTrust(app);
@@ -55,16 +53,10 @@ const ALLOWED_ORIGINS = (process.env.CORS_ORIGIN || 'http://localhost:5173,http:
 
 const isDev = process.env.NODE_ENV !== 'production';
 
-const uploadsDir = path.join(__dirname, 'uploads');
-const clipsDir = path.join(__dirname, 'clips');
-
-if (!fs.existsSync(uploadsDir)) {
-  fs.mkdirSync(uploadsDir, { recursive: true });
-}
-
-if (!fs.existsSync(clipsDir)) {
-  fs.mkdirSync(clipsDir, { recursive: true });
-}
+// uploads/ and clips/ are created by storagePaths.js - under the temp dir
+// on hosts whose code folder is read-only (Vercel).
+const uploadsDir = UPLOADS_DIR;
+const clipsDir = CLIPS_DIR;
 
 // We'll create the server inside startServer so each attempt uses a fresh server
 // and we don't call listen more than once on the same Server instance.

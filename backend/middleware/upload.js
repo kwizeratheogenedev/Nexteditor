@@ -1,16 +1,10 @@
 import crypto from 'crypto';
-import fs from 'fs';
 import path from 'path';
 import multer from 'multer';
-import { fileURLToPath } from 'url';
+import { UPLOADS_DIR } from '../storagePaths.js';
 
-const __filename = fileURLToPath(import.meta.url);
-const __dirname = path.dirname(__filename);
-const uploadsDir = path.resolve(__dirname, '../uploads');
-
-if (!fs.existsSync(uploadsDir)) {
-  fs.mkdirSync(uploadsDir, { recursive: true });
-}
+// Created by storagePaths.js (a temp-dir location on read-only hosts).
+const uploadsDir = UPLOADS_DIR;
 
 export const VIDEO_MIME = ['video/mp4', 'video/webm', 'video/quicktime', 'video/x-msvideo'];
 // An explicit allow-list here kept rejecting real songs LongMix Studio users

@@ -4,9 +4,10 @@ import path from 'path';
 import { probeDuration, runFFmpeg } from '../services/ffmpeg.js';
 import { deleteJob, registerJob, resolveJob } from '../services/jobStore.js';
 import { getIo } from '../socket.js';
+import { UPLOADS_DIR, CLIPS_DIR } from '../storagePaths.js';
 
 const router = express.Router();
-const clipsDir = path.resolve(process.cwd(), 'clips');
+const clipsDir = CLIPS_DIR;
 const BACKEND_URL = process.env.BACKEND_URL || 'http://localhost:3000';
 
 // Validate that a file path is within allowed directories
@@ -47,7 +48,7 @@ router.post('/', async (req, res) => {
     }
 
     // Validate the resolved path is safe
-    if (!validateFilePath(originalVideo, clipsDir) && !validateFilePath(originalVideo, path.resolve(process.cwd(), 'uploads'))) {
+    if (!validateFilePath(originalVideo, clipsDir) && !validateFilePath(originalVideo, UPLOADS_DIR)) {
       res.status(400).json({ error: 'Invalid file path' });
       return;
     }

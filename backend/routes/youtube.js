@@ -6,9 +6,10 @@ import { google } from 'googleapis';
 import { getFileSource } from '../services/fileResolve.js';
 import { getIo } from '../socket.js';
 import { requireAuth, requireSubscription } from '../middleware/auth.js';
+import { CLIPS_DIR } from '../storagePaths.js';
 
 const router = express.Router();
-const clipsDir = path.resolve(process.cwd(), 'clips');
+const clipsDir = CLIPS_DIR;
 
 // youtube.upload lets us insert/update videos; youtube.readonly lets the
 // "Connected as ..." status check read the channel's own name/thumbnail.

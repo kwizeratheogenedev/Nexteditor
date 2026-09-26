@@ -4,14 +4,12 @@ import path from 'path';
 import { createWriteStream } from 'fs';
 import { pipeline } from 'stream/promises';
 import crypto from 'crypto';
-import { fileURLToPath } from 'url';
 import ytdl from '@distube/ytdl-core';
 import { probeDuration } from '../services/ffmpeg.js';
 import { getIo } from '../socket.js';
+import { UPLOADS_DIR } from '../storagePaths.js';
 
-const __filename = fileURLToPath(import.meta.url);
-const __dirname = path.dirname(__filename);
-const uploadsDir = path.resolve(__dirname, '../uploads');
+const uploadsDir = UPLOADS_DIR;
 const router = express.Router();
 
 /**

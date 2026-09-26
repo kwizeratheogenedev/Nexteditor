@@ -7,10 +7,11 @@ import { captionUpload } from '../middleware/upload.js';
 import { probeDuration, runFFmpeg } from '../services/ffmpeg.js';
 import { transcribeChunks } from '../services/captionTranscription.js';
 import { getIo } from '../socket.js';
+import { UPLOADS_DIR, CLIPS_DIR } from '../storagePaths.js';
 
 const router = express.Router();
-const clipsDir = path.resolve(process.cwd(), 'clips');
-const uploadsDir = path.resolve(process.cwd(), 'uploads');
+const clipsDir = CLIPS_DIR;
+const uploadsDir = UPLOADS_DIR;
 const LANGUAGE_CODES = { 'English (US)': 'en', 'English (UK)': 'en', Spanish: 'es', French: 'fr', German: 'de' };
 const progressByJob = new Map();
 

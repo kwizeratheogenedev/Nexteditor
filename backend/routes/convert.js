@@ -6,9 +6,10 @@ import { Readable } from 'stream';
 import upload from '../middleware/upload.js';
 import { probeDuration, runFFmpeg } from '../services/ffmpeg.js';
 import { getIo } from '../socket.js';
+import { CLIPS_DIR } from '../storagePaths.js';
 
 const router = express.Router();
-const clipsDir = path.resolve(process.cwd(), 'clips');
+const clipsDir = CLIPS_DIR;
 
 function emitToClient(req, eventName, payload) {
   const io = getIo();

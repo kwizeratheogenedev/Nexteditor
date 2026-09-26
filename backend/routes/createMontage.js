@@ -2,7 +2,6 @@ import express from 'express';
 import multer from 'multer';
 import fs from 'fs';
 import path from 'path';
-import { fileURLToPath } from 'url';
 import { randomUUID } from 'crypto';
 import { runFFmpeg, probeDuration } from '../services/ffmpeg.js';
 import { getFileSource as resolveFileSource } from '../services/fileResolve.js';
@@ -11,13 +10,12 @@ import { optionalAuth } from '../middleware/auth.js';
 import { upsertJob } from '../services/jobTracker.js';
 import pLimit from 'p-limit';
 import os from 'os';
+import { UPLOADS_DIR, CLIPS_DIR } from '../storagePaths.js';
 
-const __filename = fileURLToPath(import.meta.url);
-const __dirname = path.dirname(__filename);
 
 const router = express.Router();
-const uploadsDir = path.resolve(__dirname, '..', 'uploads');
-const clipsDir = path.resolve(__dirname, '..', 'clips');
+const uploadsDir = UPLOADS_DIR;
+const clipsDir = CLIPS_DIR;
 const MIN_CLIP_DURATION = 3;
 const MAX_CLIP_DURATION = 4;
 const DEFAULT_SKIP_INPUT_VIDEO_SECONDS = 40;
@@ -26,17 +24,13 @@ const MAX_SKIP_INPUT_VIDEO_SECONDS = 600;
 // Configure multer for video and audio uploads
 const storage = multer.diskStorage({
   destination: (req, file, cb) => {
-    const uploadsDir = path.join(__dirname, '..', 'uploads');
-    if (!fs.existsSync(uploadsDir)) {
-      fs.mkdirSync(uploadsDir, { recursive: true });
-    }
-    cb(null, uploadsDir);
+    cb(null, UPLOADS_DIR);
   },
   filename: (req, file, cb) => {
     const uniqueName = `${randomUUID()}-${file.originalname}`;
     // Ensure multer file object includes consistent path info for downstream handlers
     try {
-      file.destination = path.join(__dirname, '..', 'uploads');
+      file.destination = UPLOADS_DIR;
       file.filename = uniqueName;
       file.path = path.join(file.destination, uniqueName);
     } catch (e) {}

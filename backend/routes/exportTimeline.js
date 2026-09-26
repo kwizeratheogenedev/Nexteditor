@@ -15,10 +15,11 @@ import { requireAuth } from '../middleware/auth.js';
 import { upsertJob } from '../services/jobTracker.js';
 import { renderLongMix } from '../services/longMixRender.js';
 import { isPro, checkAndConsumeExportQuota, FREE_EXPORT_MAX_SECONDS, FREE_STORAGE_BYTES_LIMIT } from '../services/planLimits.js';
+import { UPLOADS_DIR, CLIPS_DIR } from '../storagePaths.js';
 
 const router = express.Router();
-const uploadsDir = path.resolve(process.cwd(), 'uploads');
-const clipsDir = path.resolve(process.cwd(), 'clips');
+const uploadsDir = UPLOADS_DIR;
+const clipsDir = CLIPS_DIR;
 
 // Mirrors frontend/src/timeline/canvasPresets.js's ASPECT_RATIOS/
 // RESOLUTIONS/FPS_OPTIONS - keep both in sync if a preset is ever added or

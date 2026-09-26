@@ -1,8 +1,7 @@
 import fs from 'fs';
 import path from 'path';
-import { fileURLToPath } from 'url';
+import { UPLOADS_DIR, CLIPS_DIR } from '../storagePaths.js';
 
-const __dirname = path.dirname(fileURLToPath(import.meta.url));
 const GB = 1024 * 1024 * 1024;
 
 // Refuses new file uploads with a clear, retryable message when the server is
@@ -48,7 +47,7 @@ function readGb(envName, fallback) {
 }
 
 export function createDiskGuard({
-  dirs = [path.resolve(__dirname, '..', 'uploads'), path.resolve(__dirname, '..', 'clips')],
+  dirs = [UPLOADS_DIR, CLIPS_DIR],
   minFreeBytes = readGb('MIN_FREE_DISK_GB', 5) * GB,
   maxStorageBytes = readGb('MAX_STORAGE_GB', 40) * GB,
   freeBytes = defaultFreeBytes,
@@ -95,7 +94,7 @@ export function createDiskGuard({
 }
 
 export function getDiskStatus(options = {}) {
-  const dirs = options.dirs || [path.resolve(__dirname, '..', 'uploads'), path.resolve(__dirname, '..', 'clips')];
+  const dirs = options.dirs || [UPLOADS_DIR, CLIPS_DIR];
   return Promise.all([defaultFreeBytes(dirs[0]), defaultDirSize(dirs)]).then(([free, used]) => ({
     freeGb: Math.round((free / GB) * 10) / 10,
     usedByAppGb: Math.round((used / GB) * 10) / 10,

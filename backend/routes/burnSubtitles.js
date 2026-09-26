@@ -4,9 +4,10 @@ import path from 'path';
 import { captionBurnUpload } from '../middleware/upload.js';
 import { probeDuration, runFFmpeg } from '../services/ffmpeg.js';
 import { getIo } from '../socket.js';
+import { CLIPS_DIR } from '../storagePaths.js';
 
 const router = express.Router();
-const clipsDir = path.resolve(process.cwd(), 'clips');
+const clipsDir = CLIPS_DIR;
 const progressByJob = new Map();
 
 function emitToClient(req, eventName, payload) {
