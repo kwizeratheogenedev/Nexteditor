@@ -1,6 +1,7 @@
 import express from 'express';
 import { ffmpegGate } from '../services/renderGate.js';
 import { getDiskStatus } from '../middleware/diskGuard.js';
+import { currentVideoEncoder } from '../services/encoders.js';
 
 // GET /health/details - a snapshot for monitoring dashboards and for you when
 // asking "is the server busy or full?". No paths, keys or user data in it.
@@ -25,6 +26,8 @@ router.get('/', async (_req, res) => {
     status: lowDisk ? 'low_disk' : 'ok',
     uptimeSeconds: Math.round((Date.now() - startedAt) / 1000),
     render,
+    // null until the first editor export triggers detection
+    exportEncoder: currentVideoEncoder(),
     disk,
   });
 });

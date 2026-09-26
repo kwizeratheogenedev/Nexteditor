@@ -3,7 +3,8 @@ import fs from 'fs';
 import path from 'path';
 import { randomUUID } from 'crypto';
 import upload from '../middleware/upload.js';
-import { runFFmpeg, probeHasAudio } from '../services/ffmpeg.js';
+import { probeHasAudio } from '../services/ffmpeg.js';
+import { runWithEncoderFallback } from '../services/encoders.js';
 import { getFileSource } from '../services/fileResolve.js';
 import { buildEditorExportGraph } from '../services/filterGraph/index.js';
 import { isVideoLikeClip, isImageClip } from '../services/filterGraph/clipKinds.js';
@@ -406,8 +407,11 @@ router.post('/', requireAuth, upload.any(), async (req, res) => {
     // whether this connection survives - same pattern as createMontage.js.
     res.status(202).json({ jobId });
 
-    await runFFmpeg(
-      [
+    // Video encoder args come from services/encoders.js: a hardware encoder
+    // (NVIDIA/Intel/AMD/Apple) when this machine has a working one, else
+    // libx264 with the same EXPORT_ENCODE_PRESET/EXPORT_CRF as before.
+    await runWithEncoderFallback(
+      (videoEncoderArgs) => [
         '-y',
         ...inputArgs,
         ...filterArgs,
@@ -417,14 +421,7 @@ router.post('/', requireAuth, upload.any(), async (req, res) => {
         `[${audioOutputLabel}]`,
         '-r',
         String(CANVAS.fps),
-        '-pix_fmt',
-        'yuv420p',
-        '-c:v',
-        'libx264',
-        '-preset',
-        process.env.EXPORT_ENCODE_PRESET || 'veryfast',
-        '-crf',
-        process.env.EXPORT_CRF || '20',
+        ...videoEncoderArgs,
         '-c:a',
         'aac',
         '-b:a',
