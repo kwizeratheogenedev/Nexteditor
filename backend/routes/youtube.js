@@ -2,7 +2,14 @@ import express from 'express';
 import fs from 'fs';
 import path from 'path';
 import { PassThrough } from 'stream';
-import { google } from 'googleapis';
+import { OAuth2Client } from 'google-auth-library';
+
+// The full googleapis package costs ~110 MB of memory to load, so it's only
+// loaded the first time someone actually uses the YouTube API.
+async function youtubeApi(auth) {
+  const { google } = await import('googleapis');
+  return google.youtube({ version: 'v3', auth });
+}
 import { getFileSource } from '../services/fileResolve.js';
 import { getIo } from '../socket.js';
 import { requireAuth, requireSubscription } from '../middleware/auth.js';
@@ -29,7 +36,7 @@ function getOAuthClient() {
   const clientSecret = process.env.YOUTUBE_CLIENT_SECRET;
   const redirectUri = process.env.YOUTUBE_REDIRECT_URI;
   if (!clientId || !clientSecret || !redirectUri) return null;
-  return new google.auth.OAuth2(clientId, clientSecret, redirectUri);
+  return new OAuth2Client(clientId, clientSecret, redirectUri);
 }
 
 // Tokens are stored per-user on the User doc (user.youtube), not in a shared
@@ -120,7 +127,7 @@ router.get('/auth/status', async (req, res) => {
     return;
   }
   try {
-    const youtube = google.youtube({ version: 'v3', auth: oauth2Client });
+    const youtube = await youtubeApi(oauth2Client);
     const { data } = await youtube.channels.list({ part: ['snippet'], mine: true });
     const channel = data.items?.[0];
     const channelTitle = channel?.snippet?.title || null;
@@ -198,7 +205,7 @@ router.post('/upload', requireSubscription('youtubeUpload'), async (req, res) =>
     readStream.on('error', (err) => trackedStream.destroy(err));
     readStream.pipe(trackedStream);
 
-    const youtube = google.youtube({ version: 'v3', auth: oauth2Client });
+    const youtube = await youtubeApi(oauth2Client);
     const response = await youtube.videos.insert({
       part: ['snippet', 'status'],
       requestBody: {
@@ -241,7 +248,7 @@ router.patch('/videos/:videoId', requireSubscription('youtubeUpload'), async (re
   const { title, description, tags, hashtags, privacyStatus } = req.body || {};
 
   try {
-    const youtube = google.youtube({ version: 'v3', auth: oauth2Client });
+    const youtube = await youtubeApi(oauth2Client);
     const { data } = await youtube.videos.list({ part: ['snippet', 'status'], id: [videoId] });
     const existing = data.items?.[0];
     if (!existing) {

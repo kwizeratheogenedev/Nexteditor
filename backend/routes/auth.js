@@ -1,7 +1,9 @@
 import express from 'express';
 import bcrypt from 'bcryptjs';
 import jwt from 'jsonwebtoken';
-import { google } from 'googleapis';
+// google-auth-library, not googleapis: the full googleapis package costs
+// ~110 MB of memory just to load, too much for a 512 MB instance.
+import { OAuth2Client } from 'google-auth-library';
 import User from '../models/User.js';
 import { requireAuth, ensureOwnerAccess } from '../middleware/auth.js';
 import { isAdmin, isSuspended } from '../services/roles.js';
@@ -138,7 +140,7 @@ function getLoginOAuthClient() {
   const clientSecret = process.env.GOOGLE_CLIENT_SECRET;
   const redirectUri = process.env.GOOGLE_LOGIN_REDIRECT_URI;
   if (!clientId || !clientSecret || !redirectUri) return null;
-  return new google.auth.OAuth2(clientId, clientSecret, redirectUri);
+  return new OAuth2Client(clientId, clientSecret, redirectUri);
 }
 
 router.get('/google/url', (req, res) => {
@@ -172,8 +174,7 @@ router.get('/google/callback', async (req, res) => {
   try {
     const { tokens } = await oauth2Client.getToken(String(code));
     oauth2Client.setCredentials(tokens);
-    const oauth2 = google.oauth2({ version: 'v2', auth: oauth2Client });
-    const { data: profile } = await oauth2.userinfo.get();
+    const { data: profile } = await oauth2Client.request({ url: 'https://www.googleapis.com/oauth2/v2/userinfo' });
     if (!profile.email) {
       res.redirect(`${frontendUrl}/login?error=no_email`);
       return;
