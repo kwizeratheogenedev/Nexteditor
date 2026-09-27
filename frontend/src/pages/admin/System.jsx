@@ -35,6 +35,8 @@ export default function System() {
           <Row label="Running now">{data.render.active} of {data.render.max}</Row>
           <Row label="Waiting">{data.render.queued}</Row>
           <Row label="Video encoder">{data.exportEncoder || 'chosen on first export'}</Row>
+          <Row label="Instance limits">{data.budget?.limited ? `${data.budget.cpuLimit} CPU · ${data.budget.memoryLimitMB} MB` : 'none (whole machine)'}</Row>
+          <Row label="Threads per encode">{data.budget?.ffmpegThreads || 'ffmpeg default'}</Row>
           <Row label="Free disk">{data.disk ? `${data.disk.freeGb} GB` : '—'}</Row>
           <Row label="App media on disk">{data.disk ? `${data.disk.usedByAppGb} GB` : '—'}</Row>
           <Row label="Memory">{memPct}% used · app {data.memory.rssMb} MB</Row>

@@ -21,6 +21,7 @@ import { getDiskStatus } from '../middleware/diskGuard.js';
 import { isMomoConfigured } from '../services/momoClient.js';
 import { isFlutterwaveConfigured } from '../services/flutterwaveClient.js';
 import { accountSummary } from './account.js';
+import { describeBudget } from '../services/cpuBudget.js';
 
 // The admin panel's API. Every route requires a signed-in admin, and every
 // change is written to the AdminAction audit log.
@@ -467,6 +468,7 @@ router.get('/system', async (_req, res) => {
     cpus: os.cpus()?.length || 0,
     memory: { rssMb: Math.round(mem.rss / 1048576), heapUsedMb: Math.round(mem.heapUsed / 1048576), systemFreeMb: Math.round(os.freemem() / 1048576), systemTotalMb: Math.round(os.totalmem() / 1048576) },
     render: ffmpegGate.stats(),
+    budget: describeBudget(),
     exportEncoder: currentVideoEncoder(),
     disk,
     database: mongoose.connection.readyState === 1 ? 'connected' : 'disconnected',

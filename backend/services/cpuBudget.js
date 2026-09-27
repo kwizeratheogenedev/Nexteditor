@@ -38,8 +38,12 @@ function cgroupMemoryLimit() {
 
 const MB = 1024 * 1024;
 const hostCpus = (os.cpus() || []).length || 1;
-const cpuLimit = cgroupCpuLimit();
-const memoryLimit = cgroupMemoryLimit();
+// Render doesn't always expose its limits through cgroup files. When it
+// doesn't, assume its smallest paid instance (0.5 CPU / 512 MB) rather than
+// the whole host - RENDER_MEMORY_MB / RENDER_CPUS describe a bigger plan.
+const onRender = Boolean(process.env.RENDER);
+const cpuLimit = cgroupCpuLimit() ?? (onRender ? Number(process.env.RENDER_CPUS) || 0.5 : null);
+const memoryLimit = cgroupMemoryLimit() ?? (onRender ? (Number(process.env.RENDER_MEMORY_MB) || 512) * MB : null);
 
 // True when running with less than the whole machine (a container).
 export const IS_LIMITED = (cpuLimit !== null && cpuLimit < hostCpus) || memoryLimit !== null;
