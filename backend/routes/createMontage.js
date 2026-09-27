@@ -416,8 +416,10 @@ router.post('/', optionalAuth, upload.any(), async (req, res) => {
     const clipLimit = pLimit(IS_LIMITED ? MAX_PARALLEL_ENCODES : Math.max(2, EFFECTIVE_CPUS - 1));
     let completedClips = 0;
     const totalClips = clipPlan.length;
+    // Clips are now the only encode (the join below just copies them), so
+    // they take nearly all of the progress bar.
     const clipRangeStart = 10;
-    const clipRangeEnd = 55;
+    const clipRangeEnd = 90;
     const clipRange = clipRangeEnd - clipRangeStart;
     const segmentSize = totalClips > 0 ? clipRange / totalClips : clipRange;
     const clipStartTime = Date.now();
@@ -444,7 +446,10 @@ router.post('/', optionalAuth, upload.any(), async (req, res) => {
             smoothTransitions,
             contrastPolish,
             videoQuality,
-          }, true),
+          // Final quality straight away: every clip gets identical encoder
+          // settings, so the join below can copy them instead of encoding
+          // the whole montage a second time.
+          }, false),
           {
             duration: plan.clipDuration,
             onProgress: (progress) => {
@@ -465,8 +470,8 @@ router.post('/', optionalAuth, upload.any(), async (req, res) => {
         const remainingClips = totalClips - completedClips;
         const timeLeftClips = remainingClips > 0 && avgTimePerClip > 0 ? remainingClips * avgTimePerClip : 0;
         const totalEstimatedClipsTime = totalClips > 0 && avgTimePerClip > 0 ? totalClips * avgTimePerClip : clipElapsed * 2;
-        estimatedTotalTime = totalEstimatedClipsTime + Math.max(15000, totalEstimatedClipsTime * 0.15);
-        const timeLeft = timeLeftClips + Math.max(15000, totalEstimatedClipsTime * 0.15);
+        estimatedTotalTime = totalEstimatedClipsTime + Math.max(5000, totalEstimatedClipsTime * 0.05);
+        const timeLeft = timeLeftClips + Math.max(5000, totalEstimatedClipsTime * 0.05);
 
         emitToClient(jobId, socketId, 'montage-progress', {
           percent: Math.round(segmentEnd),
@@ -490,11 +495,10 @@ router.post('/', optionalAuth, upload.any(), async (req, res) => {
     // the video stream from the concat input and the audio stream from the
     // provided audio source to avoid attached image/audio-only streams.
     const mergeStartTime = Date.now();
-    emitToClient(jobId, socketId, 'montage-progress', { percent: 60, currentTime: 'Joining clips with audio...', totalEstimatedTime: Math.round(estimatedTotalTime / 1000), timeSpent: Math.round((Date.now() - montageStartTime) / 1000) });
-    if (ownerId) upsertJob(ownerId, { jobId, progress: 60, message: 'Joining clips with audio...' });
+    emitToClient(jobId, socketId, 'montage-progress', { percent: 90, currentTime: 'Joining clips with audio...', totalEstimatedTime: Math.round(estimatedTotalTime / 1000), timeSpent: Math.round((Date.now() - montageStartTime) / 1000) });
+    if (ownerId) upsertJob(ownerId, { jobId, progress: 90, message: 'Joining clips with audio...' });
 
-    const finalQuality = getQualitySettings(videoQuality);
-    console.log('Starting final ffmpeg merge', { concatListPath, mergedAudioPath, outputPath, audioDuration, finalQuality });
+    console.log('Starting final ffmpeg merge', { concatListPath, mergedAudioPath, outputPath, audioDuration });
     try {
       await runFFmpeg(
         [
@@ -505,9 +509,10 @@ router.post('/', optionalAuth, upload.any(), async (req, res) => {
           '-t', String(audioDuration),
           '-map', '0:v:0',
           '-map', '1:a:0',
-          '-c:v', 'libx264',
-          '-preset', finalQuality.preset,
-          '-crf', finalQuality.crf,
+          // The clips are already final-quality H.264 with identical
+          // settings - copying them makes the join take seconds and almost
+          // no memory (re-encoding here ran a 512 MB instance out of memory).
+          '-c:v', 'copy',
           '-c:a', 'aac',
           '-b:a', '192k',
           '-movflags', '+faststart',
@@ -518,7 +523,7 @@ router.post('/', optionalAuth, upload.any(), async (req, res) => {
         {
           duration: audioDuration,
           onProgress: (progress) => {
-            const scaledPercent = 60 + (progress.percent * 0.35);
+            const scaledPercent = 90 + (progress.percent * 0.08);
             const mergeElapsed = Date.now() - mergeStartTime;
             const mergeProgress = Math.max(0, Math.min(1, progress.percent / 100));
             const remainingMergePercent = 1 - mergeProgress;
