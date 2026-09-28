@@ -85,10 +85,13 @@ router.get('/progress/:jobId', (req, res) => {
   res.setHeader('Cache-Control', 'no-store');
   const entry = progressByJob.get(req.params.jobId);
   if (!entry) {
-    res.json({ percent: 0, currentTime: '' });
+    // `known: false` lets the page tell "this server has never heard of the
+    // job" (upload never arrived, or the server restarted and lost it) from
+    // "accepted, just not reporting yet".
+    res.json({ percent: 0, currentTime: '', known: false });
     return;
   }
-  res.json(entry.eventName === 'montage-error' ? { percent: 0, currentTime: '', error: entry.payload.error } : entry.payload);
+  res.json({ known: true, ...(entry.eventName === 'montage-error' ? { percent: 0, currentTime: '', error: entry.payload.error } : entry.payload) });
 });
 
 function sanitizeDownloadName(name) {
@@ -315,6 +318,7 @@ router.post('/', optionalAuth, upload.any(), async (req, res) => {
     // render was working fine - processing continues below regardless, and
     // progress/result land in progressByJob (and, if signed in, the Job
     // model) for the frontend to poll/resume watching.
+    emitToClient(jobId, socketId, 'montage-progress', { percent: 0, currentTime: 'Upload received - starting your montage...' });
     res.status(202).json({ jobId });
 
     // For each audio source, trim the first 40 seconds and produce trimmed files

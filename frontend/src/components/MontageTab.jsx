@@ -668,11 +668,10 @@ function IdlePreview({ readyCount }) {
   );
 }
 
-function ProcessingPreview({ progress, status, totalEstimatedTime, timeSpent, timeLeft }) {
-  const fallbackStatus =
-    progress < 15 ? 'Preparing montage...' :
-    progress < 60 ? 'Creating random clips...' :
-    progress < 95 ? 'Joining clips with audio...' : 'Finalizing output...';
+// Shows only what is really happening: while uploading, the share of the
+// files actually sent; after that, the percent the server reports.
+function ProcessingPreview({ progress, status, totalEstimatedTime, timeSpent, timeLeft, uploading, note }) {
+  const fallbackStatus = uploading ? 'Uploading your files...' : 'Waiting for the server...';
 
   const r = 44;
   const circ = 2 * Math.PI * r;
@@ -700,8 +699,9 @@ function ProcessingPreview({ progress, status, totalEstimatedTime, timeSpent, ti
         </div>
       </div>
       <div>
-        <div style={{ fontSize:15, fontWeight:600, color:'var(--accent-purple-light)', marginBottom:6 }}>Creating Your Montage</div>
+        <div style={{ fontSize:15, fontWeight:600, color:'var(--accent-purple-light)', marginBottom:6 }}>{uploading ? 'Uploading Your Files' : 'Creating Your Montage'}</div>
         <div style={{ fontSize:12, color:'var(--text-muted)' }}>{status || fallbackStatus}</div>
+        {note && <div role="status" style={{ fontSize:12, color:'var(--warning, #f5a524)', marginTop:6 }}>{note}</div>}
         {(totalEstimatedTime > 0 || timeSpent > 0 || timeLeft > 0) && (
           <div style={{ fontSize:12, color:'var(--panel-text-3)', marginTop:6, display:'flex', gap:12, justifyContent:'center', flexWrap:'wrap' }}>
             {totalEstimatedTime > 0 && <span>Total: {formatTime(totalEstimatedTime)}</span>}
@@ -1325,9 +1325,7 @@ export default function MontageTab({ loadVideoInEditor, onError, onShurfer, onRe
     mergeJobId,
     setMergeJobId,
     outputFile,
-    hasRealProgress,
     setHasRealProgress,
-    lastProgressUpdate,
     setLastProgressUpdate,
     syncMode,
     setSyncMode,
@@ -1374,6 +1372,14 @@ export default function MontageTab({ loadVideoInEditor, onError, onShurfer, onRe
   // ref so a stale/out-of-order event is dropped in full rather than
   // partially applied.
   const maxProgressRef = useRef(0);
+
+  // Upload phase (not persisted: an upload can't survive a page reload).
+  const [uploading, setUploading] = useState(false);
+  // Shown under the status line when the connection or server misbehaves;
+  // never changes the percent.
+  const [connectionNote, setConnectionNote] = useState('');
+  const uploadingRef = useRef(false);
+  const unknownSinceRef = useRef(0);
 
   useEffect(() => {
     if (!socket) return;
@@ -1439,11 +1445,32 @@ export default function MontageTab({ loadVideoInEditor, onError, onShurfer, onRe
     // by a fresh per-request jobId (not the socket connection, which is
     // reused across every montage a tab creates) so a new "Create new" run
     // can never read a previous run's stale terminal progress entry.
+    unknownSinceRef.current = 0;
     const poller = window.setInterval(async () => {
+      // While the files are still uploading the server can't know the job yet.
+      if (uploadingRef.current) return;
       try {
         const response = await fetch(`${API_BASE}/api/create-montage/progress/${jobId}`, { cache: 'no-store' });
-        if (!response.ok) return;
+        if (!response.ok) {
+          setConnectionNote('The server is not responding - retrying...');
+          return;
+        }
+        setConnectionNote('');
         const status = await response.json();
+        if (status.known === false) {
+          // Never received (the upload was cut off, e.g. by a page reload) or
+          // lost because the server restarted. Give a restarting server a
+          // moment, then say so instead of waiting forever.
+          unknownSinceRef.current = unknownSinceRef.current || Date.now();
+          if (Date.now() - unknownSinceRef.current > 30000) {
+            const message = 'The server lost this montage - the upload did not finish or the server restarted. Please try again.';
+            setMergeError(message);
+            setMergeStatus('error');
+            onError?.(message);
+          }
+          return;
+        }
+        unknownSinceRef.current = 0;
         if (status.error) {
           // The original request's own connection may have dropped (screen
           // lock/sleep, backgrounded tab, network blip) long before the
@@ -1479,47 +1506,16 @@ export default function MontageTab({ loadVideoInEditor, onError, onShurfer, onRe
           setLastProgressUpdate(Date.now());
           if (status.currentTime) setMergeStageText(status.currentTime);
         }
-      } catch { /* socket progress remains available */ }
+      } catch {
+        setConnectionNote(navigator.onLine === false
+          ? 'You are offline - your montage keeps going on the server; progress resumes when you reconnect.'
+          : 'Connection problem - retrying...');
+      }
     }, 1500);
 
     return () => window.clearInterval(poller);
   }, [mergeStatus, mergeJobId, setHasRealProgress, setMergeProgress, setMergeStageText, setLastProgressUpdate, setMergeStatus, setMergeError, onError, montage.setOutputFile]);
 
-  useEffect(() => {
-    if (mergeStatus !== 'processing') {
-      return undefined;
-    }
-
-    const timer = window.setInterval(() => {
-      // Only creep forward during a genuine stall (no real backend update
-      // for 5s+, e.g. during the initial probe/analysis phase before the
-      // first clip event arrives) - this used to nudge the bar forward on
-      // every tick regardless of whether real updates were flowing, which
-      // raced it to 99% within ~90s no matter how long the actual render
-      // took. Real montages (2-minute cap, dozens of clips) routinely run
-      // longer than that, so the bar would sit pinned at 99% - detached
-      // from the real percent - for most of the render while the stage
-      // text (driven by real events) correctly kept crawling through
-      // "Preparing clip N/M". Gating this on the stall check keeps the
-      // displayed percent equal to the real percent whenever real updates
-      // are actually arriving, so percent and text always describe the
-      // same moment.
-      if (Date.now() - lastProgressUpdate <= 5000) {
-        return;
-      }
-      setMergeProgress((current) => {
-        if (current >= 99) {
-          return current;
-        }
-        const next = current < 92 ? current + 0.8 : current + 0.35;
-        maxProgressRef.current = Math.max(maxProgressRef.current, next);
-        return next;
-      });
-      setMergeStageText((current) => current || 'Preparing montage...');
-    }, 700);
-
-    return () => window.clearInterval(timer);
-  }, [hasRealProgress, mergeStatus, lastProgressUpdate, setMergeProgress, setMergeStageText]);
 
   const isProcessing = mergeStatus === 'processing';
   const isSocketUnavailable = !socket && Boolean(socketError);
@@ -1536,9 +1532,10 @@ export default function MontageTab({ loadVideoInEditor, onError, onShurfer, onRe
     setMergeJobId(newJobId);
     setMergeStatus('processing');
     setMergeProgress(0);
-    setMergeStageText('Preparing upload...');
+    setMergeStageText('Starting upload...');
     setMergeError('');
     setHasRealProgress(false);
+    setConnectionNote('');
     maxProgressRef.current = 0;
 
     const fd = new FormData();
@@ -1559,31 +1556,57 @@ export default function MontageTab({ loadVideoInEditor, onError, onShurfer, onRe
     fd.append('contrastPolish', String(contrastPolish));
     fd.append('skipStartSeconds', String(skipStartSeconds));
 
-    fetch(`${API_BASE}/api/create-montage`, {
-      method: 'POST',
-      credentials: 'include',
-      headers: {
-        'X-Job-Id': newJobId,
-        ...(socketId ? { 'X-Socket-Id': socketId } : {}),
-      },
-      body: fd,
-    })
-      .then((res) => {
-        // The server now accepts the job and responds immediately (202 +
-        // jobId) rather than holding this connection open for the whole
-        // render - completion/errors arrive via the socket listener above
-        // or the poller below instead of this response, so a screen
-        // lock/sleep or backgrounded tab dropping THIS connection can no
-        // longer surface as a hard failure partway through a real render.
-        if (!res.ok) return res.json().then((data) => Promise.reject(new Error(data.error || 'Montage failed')));
-        return res.json();
-      })
-      .catch((err) => {
-        const msg = err.message || 'Failed to create montage';
-        setMergeError(msg);
-        setMergeStatus('error');
-        onError?.(msg);
-      });
+    // XMLHttpRequest rather than fetch: only XHR reports how many bytes of
+    // the upload have actually been sent, so the bar shows the real upload
+    // instead of a guess. The server answers (202 + jobId) as soon as the
+    // files have arrived; completion then comes via the socket or the poller.
+    const fail = (msg) => {
+      uploadingRef.current = false;
+      setUploading(false);
+      setMergeError(msg);
+      setMergeStatus('error');
+      onError?.(msg);
+    };
+    const toMb = (bytes) => (bytes / 1048576).toFixed(1);
+    const xhr = new XMLHttpRequest();
+    xhr.open('POST', `${API_BASE}/api/create-montage`);
+    xhr.withCredentials = true;
+    xhr.setRequestHeader('X-Job-Id', newJobId);
+    if (socketId) xhr.setRequestHeader('X-Socket-Id', socketId);
+    xhr.upload.onprogress = (event) => {
+      if (!event.lengthComputable || !event.total) return;
+      const percent = Math.min(100, Math.floor((event.loaded / event.total) * 100));
+      setMergeProgress(percent);
+      setMergeStageText(`Uploading ${percent}% · ${toMb(event.loaded)} of ${toMb(event.total)} MB`);
+      setConnectionNote('');
+    };
+    xhr.upload.onload = () => {
+      // Every byte is sent; the server is saving the files. The bar now
+      // restarts for the server's own progress.
+      setMergeStageText('Upload complete - the server is receiving your files...');
+    };
+    xhr.onload = () => {
+      uploadingRef.current = false;
+      setUploading(false);
+      let data = {};
+      try { data = JSON.parse(xhr.responseText || '{}'); } catch { /* non-JSON error page */ }
+      if (xhr.status < 200 || xhr.status >= 300) {
+        fail(xhr.status === 413
+          ? 'These files are too large for the server. Try shorter or smaller videos.'
+          : data.error || (xhr.status >= 500 ? `The server failed while receiving your files (error ${xhr.status}). Please try again.` : 'Montage failed'));
+        return;
+      }
+      maxProgressRef.current = 0;
+      setMergeProgress(0);
+      setMergeStageText('Upload received - starting your montage...');
+    };
+    xhr.onerror = () => fail(navigator.onLine === false
+      ? 'Upload interrupted - you went offline. Check your internet connection and try again.'
+      : 'Upload interrupted - the connection to the server dropped. Check your internet connection and try again.');
+    xhr.onabort = () => fail('Upload cancelled.');
+    uploadingRef.current = true;
+    setUploading(true);
+    xhr.send(fd);
   }
 
   // Lets a user start a second (or third...) montage while this one is
@@ -1636,7 +1659,7 @@ export default function MontageTab({ loadVideoInEditor, onError, onShurfer, onRe
           }}
         >
           {isProcessing ? (
-            <><div style={{ width:14, height:14 }}><Icon.Spin /></div> Merging {Math.round(mergeProgress)}%</>
+            <><div style={{ width:14, height:14 }}><Icon.Spin /></div> {uploading ? 'Uploading' : 'Merging'} {Math.round(mergeProgress)}%</>
           ) : (
             <><div style={{ width:14, height:14 }}><Icon.Film /></div> Merge Montage</>
           )}
@@ -1677,7 +1700,7 @@ export default function MontageTab({ loadVideoInEditor, onError, onShurfer, onRe
               <div style={{ width:'100%', maxWidth:840, minHeight:280, display:'flex', alignItems:'center', justifyContent:'center' }}>
                 {mergeStatus === 'processing' && (
                   <div style={{ display:'flex', flexDirection:'column', alignItems:'center', gap:18 }}>
-                    <ProcessingPreview progress={mergeProgress} status={mergeStageText} totalEstimatedTime={mergeTotalEstimatedTime} timeSpent={mergeTimeSpent} timeLeft={mergeTimeLeft} />
+                    <ProcessingPreview progress={mergeProgress} status={mergeStageText} totalEstimatedTime={mergeTotalEstimatedTime} timeSpent={mergeTimeSpent} timeLeft={mergeTimeLeft} uploading={uploading} note={connectionNote} />
                     <button
                       type="button"
                       onClick={handleOpenNewMontageTab}
