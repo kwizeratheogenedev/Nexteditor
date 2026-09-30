@@ -1,5 +1,6 @@
 import { useEffect, useRef, useState, useCallback } from 'react';
 import { useSocket } from '../context/SocketContext';
+import { useAuth } from '../context/AuthContext.jsx';
 import { usePersistedMontageState } from '../hooks/usePersistedMontageState';
 import API_BASE, { API_ENDPOINTS } from '../config';
 
@@ -670,7 +671,7 @@ function IdlePreview({ readyCount }) {
 
 // Shows only what is really happening: while uploading, the share of the
 // files actually sent; after that, the percent the server reports.
-function ProcessingPreview({ progress, status, totalEstimatedTime, timeSpent, timeLeft, uploading, note }) {
+function ProcessingPreview({ progress, status, totalEstimatedTime, timeSpent, timeLeft, uploading, note, onDevice }) {
   const fallbackStatus = uploading ? 'Uploading your files...' : 'Waiting for the server...';
 
   const r = 44;
@@ -699,7 +700,7 @@ function ProcessingPreview({ progress, status, totalEstimatedTime, timeSpent, ti
         </div>
       </div>
       <div>
-        <div style={{ fontSize:15, fontWeight:600, color:'var(--accent-purple-light)', marginBottom:6 }}>{uploading ? 'Uploading Your Files' : 'Creating Your Montage'}</div>
+        <div style={{ fontSize:15, fontWeight:600, color:'var(--accent-purple-light)', marginBottom:6 }}>{uploading ? 'Uploading Your Files' : onDevice ? 'Creating Your Montage on This Device' : 'Creating Your Montage'}</div>
         <div style={{ fontSize:12, color:'var(--text-muted)' }}>{status || fallbackStatus}</div>
         {note && <div role="status" style={{ fontSize:12, color:'var(--warning, #f5a524)', marginTop:6 }}>{note}</div>}
         {(totalEstimatedTime > 0 || timeSpent > 0 || timeLeft > 0) && (
@@ -982,7 +983,8 @@ function SuccessPreview({ outputFile, loadVideoInEditor, onShurfer, onReset }) {
   const [showSpeedMenu, setShowSpeedMenu] = useState(false);
   const [showYoutubePanel, setShowYoutubePanel] = useState(false);
   const hideTimerRef = useRef(null);
-  const src = outputFile.fileName ? `${API_BASE}/clips/${outputFile.fileName}` : '';
+  const isLocal = Boolean(outputFile.localUrl);
+  const src = isLocal ? outputFile.localUrl : outputFile.fileName ? `${API_BASE}/clips/${outputFile.fileName}` : '';
 
   const resetHideTimer = useCallback(() => {
     if (hideTimerRef.current) clearTimeout(hideTimerRef.current);
@@ -1053,6 +1055,16 @@ function SuccessPreview({ outputFile, loadVideoInEditor, onShurfer, onReset }) {
 
   const handleDownload = async () => {
     if (!src) return;
+    if (isLocal) {
+      // Already on this device - save the in-memory file directly.
+      const link = document.createElement('a');
+      link.href = src;
+      link.download = outputFile.downloadName || outputFile.fileName || 'montage.mp4';
+      document.body.appendChild(link);
+      link.click();
+      document.body.removeChild(link);
+      return;
+    }
     setIsDownloading(true);
     try {
       const res = await fetch(src);
@@ -1247,20 +1259,25 @@ function SuccessPreview({ outputFile, loadVideoInEditor, onShurfer, onReset }) {
         <div style={{ flex:1, padding:'10px 12px', background:'var(--panel-surface-0)', borderRadius:10, border:'1px solid var(--panel-surface-2)' }}>
           <div style={{ fontSize:12, fontWeight:600, color:'var(--panel-text-2)', whiteSpace:'nowrap', overflow:'hidden', textOverflow:'ellipsis', marginBottom:4 }}>{outputFile.downloadName || outputFile.fileName}</div>
           <div style={{ fontSize:12, color:'var(--panel-border-strong)' }}>{formatDuration(outputFile.duration)} · {formatFileSize(outputFile.size)}</div>
+          {isLocal && (
+            <div style={{ fontSize:12, color:'var(--panel-text-3)', marginTop:6, lineHeight:1.4 }}>
+              Made on this device (beta) - it isn't stored on the server, so download it to keep it. Editing, YouTube and Shorts need a server render for now.
+            </div>
+          )}
         </div>
         <div style={{ display:'flex', flexDirection:'column', gap:6 }}>
           <button onClick={handleDownload} style={{ display:'flex', alignItems:'center', gap:6, padding:'7px 14px', background:'var(--accent-violet)', border:'none', borderRadius:9, color:'#fff', fontSize:12, fontWeight:600, cursor:'pointer', whiteSpace:'nowrap' }}>
             <div style={{ width:13, height:13 }}><Icon.Download /></div> {isDownloading ? 'Downloading...' : 'Download'}
           </button>
-          <button onClick={() => loadVideoInEditor(outputFile.filePath, outputFile.fileName)} style={{ display:'flex', alignItems:'center', gap:6, padding:'7px 14px', background:'transparent', border:'1px solid rgba(124,58,237,.4)', borderRadius:9, color:'var(--accent-purple)', fontSize:12, fontWeight:600, cursor:'pointer', whiteSpace:'nowrap' }}>
+          {!isLocal && <button onClick={() => loadVideoInEditor(outputFile.filePath, outputFile.fileName)} style={{ display:'flex', alignItems:'center', gap:6, padding:'7px 14px', background:'transparent', border:'1px solid rgba(124,58,237,.4)', borderRadius:9, color:'var(--accent-purple)', fontSize:12, fontWeight:600, cursor:'pointer', whiteSpace:'nowrap' }}>
             <div style={{ width:13, height:13 }}><Icon.Edit /></div> Edit
-          </button>
-          <button onClick={() => setShowYoutubePanel(true)} style={{ display:'flex', alignItems:'center', gap:6, padding:'7px 14px', background:'rgba(255,0,51,.12)', border:'1px solid rgba(255,0,51,.35)', borderRadius:9, color:'var(--danger)', fontSize:12, fontWeight:600, cursor:'pointer', whiteSpace:'nowrap' }}>
+          </button>}
+          {!isLocal && <button onClick={() => setShowYoutubePanel(true)} style={{ display:'flex', alignItems:'center', gap:6, padding:'7px 14px', background:'rgba(255,0,51,.12)', border:'1px solid rgba(255,0,51,.35)', borderRadius:9, color:'var(--danger)', fontSize:12, fontWeight:600, cursor:'pointer', whiteSpace:'nowrap' }}>
             <div style={{ width:13, height:13 }}><Icon.Youtube /></div> Upload to YouTube
-          </button>
-          <button onClick={onShurfer} style={{ display:'flex', alignItems:'center', gap:6, padding:'7px 14px', background:'rgba(34,197,94,.18)', border:'1px solid rgba(34,197,94,.32)', borderRadius:9, color:'var(--success)', fontSize:12, fontWeight:600, cursor:'pointer', whiteSpace:'nowrap' }}>
+          </button>}
+          {!isLocal && <button onClick={onShurfer} style={{ display:'flex', alignItems:'center', gap:6, padding:'7px 14px', background:'rgba(34,197,94,.18)', border:'1px solid rgba(34,197,94,.32)', borderRadius:9, color:'var(--success)', fontSize:12, fontWeight:600, cursor:'pointer', whiteSpace:'nowrap' }}>
             <div style={{ width:13, height:13 }}><Icon.Star /></div> Shurfer
-          </button>
+          </button>}
           <button onClick={onReset} style={{ display:'flex', alignItems:'center', justifyContent:'center', padding:'7px 14px', background:'transparent', border:'1px solid var(--panel-surface-3)', borderRadius:9, color:'var(--text-muted)', fontSize:12, cursor:'pointer' }}>
             New
           </button>
@@ -1271,7 +1288,7 @@ function SuccessPreview({ outputFile, loadVideoInEditor, onShurfer, onReset }) {
   );
 }
 
-function ErrorPreview({ error, onRetry }) {
+function ErrorPreview({ error, onRetry, onServerFallback }) {
   return (
     <div className="mt-fade-up" style={{ maxWidth:360, display:'flex', flexDirection:'column', alignItems:'center', gap:14, textAlign:'center' }}>
       <div style={{ width:56, height:56, borderRadius:16, background:'rgba(239,68,68,.1)', border:'1px solid rgba(239,68,68,.2)', display:'flex', alignItems:'center', justifyContent:'center', color:'var(--danger)' }}>
@@ -1285,6 +1302,12 @@ function ErrorPreview({ error, onRetry }) {
         style={{ padding:'8px 24px', background:'rgba(239,68,68,.15)', border:'1px solid rgba(239,68,68,.3)', borderRadius:9, color:'var(--danger)', fontSize:12, fontWeight:600, cursor:'pointer' }}>
         Try Again
       </button>
+      {onServerFallback && (
+        <button onClick={onServerFallback}
+          style={{ padding:'8px 24px', background:'var(--accent-violet)', border:'none', borderRadius:9, color:'#fff', fontSize:12, fontWeight:600, cursor:'pointer' }}>
+          Render on the server instead
+        </button>
+      )}
     </div>
   );
 }
@@ -1294,6 +1317,22 @@ function ErrorPreview({ error, onRetry }) {
 export default function MontageTab({ loadVideoInEditor, onError, onShurfer, onReset }) {
   injectStyles();
   const { socket, socketId, socketError } = useSocket();
+  const { user } = useAuth();
+
+  // "Render on this device (beta)": admins only while it's being tested. The
+  // server render below stays the default and is unchanged.
+  const canRenderOnDevice = Boolean(user?.isAdmin);
+  const [renderMode, setRenderMode] = useState(() => {
+    try { return localStorage.getItem('nex.montage.renderMode') === 'device' ? 'device' : 'server'; } catch { return 'server'; }
+  });
+  const onDevice = canRenderOnDevice && renderMode === 'device';
+  const chooseRenderMode = (mode) => {
+    setRenderMode(mode);
+    try { localStorage.setItem('nex.montage.renderMode', mode); } catch { /* preference only */ }
+  };
+  const [deviceFailed, setDeviceFailed] = useState(false);
+  const deviceAbortRef = useRef(null);
+  const localUrlRef = useRef('');
 
   // A `montageSession` URL param namespaces this tab's persisted state (see
   // usePersistedMontageState) so it can run a montage independently of any
@@ -1349,6 +1388,9 @@ export default function MontageTab({ loadVideoInEditor, onError, onShurfer, onRe
   } = montage;
 
   const handleReset = useCallback(() => {
+    deviceAbortRef.current?.abort();
+    if (localUrlRef.current) URL.revokeObjectURL(localUrlRef.current);
+    localUrlRef.current = '';
     clearAll();
     onReset?.();
   }, [clearAll, onReset]);
@@ -1523,8 +1565,101 @@ export default function MontageTab({ loadVideoInEditor, onError, onShurfer, onRe
   const hasAudio = audio.status === 'ready';
   const canMerge = readyCount >= 2 && hasAudio && !isProcessing;
 
+  const releaseLocalResult = () => {
+    if (localUrlRef.current) URL.revokeObjectURL(localUrlRef.current);
+    localUrlRef.current = '';
+  };
+
+  // Stop a device render if the page/tab goes away, and free its file.
+  useEffect(() => () => {
+    deviceAbortRef.current?.abort();
+    releaseLocalResult();
+  }, []);
+
   const handleMerge = () => {
     if (!canMerge || isProcessing) return;
+    setDeviceFailed(false);
+    if (onDevice) {
+      handleMergeOnDevice();
+      return;
+    }
+    handleMergeOnServer();
+  };
+
+  // Everything happens in this tab: files are read from the device, rendered
+  // with its video hardware (see montage/local/) and the result stays here.
+  const handleMergeOnDevice = async () => {
+    const chosen = videos.filter((v) => v.status === 'ready');
+    const fail = (message) => {
+      setMergeError(message);
+      setMergeStatus('error');
+      setDeviceFailed(true);
+      onError?.(message);
+    };
+    releaseLocalResult();
+    setMergeJobId('');
+    setMergeStatus('processing');
+    setMergeProgress(0);
+    setMergeStageText('Checking what this device can do...');
+    setMergeError('');
+    setMergeTotalEstimatedTime(0);
+    setMergeTimeSpent(0);
+    setMergeTimeLeft(0);
+    setConnectionNote('Keep this tab open and visible until it finishes.');
+    maxProgressRef.current = 0;
+
+    if (chosen.some((v) => !v.file) || !audio.file) {
+      fail('Rendering on this device (beta) needs files chosen from this device. Videos or songs added from a link are on the server - render on the server instead.');
+      return;
+    }
+    const startedAt = Date.now();
+    const controller = new AbortController();
+    deviceAbortRef.current = controller;
+    try {
+      const { checkLocalMontageSupport, renderMontageLocally } = await import('../montage/local/renderMontageLocally.js');
+      const support = await checkLocalMontageSupport();
+      if (!support.ok) {
+        fail(support.reason);
+        return;
+      }
+      const result = await renderMontageLocally({
+        videoFiles: chosen.map((v) => v.file),
+        audioFile: audio.file,
+        audioCodec: support.audioCodec,
+        settings: { syncMode, tempoSensitivity, videoQuality, beautyStyle, enhanceMotion, colorBoost, contrastPolish, skipStartSeconds },
+        signal: controller.signal,
+        onProgress: ({ percent, stage }) => {
+          setMergeProgress(percent);
+          setMergeStageText(stage);
+          setMergeTimeSpent(Math.round((Date.now() - startedAt) / 1000));
+        },
+      });
+      const url = URL.createObjectURL(result.blob);
+      localUrlRef.current = url;
+      const baseName = (audio.file.name || 'montage').replace(/\.[^.]+$/, '');
+      montage.setOutputFile({
+        filePath: '',
+        fileName: `montage-${Date.now()}.mp4`,
+        downloadName: `${baseName} montage.mp4`,
+        duration: result.duration,
+        size: result.size,
+        localUrl: url,
+      });
+      setConnectionNote('');
+      setMergeProgress(100);
+      setMergeStageText('Complete');
+      setMergeStatus('success');
+    } catch (error) {
+      if (error?.name === 'AbortError') return;
+      console.error('Device montage failed', error);
+      fail(error?.message || 'Rendering on this device failed.');
+    } finally {
+      setConnectionNote('');
+      deviceAbortRef.current = null;
+    }
+  };
+
+  const handleMergeOnServer = () => {
     // Read synchronously (not from mergeJobId state, which won't reflect
     // this until after the state update flushes) so it's available
     // immediately below for the X-Job-Id header.
@@ -1644,6 +1779,21 @@ export default function MontageTab({ loadVideoInEditor, onError, onShurfer, onRe
           )}
         </div>
 
+        <div style={{ display:'flex', alignItems:'center', gap:12 }}>
+        {canRenderOnDevice && (
+          <div role="radiogroup" aria-label="Where to render" title="Beta: make the montage on this device instead of uploading it"
+            style={{ display:'flex', alignItems:'center', gap:2, padding:3, borderRadius:10, background:'var(--panel-surface-1)', fontSize:12 }}>
+            <span style={{ color:'var(--panel-text-3)', padding:'0 6px' }}>Render on</span>
+            {[['server', 'Server'], ['device', 'This device (beta)']].map(([mode, label]) => (
+              <button key={mode} type="button" role="radio" aria-checked={renderMode === mode} disabled={isProcessing}
+                onClick={() => chooseRenderMode(mode)}
+                style={{ height:28, padding:'0 10px', borderRadius:8, border:'none', cursor: isProcessing ? 'not-allowed' : 'pointer', fontSize:12, fontWeight:600,
+                  background: renderMode === mode ? 'var(--accent-violet)' : 'transparent', color: renderMode === mode ? '#fff' : 'var(--panel-text-2)' }}>
+                {label}
+              </button>
+            ))}
+          </div>
+        )}
         {/* merge button */}
         <button
           className="mt-merge-btn"
@@ -1664,6 +1814,7 @@ export default function MontageTab({ loadVideoInEditor, onError, onShurfer, onRe
             <><div style={{ width:14, height:14 }}><Icon.Film /></div> Merge Montage</>
           )}
         </button>
+        </div>
       </div>
 
       {/* ── Body: source setup or preview page */}
@@ -1700,7 +1851,7 @@ export default function MontageTab({ loadVideoInEditor, onError, onShurfer, onRe
               <div style={{ width:'100%', maxWidth:840, minHeight:280, display:'flex', alignItems:'center', justifyContent:'center' }}>
                 {mergeStatus === 'processing' && (
                   <div style={{ display:'flex', flexDirection:'column', alignItems:'center', gap:18 }}>
-                    <ProcessingPreview progress={mergeProgress} status={mergeStageText} totalEstimatedTime={mergeTotalEstimatedTime} timeSpent={mergeTimeSpent} timeLeft={mergeTimeLeft} uploading={uploading} note={connectionNote} />
+                    <ProcessingPreview progress={mergeProgress} status={mergeStageText} totalEstimatedTime={mergeTotalEstimatedTime} timeSpent={mergeTimeSpent} timeLeft={mergeTimeLeft} uploading={uploading} note={connectionNote} onDevice={onDevice && !mergeJobId} />
                     <button
                       type="button"
                       onClick={handleOpenNewMontageTab}
@@ -1713,7 +1864,8 @@ export default function MontageTab({ loadVideoInEditor, onError, onShurfer, onRe
                   </div>
                 )}
                 {mergeStatus === 'success' && <SuccessPreview outputFile={outputFile} loadVideoInEditor={loadVideoInEditor} onShurfer={onShurfer} onReset={handleReset} />}
-                {mergeStatus === 'error' && <ErrorPreview error={mergeError} onRetry={() => { setMergeStatus('idle'); setMergeError(''); setMergeProgress(0); setMergeStageText(''); }} />}
+                {mergeStatus === 'error' && <ErrorPreview error={mergeError} onRetry={() => { setMergeStatus('idle'); setMergeError(''); setMergeProgress(0); setMergeStageText(''); setDeviceFailed(false); }}
+                  onServerFallback={deviceFailed ? () => { chooseRenderMode('server'); setDeviceFailed(false); handleMergeOnServer(); } : undefined} />}
               </div>
             </div>
           )}

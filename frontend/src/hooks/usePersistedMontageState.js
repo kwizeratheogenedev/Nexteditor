@@ -129,6 +129,12 @@ export function usePersistedMontageState(sessionId = '') {
           // (older saved state from before this change won't have one, and
           // genuinely has no way to resume, so that case still falls back
           // to the old "treat as interrupted" behavior).
+          // A montage made on the device (beta) lived only in that tab's
+          // memory - after a reload there is nothing left to show.
+          if (processingState.outputFile?.localUrl) {
+            processingState.mergeStatus = 'idle';
+            processingState.outputFile = null;
+          }
           const wasStillProcessing = processingState.mergeStatus === 'processing';
           const resumableJobId = wasStillProcessing ? (processingState.mergeJobId || '') : '';
           const trulyInterrupted = wasStillProcessing && !resumableJobId;
