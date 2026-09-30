@@ -1697,6 +1697,19 @@ input[type="color"] {
   box-shadow: 0 20px 48px rgba(0, 0, 0, 0.35);
 }
 
+.error-toast-action {
+  flex-shrink: 0;
+  padding: 4px 10px;
+  border-radius: 8px;
+  border: 1px solid rgba(255, 217, 217, 0.5);
+  background: rgba(255, 255, 255, 0.12);
+  color: #fff;
+  font-size: 12px;
+  font-weight: 600;
+  cursor: pointer;
+  white-space: nowrap;
+}
+
 .error-toast-close {
   margin-left: auto;
   background: transparent;

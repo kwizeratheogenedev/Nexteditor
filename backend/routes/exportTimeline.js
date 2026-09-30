@@ -189,6 +189,51 @@ function sanitizeDownloadName(name) {
   return `${base}.mp4`;
 }
 
+// POST /api/editor/export/device-permit - for "Export on this device"
+// (beta): the video is made in the browser, so nothing is uploaded, but the
+// same plan rules apply. This runs the server export's checks (4K is Pro,
+// free exports are capped in length, adjustment layers are Pro, the monthly
+// quota) and counts the export, then tells the page which limits to apply
+// while rendering: free users get the 720p cap and the watermark, exactly
+// as freeTierLimits.js does on the server.
+router.post('/device-permit', requireAuth, async (req, res) => {
+  try {
+    const userIsPro = isPro(req.user);
+    const canvas = resolveCanvas(JSON.stringify(req.body?.canvasSize || {}), userIsPro);
+    const duration = Number(req.body?.duration);
+    if (!Number.isFinite(duration) || duration <= 0) {
+      res.status(400).json({ error: 'Nothing to export yet.' });
+      return;
+    }
+    if (!userIsPro && duration > FREE_EXPORT_MAX_SECONDS) {
+      res.status(402).json({ error: `Free plan exports are limited to ${FREE_EXPORT_MAX_SECONDS / 60} minutes. Upgrade to Pro for longer exports.`, code: 'UPGRADE_REQUIRED' });
+      return;
+    }
+    if (!userIsPro && req.body?.hasAdjustmentLayer) {
+      res.status(402).json({ error: 'Adjustment layers are a Pro feature. Remove them or upgrade to export.', code: 'UPGRADE_REQUIRED' });
+      return;
+    }
+    const quota = await checkAndConsumeExportQuota(req.user);
+    if (!quota.allowed) {
+      res.status(402).json({ error: quota.reason, code: 'UPGRADE_REQUIRED' });
+      return;
+    }
+    // freeTierLimits.js: long edge capped at 1280, even dimensions.
+    let output = { width: canvas.width, height: canvas.height };
+    if (!userIsPro) {
+      const scale = Math.min(1, 1280 / Math.max(canvas.width, canvas.height));
+      output = {
+        width: Math.round((canvas.width * scale) / 2) * 2,
+        height: Math.round((canvas.height * scale) / 2) * 2,
+      };
+    }
+    res.json({ canvas, output, watermark: !userIsPro });
+  } catch (error) {
+    const status = error.code === 'UPGRADE_REQUIRED' ? 402 : error.code === 'INVALID_CANVAS' ? 400 : 500;
+    res.status(status).json({ error: error.message || 'Could not start the export.', code: error.code });
+  }
+});
+
 router.post('/', requireAuth, upload.any(), async (req, res) => {
   const tempFiles = [];
   const outputFiles = [];

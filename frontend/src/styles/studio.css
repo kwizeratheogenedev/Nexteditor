@@ -157,6 +157,30 @@
   box-shadow: none;
 }
 
+/* Admin-only beta switch next to Export: render the export in the browser. */
+.st-device-toggle {
+  min-height: 40px;
+  padding: 0 14px;
+  border-radius: 8px;
+  border: 1px solid var(--st-line-strong);
+  background: transparent;
+  color: var(--st-text-2);
+  font-size: 13px;
+  font-weight: 600;
+  cursor: pointer;
+}
+
+.st-device-toggle.is-on {
+  border-color: var(--st-accent);
+  background: var(--st-accent-dim);
+  color: var(--st-text);
+}
+
+.st-device-toggle:disabled {
+  opacity: 0.6;
+  cursor: not-allowed;
+}
+
 /* ---------- Sidebar ---------- */
 
 .st-sidebar {

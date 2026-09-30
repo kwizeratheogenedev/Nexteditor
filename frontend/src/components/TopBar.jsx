@@ -9,7 +9,7 @@ const CLOUD = 'M7 18a5 5 0 1 1 .9-9.9A6 6 0 0 1 19 10a4 4 0 0 1-1 7.9z';
 
 const MODE_LABEL = { media: 'Montage', shorts: 'Shorts', longmix: 'LongMix Studio', captions: 'Captions' };
 
-function TopBar({ activeTab, onExport, exporting = false, exportProgress = 0, projectName, currentProjectId, projectSyncStatus, onSaveProject, onOpenProjects, canvasSize, onCanvasSizeChange }) {
+function TopBar({ activeTab, onExport, exporting = false, exportProgress = 0, projectName, currentProjectId, projectSyncStatus, onSaveProject, onOpenProjects, canvasSize, onCanvasSizeChange, deviceExport = false, onDeviceExportChange }) {
   const { user } = useAuth();
 
   // Lets usage analytics know which tool (Editor, Montage, ...) is open.
@@ -79,6 +79,12 @@ function TopBar({ activeTab, onExport, exporting = false, exportProgress = 0, pr
                 <CanvasSettingsMenu canvasSize={canvasSize} onChange={onCanvasSizeChange} onClose={() => setCanvasMenuOpen(false)} />
               )}
             </span>
+            {user?.isAdmin && onDeviceExportChange && (
+              <button type="button" className={`st-device-toggle${deviceExport ? ' is-on' : ''}`} aria-pressed={deviceExport} disabled={exporting}
+                title="Beta: render the export in this browser instead of uploading it" onClick={() => onDeviceExportChange(!deviceExport)}>
+                On device (beta)
+              </button>
+            )}
             <button type="button" className="topbar-export st-export" disabled={exporting} onClick={onExport}>
               {exporting ? `Exporting ${Math.round(exportProgress)}%` : 'Export'}
             </button>

@@ -1,6 +1,7 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import API_BASE_URL, { API_ENDPOINTS } from './config';
 import { useSocket } from './context/SocketContext';
+import { useAuth } from './context/AuthContext.jsx';
 import { EditorStateProvider } from './context/EditorStateContext';
 import { useMediaState } from './hooks/useMediaState';
 import { createSourceId, normalizeClip, createTextClip, createAudioClip, createAdjustmentClip, createImageClip } from './hooks/usePersistedEditorState';
@@ -198,6 +199,19 @@ function App() {
   const [editorPane, setEditorPane] = useState('edit');
   const [mediaFocusTick, setMediaFocusTick] = useState(0);
   const [exportDone, setExportDone] = useState(null);
+  // "On device (beta)" export - admins only while it's tested. Remembered in
+  // this browser; the server export stays the default.
+  const { user } = useAuth();
+  const [deviceExportPreferred, setDeviceExportPreferred] = useState(() => {
+    try { return localStorage.getItem('nex.editor.exportOnDevice') === '1'; } catch { return false; }
+  });
+  const deviceExport = Boolean(user?.isAdmin) && deviceExportPreferred;
+  const setDeviceExport = (on) => {
+    setDeviceExportPreferred(on);
+    try { localStorage.setItem('nex.editor.exportOnDevice', on ? '1' : '0'); } catch { /* preference only */ }
+  };
+  const [errorAction, setErrorAction] = useState(null);
+  const localExportUrlRef = useRef('');
   // Auto captions: null when idle, else the status line shown in the timeline.
   const [captionsStatus, setCaptionsStatus] = useState(null);
 
@@ -2417,7 +2431,7 @@ function App() {
     previewVideoRef.current?.requestFullscreen?.();
   };
 
-  const handleEditorExport = async () => {
+  const handleEditorExport = async ({ forceServer = false } = {}) => {
     if (!editorLaneZeroVideoClips.length) {
       setErrorText('Add at least one clip to the base video track before exporting.');
       return;
@@ -2450,6 +2464,15 @@ function App() {
       return !trackMeta?.[type]?.[laneIndex]?.hidden && clip.enabled !== false;
     });
 
+    if (deviceExport && !forceServer) {
+      try {
+        await exportOnDevice(exportableTimeline);
+      } finally {
+        setProcessing(false);
+      }
+      return;
+    }
+
     const { formData, missingSourceClipId } = buildExportFormData(exportableTimeline, editorCanvasSize, slugify(projectName) || 'nexeditor-export');
     if (missingSourceClipId) {
       setErrorText('One of your clips is missing its video file - try re-importing it.');
@@ -2481,6 +2504,77 @@ function App() {
       setProgress({ percent: 0, currentTime: '' });
     } finally {
       setProcessing(false);
+    }
+  };
+
+  // Renders the export in this browser (editor/localExport/): asks the server
+  // for permission first (same plan rules and quota, no video sent), then
+  // draws, mixes and encodes on the device and downloads the MP4.
+  const exportOnDevice = async (exportableTimeline) => {
+    const offerServer = (message) => {
+      setErrorText(message);
+      setErrorAction({
+        forText: message,
+        label: 'Export on the server instead',
+        run: () => handleEditorExport({ forceServer: true }),
+      });
+      setProgress({ percent: 0, currentTime: '' });
+    };
+    try {
+      const { exportTimelineLocally, checkLocalExportSupport, programDuration } = await import('./editor/localExport/exportTimelineLocally.js');
+      setProgress({ percent: 0, currentTime: 'Checking your plan...' });
+      const response = await fetch(`${API_BASE_URL}/api/editor/export/device-permit`, {
+        method: 'POST',
+        credentials: 'include',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          canvasSize: editorCanvasSize,
+          duration: programDuration(exportableTimeline),
+          hasAdjustmentLayer: exportableTimeline.some((clip) => clip.type === 'adjustment'),
+        }),
+      });
+      const permit = await response.json().catch(() => ({}));
+      if (!response.ok) {
+        // Plan limits apply wherever the video is made - no server offer.
+        setErrorText(permit.error || `The export could not start (error ${response.status}).`);
+        setProgress({ percent: 0, currentTime: '' });
+        return;
+      }
+      const support = await checkLocalExportSupport(permit.output.width, permit.output.height, permit.canvas.fps);
+      if (!support.ok) {
+        offerServer(support.reason);
+        return;
+      }
+      const result = await exportTimelineLocally({
+        clips: exportableTimeline,
+        trackMeta,
+        canvas: permit.canvas,
+        output: permit.output,
+        watermark: permit.watermark,
+        audioCodec: support.audioCodec,
+        onProgress: setProgress,
+      });
+      if (localExportUrlRef.current) URL.revokeObjectURL(localExportUrlRef.current);
+      const url = URL.createObjectURL(result.blob);
+      localExportUrlRef.current = url;
+      const fileName = `${slugify(projectName) || 'nexeditor-export'}.mp4`;
+      const link = document.createElement('a');
+      link.href = url;
+      link.download = fileName;
+      document.body.appendChild(link);
+      link.click();
+      link.remove();
+      setExportDone({
+        local: true,
+        localUrl: url,
+        fileName,
+        resolution: `${Math.min(result.width, result.height)}p`,
+        size: result.size,
+        savedToAccount: Boolean(currentProjectId),
+      });
+    } catch (error) {
+      console.error('Device export failed:', error);
+      offerServer(error?.message || 'Exporting on this device failed.');
     }
   };
 
@@ -2818,6 +2912,8 @@ function App() {
         activeTab={activeTab}
         onTabChange={setActiveTab}
         onExport={triggerExport}
+        deviceExport={deviceExport}
+        onDeviceExportChange={setDeviceExport}
         exporting={activeTab === 'editor' && processing}
         exportProgress={progress?.percent || 0}
         projectName={projectName}
@@ -2963,12 +3059,23 @@ function App() {
       )}
       <input ref={audioFileInputRef} type="file" accept="audio/*,video/*" onChange={handleAudioUpload} className="sr-only-input" style={{ display: 'none' }} />
       </EditorStateProvider>
-      <ErrorPopup errorText={errorText} setErrorText={setErrorText} />
+      <ErrorPopup errorText={errorText} setErrorText={setErrorText} action={errorAction} />
       {exportDone && (
         <ExportCompleteDialog
           result={exportDone}
           onClose={() => setExportDone(null)}
-          onDownloadAgain={() => downloadExportResult(exportDone.data).catch((error) => setErrorText(error.message))}
+          onDownloadAgain={() => {
+            if (exportDone.local) {
+              const link = document.createElement('a');
+              link.href = exportDone.localUrl;
+              link.download = exportDone.fileName;
+              document.body.appendChild(link);
+              link.click();
+              link.remove();
+              return;
+            }
+            downloadExportResult(exportDone.data).catch((error) => setErrorText(error.message));
+          }}
         />
       )}
       <JobsResumeBanner />
