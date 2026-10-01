@@ -1,6 +1,5 @@
 import { useEffect, useRef, useState, useCallback } from 'react';
 import { useSocket } from '../context/SocketContext';
-import { useAuth } from '../context/AuthContext.jsx';
 import { usePersistedMontageState } from '../hooks/usePersistedMontageState';
 import API_BASE, { API_ENDPOINTS } from '../config';
 
@@ -700,7 +699,7 @@ function ProcessingPreview({ progress, status, totalEstimatedTime, timeSpent, ti
         </div>
       </div>
       <div>
-        <div style={{ fontSize:15, fontWeight:600, color:'var(--accent-purple-light)', marginBottom:6 }}>{uploading ? 'Uploading Your Files' : onDevice ? 'Creating Your Montage on This Device' : 'Creating Your Montage'}</div>
+        <div style={{ fontSize:15, fontWeight:600, color:'var(--accent-purple-light)', marginBottom:6 }}>{uploading ? 'Uploading Your Files' : onDevice ? 'Creating Your Montage on Server 2' : 'Creating Your Montage'}</div>
         <div style={{ fontSize:12, color:'var(--text-muted)' }}>{status || fallbackStatus}</div>
         {note && <div role="status" style={{ fontSize:12, color:'var(--warning, #f5a524)', marginTop:6 }}>{note}</div>}
         {(totalEstimatedTime > 0 || timeSpent > 0 || timeLeft > 0) && (
@@ -1261,7 +1260,7 @@ function SuccessPreview({ outputFile, loadVideoInEditor, onShurfer, onReset }) {
           <div style={{ fontSize:12, color:'var(--panel-border-strong)' }}>{formatDuration(outputFile.duration)} · {formatFileSize(outputFile.size)}</div>
           {isLocal && (
             <div style={{ fontSize:12, color:'var(--panel-text-3)', marginTop:6, lineHeight:1.4 }}>
-              Made on this device (beta) - it isn't stored on the server, so download it to keep it. Editing, YouTube and Shorts need a server render for now.
+              Made on Server 2 - it isn't stored on the server, so download it to keep it. Editing, YouTube and Shorts need a Server 1 render for now.
             </div>
           )}
         </div>
@@ -1305,7 +1304,7 @@ function ErrorPreview({ error, onRetry, onServerFallback }) {
       {onServerFallback && (
         <button onClick={onServerFallback}
           style={{ padding:'8px 24px', background:'var(--accent-violet)', border:'none', borderRadius:9, color:'#fff', fontSize:12, fontWeight:600, cursor:'pointer' }}>
-          Render on the server instead
+          Try Server 1 instead
         </button>
       )}
     </div>
@@ -1317,11 +1316,11 @@ function ErrorPreview({ error, onRetry, onServerFallback }) {
 export default function MontageTab({ loadVideoInEditor, onError, onShurfer, onReset }) {
   injectStyles();
   const { socket, socketId, socketError } = useSocket();
-  const { user } = useAuth();
 
-  // "Render on this device (beta)": admins only while it's being tested. The
-  // server render below stays the default and is unchanged.
-  const canRenderOnDevice = Boolean(user?.isAdmin);
+  // Shown to every user as "Server 1" (server) / "Server 2" (this device) -
+  // was admin-only while it was being tested, now released to everyone.
+  // The server render stays the default and is unchanged.
+  const canRenderOnDevice = true;
   const [renderMode, setRenderMode] = useState(() => {
     try { return localStorage.getItem('nex.montage.renderMode') === 'device' ? 'device' : 'server'; } catch { return 'server'; }
   });
@@ -1600,7 +1599,7 @@ export default function MontageTab({ loadVideoInEditor, onError, onShurfer, onRe
     setMergeJobId('');
     setMergeStatus('processing');
     setMergeProgress(0);
-    setMergeStageText('Checking what this device can do...');
+    setMergeStageText('Checking what Server 2 can do...');
     setMergeError('');
     setMergeTotalEstimatedTime(0);
     setMergeTimeSpent(0);
@@ -1609,7 +1608,7 @@ export default function MontageTab({ loadVideoInEditor, onError, onShurfer, onRe
     maxProgressRef.current = 0;
 
     if (chosen.some((v) => !v.file) || !audio.file) {
-      fail('Rendering on this device (beta) needs files chosen from this device. Videos or songs added from a link are on the server - render on the server instead.');
+      fail('Server 2 needs files added directly from your computer. Videos or songs added from a link only work with Server 1 - switch to Server 1 instead.');
       return;
     }
     const startedAt = Date.now();
@@ -1652,7 +1651,7 @@ export default function MontageTab({ loadVideoInEditor, onError, onShurfer, onRe
     } catch (error) {
       if (error?.name === 'AbortError') return;
       console.error('Device montage failed', error);
-      fail(error?.message || 'Rendering on this device failed.');
+      fail(error?.message || 'Rendering on Server 2 failed.');
     } finally {
       setConnectionNote('');
       deviceAbortRef.current = null;
@@ -1781,10 +1780,10 @@ export default function MontageTab({ loadVideoInEditor, onError, onShurfer, onRe
 
         <div style={{ display:'flex', alignItems:'center', gap:12 }}>
         {canRenderOnDevice && (
-          <div role="radiogroup" aria-label="Where to render" title="Beta: make the montage on this device instead of uploading it"
+          <div role="radiogroup" aria-label="Where to render" title="Choose which server renders your montage"
             style={{ display:'flex', alignItems:'center', gap:2, padding:3, borderRadius:10, background:'var(--panel-surface-1)', fontSize:12 }}>
             <span style={{ color:'var(--panel-text-3)', padding:'0 6px' }}>Render on</span>
-            {[['server', 'Server'], ['device', 'This device (beta)']].map(([mode, label]) => (
+            {[['server', 'Server 1'], ['device', 'Server 2']].map(([mode, label]) => (
               <button key={mode} type="button" role="radio" aria-checked={renderMode === mode} disabled={isProcessing}
                 onClick={() => chooseRenderMode(mode)}
                 style={{ height:28, padding:'0 10px', borderRadius:8, border:'none', cursor: isProcessing ? 'not-allowed' : 'pointer', fontSize:12, fontWeight:600,
