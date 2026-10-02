@@ -1278,7 +1278,7 @@
 
 .st-busy {
   color: var(--st-accent);
-  max-width: 320px;
+  max-width: 620px;
   overflow: hidden;
   text-overflow: ellipsis;
 }

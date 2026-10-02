@@ -214,6 +214,11 @@ function App() {
   const localExportUrlRef = useRef('');
   // Auto captions: null when idle, else the status line shown in the timeline.
   const [captionsStatus, setCaptionsStatus] = useState(null);
+  // The running/unfinished caption job: what's transcribed so far (so it can
+  // be resumed), the way to stop it, and the latest handler for "Resume".
+  const captionJobRef = useRef(null);
+  const captionAbortRef = useRef(null);
+  const handleAutoCaptionsRef = useRef(null);
 
   // LongMix Studio (the songs/scenes/settings the wizard is collecting, and
   // whatever render is or was in flight) - persisted across a reload or
@@ -2030,8 +2035,30 @@ function App() {
   // server, then turned into caption clips on a text lane named "Captions"
   // (reused if it exists, else lane 0 when it holds no text, else a new
   // lane). Earlier caption clips are replaced; one undo brings them back.
+  // h:mm:ss for caption progress on long recordings.
+  const clockText = (seconds) => {
+    const total = Math.max(0, Math.round(seconds));
+    const h = Math.floor(total / 3600);
+    const m = Math.floor((total % 3600) / 60);
+    const sec = String(total % 60).padStart(2, '0');
+    return h > 0 ? `${h}:${String(m).padStart(2, '0')}:${sec}` : `${m}:${sec}`;
+  };
+  const captionProgressText = ({ phase, done, total, reason, seconds }) => {
+    const position = `${clockText(done)} of ${clockText(total)}`;
+    if (phase === 'waiting') {
+      if (reason === 'quota') return `Waiting for transcription quota - resumes in ${clockText(seconds)} (${position} done)`;
+      return `Connection problem - retrying in ${clockText(seconds)} (${position} done)`;
+    }
+    return phase === 'reading' ? `Reading audio - ${position}` : `Transcribing ${position}`;
+  };
+
   const handleAutoCaptions = async ({ language = 'auto', styleId = 'karaoke' } = {}) => {
-    if (captionsStatus) return;
+    // Chosen again while running = stop. What's transcribed so far is kept
+    // and can be resumed.
+    if (captionsStatus) {
+      captionAbortRef.current?.abort();
+      return;
+    }
     const sounding = editorTimeline.filter((clip) => {
       const type = laneTypeForClip(clip);
       return (clip.type === 'video' || clip.type === 'audio')
@@ -2040,14 +2067,39 @@ function App() {
     });
     setErrorText(null);
     setCaptionsStatus('Preparing audio...');
+    const controller = new AbortController();
+    captionAbortRef.current = controller;
     try {
-      const { words } = await requestTimelineCaptions({
-        clips: sounding,
-        canvasSize: editorCanvasSize,
-        language,
-        socketId,
-        onProgress: ({ message }) => { if (message) setCaptionsStatus(message); },
-      });
+      let words;
+      try {
+        // On this device: only small pieces of compressed speech are sent,
+        // never the video - what makes hours-long recordings possible. The
+        // job keeps what it has finished, so a stop, a dropped connection
+        // or a full transcription quota can be resumed.
+        const { transcribeTimelineOnDevice, captionJobSignature, createCaptionJobState } = await import('./captions/local/transcribeTimelineOnDevice.js');
+        const signature = captionJobSignature(sounding, language);
+        if (captionJobRef.current?.signature !== signature) captionJobRef.current = { signature, state: createCaptionJobState() };
+        ({ words } = await transcribeTimelineOnDevice({
+          clips: sounding,
+          language,
+          state: captionJobRef.current.state,
+          signal: controller.signal,
+          onProgress: (progress) => setCaptionsStatus(captionProgressText(progress)),
+        }));
+        captionJobRef.current = null;
+      } catch (error) {
+        if (error?.code !== 'UNSUPPORTED') throw error;
+        // This browser can't read the audio itself - upload to the server
+        // instead, as before (fine for short videos).
+        captionJobRef.current = null;
+        ({ words } = await requestTimelineCaptions({
+          clips: sounding,
+          canvasSize: editorCanvasSize,
+          language,
+          socketId,
+          onProgress: ({ message }) => { if (message) setCaptionsStatus(message); },
+        }));
+      }
       let laneIndex = trackMeta.text.findIndex((lane) => lane.name === CAPTIONS_LANE_NAME);
       const nonCaptionText = editorTextClips.filter((clip) => !isCaptionClip(clip));
       if (laneIndex < 0 && !nonCaptionText.some((clip) => (clip.trackIndex || 0) === 0)) laneIndex = 0;
@@ -2063,11 +2115,21 @@ function App() {
       setSelectedClipId(null);
       setSelectedClipIds([]);
     } catch (error) {
-      setErrorText(error.message || 'Could not generate captions.');
+      const done = captionJobRef.current?.state.cursor || 0;
+      const stopped = error?.name === 'AbortError';
+      const message = stopped
+        ? `Captions stopped${done > 0 ? ` at ${clockText(done)}` : ''}.`
+        : `${error.message || 'Could not generate captions.'}${done > 0 ? ` (${clockText(done)} already transcribed)` : ''}`;
+      setErrorText(message);
+      if (done > 0) {
+        setErrorAction({ forText: message, label: 'Resume captions', run: () => handleAutoCaptionsRef.current?.({ language, styleId }) });
+      }
     } finally {
       setCaptionsStatus(null);
+      captionAbortRef.current = null;
     }
   };
+  handleAutoCaptionsRef.current = handleAutoCaptions;
 
   // Adjustment layers (M13) always land on a brand-new video lane above
   // everything else - never lane 0, which stays the pure "base program"

@@ -10,7 +10,8 @@ import { getFileSource } from '../services/fileResolve.js';
 import { isVideoLikeClip, isImageClip } from '../services/filterGraph/clipKinds.js';
 import { clipOutputDuration } from '../services/filterGraph/effects/speedCurve.js';
 import { buildCaptionAudioGraph } from '../services/filterGraph/captionAudio.js';
-import { transcribeWords } from '../services/captionTranscription.js';
+import multer from 'multer';
+import { transcribeWords, transcribeAudioChunk } from '../services/captionTranscription.js';
 import { UPLOADS_DIR, CLIPS_DIR } from '../storagePaths.js';
 
 // POST /api/editor/captions - auto-captions for the editor timeline.
@@ -122,6 +123,54 @@ router.post('/', requireAuth, upload.any(), async (req, res) => {
   } finally {
     tempFiles.forEach((file) => fs.rm(file, { force: true }, () => {}));
     fs.rm(jobDir, { recursive: true, force: true }, () => {});
+  }
+});
+
+// POST /api/editor/captions/chunk - on-device captions. The browser extracts
+// the timeline's speech itself and sends it a few minutes at a time (a
+// couple of MB each), so no video is ever uploaded and no request runs for
+// long: a 3-hour video is ~18 small requests instead of one multi-GB upload.
+// Each piece goes straight to the transcription API from memory and its
+// words come back with times relative to that piece.
+// When the transcription quota is used up this answers 429 with
+// `retryAfter` (seconds) - the page waits and sends the same piece again.
+const chunkUpload = multer({
+  storage: multer.memoryStorage(),
+  limits: { fileSize: 25 * 1024 * 1024, files: 1 }, // the transcription API's own per-file limit
+  fileFilter: (_req, file, cb) => cb(null, Boolean(file.mimetype?.startsWith('audio/'))),
+}).single('audio');
+
+router.post('/chunk', requireAuth, (req, res, next) => {
+  chunkUpload(req, res, (err) => {
+    if (err) {
+      res.status(err.code === 'LIMIT_FILE_SIZE' ? 413 : 400).json({ error: err.code === 'LIMIT_FILE_SIZE' ? 'That piece of audio is too large.' : 'Could not read the audio.' });
+      return;
+    }
+    next();
+  });
+}, async (req, res) => {
+  try {
+    const languageKey = String(req.body.language || 'auto');
+    if (!(languageKey in CAPTION_LANGUAGES)) {
+      res.status(400).json({ error: 'That language is not supported for captions.' });
+      return;
+    }
+    if (!req.file?.buffer?.length) {
+      res.status(400).json({ error: 'No audio was received.' });
+      return;
+    }
+    const ext = { 'audio/webm': 'webm', 'audio/mp4': 'm4a', 'audio/wav': 'wav', 'audio/x-wav': 'wav', 'audio/ogg': 'ogg', 'audio/mpeg': 'mp3' }[req.file.mimetype.split(';')[0]] || 'webm';
+    const result = await transcribeAudioChunk(
+      { buffer: req.file.buffer, fileName: `chunk.${ext}`, mimeType: req.file.mimetype },
+      { language: CAPTION_LANGUAGES[languageKey] || undefined, prompt: String(req.body.prompt || '').slice(-400) || undefined },
+    );
+    res.json(result);
+  } catch (err) {
+    if (err.status === 429) {
+      res.status(429).json({ error: 'The transcription quota is used up for the moment.', code: 'TRANSCRIPTION_QUOTA', retryAfter: err.retryAfter || 60 });
+      return;
+    }
+    res.status(502).json({ error: err.message || 'Could not transcribe this part.' });
   }
 });
 

@@ -137,7 +137,10 @@ export function applyRateLimits(app, overrides = {}) {
   app.use(HEAVY_PATHS, limiter({
     windowMs: HOUR,
     limit: heavy,
-    skip: (req) => req.method !== 'POST',
+    // On-device captions send one small request per few minutes of audio
+    // (/captions/chunk) - a single long video is many of them, so they
+    // aren't counted as separate "renders"; the general limit still applies.
+    skip: (req) => req.method !== 'POST' || (req.originalUrl || '').includes('/api/editor/captions/chunk'),
     message: 'You have started a lot of renders in the last hour. Please wait a bit before starting another.',
   }));
 

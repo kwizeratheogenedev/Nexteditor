@@ -909,7 +909,7 @@ function BottomTimeline({
       title: 'Add',
       items: [
         onAddTextClip && { label: 'Text', onClick: onAddTextClip },
-        onAutoCaptions && { label: captionsStatus ? 'Auto captions (working...)' : 'Auto captions', onClick: onAutoCaptions },
+        onAutoCaptions && { label: captionsStatus ? 'Stop auto captions' : 'Auto captions', onClick: onAutoCaptions },
         onAddAudioClip && { label: 'Audio', onClick: onAddAudioClip },
         onAddTrack && { label: 'Video track', onClick: () => onAddTrack('video') },
         onAddTrack && { label: 'Text track', onClick: () => onAddTrack('text') },

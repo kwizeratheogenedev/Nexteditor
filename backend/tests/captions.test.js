@@ -118,6 +118,9 @@ test('the captions endpoint requires sign-in', async () => {
   try {
     const res = await fetch(`http://127.0.0.1:${server.address().port}/api/editor/captions`, { method: 'POST' });
     assert.equal(res.status, 401);
+    // The on-device captions' per-piece endpoint is behind sign-in too.
+    const chunk = await fetch(`http://127.0.0.1:${server.address().port}/api/editor/captions/chunk`, { method: 'POST' });
+    assert.equal(chunk.status, 401);
   } finally {
     await new Promise((r) => server.close(r));
   }

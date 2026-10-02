@@ -16,15 +16,30 @@ const REQUEST_TIMEOUT_MS = Number.parseInt(process.env.GROQ_TRANSCRIBE_TIMEOUT |
 // One Groq request. `words: true` also asks for per-word start/end times
 // (timestamp_granularities[]=word) - what word-highlighting caption styles
 // in the editor are built from.
-async function requestGroqTranscription(chunkPath, { language, prompt, words = false }) {
+// Groq says how long to wait either in a retry-after header (seconds) or in
+// its message ("Please try again in 12m3.5s").
+function retryAfterSeconds(response, message) {
+  const header = Number(response.headers.get('retry-after'));
+  if (Number.isFinite(header) && header > 0) return Math.ceil(header);
+  const match = /try again in\s+(?:(\d+)h)?\s*(?:(\d+)m)?\s*(?:([\d.]+)s)?/i.exec(message || '');
+  if (match && (match[1] || match[2] || match[3])) {
+    return Math.ceil((Number(match[1]) || 0) * 3600 + (Number(match[2]) || 0) * 60 + (Number(match[3]) || 0));
+  }
+  return 60;
+}
+
+// `chunk` is a file path, or { buffer, fileName, mimeType } for audio that
+// was uploaded straight into memory.
+async function requestGroqTranscription(chunk, { language, prompt, words = false }) {
   const apiKey = process.env.GROQ_API_KEY;
   if (!apiKey) {
     throw new Error('Captions aren\'t configured yet - add GROQ_API_KEY to backend/.env (free at console.groq.com/keys).');
   }
 
-  const fileBuffer = await fsp.readFile(chunkPath);
+  const inMemory = typeof chunk === 'object' && chunk !== null;
+  const fileBuffer = inMemory ? chunk.buffer : await fsp.readFile(chunk);
   const form = new FormData();
-  form.append('file', new Blob([fileBuffer], { type: 'audio/mpeg' }), 'chunk.mp3');
+  form.append('file', new Blob([fileBuffer], { type: inMemory ? chunk.mimeType : 'audio/mpeg' }), inMemory ? chunk.fileName : 'chunk.mp3');
   form.append('model', GROQ_MODEL);
   form.append('response_format', 'verbose_json');
   form.append('temperature', '0');
@@ -50,7 +65,12 @@ async function requestGroqTranscription(chunkPath, { language, prompt, words = f
         const data = await response.json();
         message = data?.error?.message || message;
       } catch { /* body wasn't JSON - keep the generic message */ }
-      throw new Error(message);
+      const error = new Error(message);
+      error.status = response.status;
+      // 429 = the transcription quota (audio seconds per hour/day) is used up
+      // for now; the caller can wait this long and send the same audio again.
+      if (response.status === 429) error.retryAfter = retryAfterSeconds(response, message);
+      throw error;
     }
     return await response.json();
   } catch (err) {
@@ -126,6 +146,20 @@ export async function transcribeWords(chunkPaths, { language, prompt, onProgress
   }
   if (!words.length) throw new Error('No speech was found in the timeline audio.');
   return { words, language: detectedLanguage };
+}
+
+// Word-level transcription of ONE piece of audio already in memory - what the
+// editor's on-device captions send, a few minutes at a time (see
+// routes/editorCaptions.js's /chunk). Times are relative to the piece.
+export async function transcribeAudioChunk({ buffer, fileName, mimeType }, { language, prompt } = {}) {
+  const data = await requestGroqTranscription({ buffer, fileName, mimeType }, { language, prompt, words: true });
+  const words = [];
+  (data.words || []).forEach((word) => {
+    const text = String(word.word || '').trim();
+    if (!text || !Number.isFinite(word.start) || !Number.isFinite(word.end)) return;
+    words.push({ text, start: +word.start.toFixed(3), end: +Math.max(word.end, word.start).toFixed(3) });
+  });
+  return { words, language: data.language || language || null };
 }
 
 function parseTimestamp(value) {
