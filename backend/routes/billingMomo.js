@@ -8,7 +8,7 @@ const router = express.Router();
 
 // Sandbox test amount - replace with the real Pro price once a production
 // MoMo subscription key/currency is configured (see momoClient.js).
-const PRO_PRICE_AMOUNT = process.env.MOMO_PRO_PRICE || '5';
+const PRO_PRICE_AMOUNT = process.env.MOMO_PRO_PRICE || '20';
 const PERIOD_MS = 30 * 24 * 60 * 60 * 1000;
 
 // Rwandan local formats (07xxxxxxxx / 7xxxxxxxx) become MSISDN 2507xxxxxxxx,

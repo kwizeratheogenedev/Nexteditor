@@ -211,7 +211,7 @@ export default function PricingPage() {
           </div>
           <div className="pricing-card featured">
             <h3>Pro</h3>
-            <div className="pricing-price">$9<small> / month</small></div>
+            <div className="pricing-price">$20<small> / month</small></div>
             <ul>
               {PRO_FEATURES.map((feature) => <li key={feature}>{feature}</li>)}
             </ul>
