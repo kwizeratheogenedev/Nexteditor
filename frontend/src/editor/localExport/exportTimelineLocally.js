@@ -15,6 +15,7 @@ import {
 import { clipDuration, laneTotalDuration } from '../../timeline/transitions';
 import { isImageClip, isVideoLikeClip } from '../../timeline/clipKinds';
 import { buildSpeedSegments, hasSpeedCurve } from '../../timeline/speedCurve';
+import { duckingGain, timeStretch } from './audioEffects';
 import {
   createCanvasPool,
   findActiveInLane,
@@ -30,9 +31,10 @@ import {
 // OfflineAudioContext following the server's rules, and the MP4 is encoded
 // with the device's own H.264 encoder. The server export is untouched.
 //
-// Audio in this first part: volume, keyframed volume, fades, crossfades
-// under transitions, reversed clips and speed changes (the pitch follows
-// the speed for now - keeping it is part 2, as is auto-ducking).
+// Audio follows the server's rules: volume, keyframed volume, fades,
+// crossfades under transitions, reversed and frozen clips, speed changes
+// with the pitch kept (like atempo) and auto-duck (like sidechaincompress) -
+// see audioEffects.js.
 
 const AUDIO_RATE = 48000;
 const AUDIO_BITRATE = 192_000;
@@ -135,7 +137,8 @@ async function decodeClipAudio(source, clip, signal) {
     }
     sample.close();
   }
-  if (clip.reversed) data.forEach((channel) => channel.reverse());
+  // Speed-curve clips aren't reversed on the server either (applyAudioSpeedCurve).
+  if (clip.reversed && !hasSpeedCurve(clip)) data.forEach((channel) => channel.reverse());
   const audioBuffer = new AudioBuffer({ length, numberOfChannels: channels, sampleRate: rate });
   data.forEach((channel, c) => audioBuffer.copyToChannel(channel, c));
   return audioBuffer;
@@ -158,37 +161,44 @@ function clipGainAt(clip, t, lanes) {
   return resolveClipGain(clip, local, duration, { allowReversed: true }) * mix;
 }
 
-async function mixAudio(clips, sources, duration, signal) {
-  const length = Math.max(1, Math.ceil(duration * AUDIO_RATE));
+// A clip's audio at its output speed with the pitch kept (like ffmpeg
+// atempo): one stretch for a plain speed change, one per segment for a
+// speed curve (the server's per-segment atempo + concat).
+function stretchClipAudio(buffer, clip) {
+  const rate = buffer.sampleRate;
+  const channels = Array.from({ length: buffer.numberOfChannels }, (_, c) => buffer.getChannelData(c));
+  let stretched;
+  if (hasSpeedCurve(clip)) {
+    const parts = buildSpeedSegments(clip).map((seg) => timeStretch(
+      channels.map((channel) => channel.subarray(Math.round(seg.sourceStart * rate), Math.round(seg.sourceEnd * rate))),
+      seg.speed || 1,
+      rate,
+    ));
+    stretched = channels.map((_, c) => {
+      const total = parts.reduce((sum, part) => sum + part[c].length, 0);
+      const joined = new Float32Array(total);
+      let offset = 0;
+      parts.forEach((part) => { joined.set(part[c], offset); offset += part[c].length; });
+      return joined;
+    });
+  } else {
+    stretched = timeStretch(channels, clip.speed || 1, rate);
+  }
+  const result = new AudioBuffer({ length: Math.max(1, stretched[0].length), numberOfChannels: stretched.length, sampleRate: rate });
+  stretched.forEach((channel, c) => result.copyToChannel(channel, c));
+  return result;
+}
+
+// Places clips' prepared audio on the program timeline with their volume
+// envelopes and renders the mix.
+function renderMix(entries, length, videoLanes) {
   const context = new OfflineAudioContext({ numberOfChannels: 2, length, sampleRate: AUDIO_RATE });
-  const videoLanes = new Map(groupLanes(clips.filter((clip) => isVideoLikeClip(clip))).map((lane) => [lane[0]?.trackIndex || 0, lane]));
-
-  const sounding = clips.filter((clip) => (clip.type === 'audio' || (isVideoLikeClip(clip) && !isImageClip(clip)))
-    && !clip.muted
-    && clip.startTime < duration
-    && sources.get(clip.sourceId)?.audioTrack);
-
-  for (const clip of sounding) {
-    assertNotAborted(signal);
-    const buffer = await decodeClipAudio(sources.get(clip.sourceId), clip, signal);
+  entries.forEach(({ clip, buffer }) => {
     const outDuration = clipDuration(clip);
     const node = context.createBufferSource();
     node.buffer = buffer;
     const gain = context.createGain();
     node.connect(gain).connect(context.destination);
-
-    // Speed: a constant rate, or the speed curve's rate per segment (in
-    // output time). A frozen clip's audio plays on, like the server's.
-    if (hasSpeedCurve(clip) && !clip.reversed) {
-      let at = clip.startTime;
-      buildSpeedSegments(clip).forEach((seg) => {
-        node.playbackRate.setValueAtTime(seg.speed || 1, Math.max(0, at));
-        at += (seg.sourceEnd - seg.sourceStart) / (seg.speed || 1);
-      });
-    } else {
-      node.playbackRate.value = clip.speed || 1;
-    }
-
     // Volume envelope sampled every 10 ms.
     const step = 0.01;
     const steps = Math.max(2, Math.ceil(outDuration / step) + 1);
@@ -196,11 +206,56 @@ async function mixAudio(clips, sources, duration, signal) {
     for (let i = 0; i < steps; i += 1) curve[i] = clipGainAt(clip, clip.startTime + Math.min(outDuration, i * step), videoLanes);
     gain.gain.setValueAtTime(curve[0], clip.startTime);
     gain.gain.setValueCurveAtTime(curve, clip.startTime, Math.max(0.01, (steps - 1) * step));
-
     node.start(clip.startTime);
     node.stop(clip.startTime + outDuration);
-  }
+  });
   return context.startRendering();
+}
+
+function duckAmount(clip) {
+  if (clip.type !== 'audio' || !clip.duck?.enabled) return 0;
+  return typeof clip.duck.amount === 'number' ? clip.duck.amount : 70;
+}
+
+async function mixAudio(clips, sources, duration, signal) {
+  const length = Math.max(1, Math.ceil(duration * AUDIO_RATE));
+  const videoLanes = new Map(groupLanes(clips.filter((clip) => isVideoLikeClip(clip))).map((lane) => [lane[0]?.trackIndex || 0, lane]));
+
+  const sounding = clips.filter((clip) => (clip.type === 'audio' || (isVideoLikeClip(clip) && !isImageClip(clip)))
+    && !clip.muted
+    && clip.startTime < duration
+    && sources.get(clip.sourceId)?.audioTrack);
+
+  const entries = [];
+  for (const clip of sounding) {
+    assertNotAborted(signal);
+    // A frozen clip's audio plays on, like the server's.
+    const decoded = await decodeClipAudio(sources.get(clip.sourceId), clip, signal);
+    entries.push({ clip, buffer: stretchClipAudio(decoded, clip) });
+  }
+
+  // Auto-duck, like the server: every ducked music/voice clip is lowered by
+  // a sidechain compressor listening to everything else (the other clips'
+  // audio and the non-ducked tracks).
+  const ducked = entries.filter(({ clip }) => duckAmount(clip) > 0);
+  const others = entries.filter((entry) => !ducked.includes(entry));
+  const main = await renderMix(others, length, videoLanes);
+  if (!ducked.length) return main;
+
+  const trigger = [main.getChannelData(0), main.getChannelData(1)];
+  const mixed = [new Float32Array(trigger[0]), new Float32Array(trigger[1])];
+  for (const entry of ducked) {
+    assertNotAborted(signal);
+    const alone = await renderMix([entry], length, videoLanes);
+    const gains = duckingGain(trigger, duckAmount(entry.clip), AUDIO_RATE);
+    for (let c = 0; c < 2; c += 1) {
+      const data = alone.getChannelData(c);
+      for (let n = 0; n < length; n += 1) mixed[c][n] += data[n] * gains[n];
+    }
+  }
+  const result = new AudioBuffer({ length, numberOfChannels: 2, sampleRate: AUDIO_RATE });
+  mixed.forEach((channel, c) => result.copyToChannel(channel, c));
+  return result;
 }
 
 // ---------------------------------------------------------------- video
