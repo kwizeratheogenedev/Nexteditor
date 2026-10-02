@@ -157,6 +157,31 @@
   box-shadow: none;
 }
 
+/* A zoomed-out stretch of many clips (e.g. hours of captions), drawn as
+   one bar - zoom in to get the individual clips back. */
+.st-clip-dense {
+  position: absolute;
+  top: 4px;
+  bottom: 4px;
+  border-radius: 6px;
+  background: color-mix(in srgb, var(--st-accent) 22%, transparent);
+  border: 1px solid color-mix(in srgb, var(--st-accent) 45%, transparent);
+  display: flex;
+  align-items: center;
+  padding: 0 8px;
+  overflow: hidden;
+  color: var(--st-text-2);
+  font-size: 12px;
+  font-weight: 600;
+  white-space: nowrap;
+  pointer-events: none;
+}
+
+.st-clip-dense.is-text {
+  border-color: color-mix(in srgb, #d4a24c 55%, transparent);
+  background: color-mix(in srgb, #7a4b12 38%, var(--st-bg));
+}
+
 /* Admin-only beta switch next to Export: render the export in the browser. */
 .st-device-toggle {
   min-height: 40px;

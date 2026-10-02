@@ -1,4 +1,4 @@
-import { useState, useEffect, useCallback } from 'react';
+import { useState, useEffect, useCallback, useRef } from 'react';
 import { persistFile, getPersistedFile, removePersistedFile, clearAllPersistedFiles } from '../utils/indexedDB';
 import { useAuth } from '../context/AuthContext.jsx';
 import { API_ENDPOINTS } from '../config.js';
@@ -6,6 +6,12 @@ import { API_ENDPOINTS } from '../config.js';
 const STORAGE_PREFIX = 'nexeditor_editor_';
 const SCHEMA_VERSION = 4;
 const PROJECT_ID_KEY = `${STORAGE_PREFIX}projectId`;
+// The clips are autosaved to IndexedDB (next to the media files) rather than
+// localStorage: hours of captions are several MB of clips, more than
+// localStorage's ~5 MB allows - the save used to fail outright and a reload
+// lost the project. localStorage keeps only the small view state plus a
+// marker saying the clips live in IndexedDB.
+const CLIPS_KEY = `${STORAGE_PREFIX}clips`;
 
 function createEmptyTimeline() {
   return [];
@@ -294,6 +300,11 @@ export function usePersistedEditorState() {
   // lane names already use.
   const [markers, setMarkers] = useState([]);
   const [restored, setRestored] = useState(false);
+  // Autosave bookkeeping (see the two save effects below): whether the
+  // clips have been written to IndexedDB, and which media files already are.
+  const clipsInIdbRef = useRef(false);
+  const persistedSourcesRef = useRef(new Set());
+  const [clipsSavedTick, setClipsSavedTick] = useState(0);
   const [timelineHistory, setTimelineHistory] = useState([]);
   const [historyIndex, setHistoryIndex] = useState(-1);
   // Backend project sync (M4) - additive to the localStorage/IndexedDB
@@ -325,6 +336,11 @@ export function usePersistedEditorState() {
         }
 
         const parsed = JSON.parse(stored);
+        if (parsed?.clipsIn === 'idb') {
+          const storedClips = await getPersistedFile(CLIPS_KEY);
+          parsed.clips = typeof storedClips === 'string' ? JSON.parse(storedClips) : [];
+          clipsInIdbRef.current = true;
+        }
         // v1 (the old, buggy array-spread format) never actually restored
         // correctly, so there's no real data to salvage from it - treated as
         // unrecoverable. v2 is missing trackIndex/startTime (migrateV2ToV3
@@ -354,6 +370,7 @@ export function usePersistedEditorState() {
             const file = await getPersistedFile(`${STORAGE_PREFIX}source_${clip.sourceId}`);
             resolved = file ? { file, url: URL.createObjectURL(file) } : { file: null, url: '' };
             sourceCache.set(clip.sourceId, resolved);
+            if (file) persistedSourcesRef.current.add(clip.sourceId);
           }
           // A clip with no locally-stored source blob may still have a
           // stable, non-blob remote URL (e.g. a clip pulled in from a
@@ -398,6 +415,11 @@ export function usePersistedEditorState() {
     };
   }, []);
 
+  // Autosave, in two parts so a playhead move or a selection change never
+  // re-saves thousands of clips:
+  //  1. the clips and their media files -> IndexedDB, only when the timeline
+  //     itself changes;
+  //  2. the small view state -> localStorage, whenever any of it changes.
   useEffect(() => {
     if (!restored) return;
 
@@ -410,32 +432,21 @@ export function usePersistedEditorState() {
           // hosted by the backend) is stable and worth keeping directly.
           ...(url && !url.startsWith('blob:') ? { remoteUrl: url } : {}),
         }));
-        const stateToSave = {
-          version: SCHEMA_VERSION,
-          clips,
-          playhead,
-          activeClipIndex,
-          zoom,
-          canvasSize,
-          bannerVisible,
-          selectedClipId,
-          selectedClipIds,
-          expandedTracks,
-          snapEnabled,
-          autoFollowPlayhead,
-          insertMode,
-          trackMeta,
-          markers,
-        };
+        await persistFile(CLIPS_KEY, JSON.stringify(clips));
+        if (!clipsInIdbRef.current) {
+          clipsInIdbRef.current = true;
+          setClipsSavedTick((tick) => tick + 1); // lets the view-state save record where the clips are
+        }
 
-        localStorage.setItem(`${STORAGE_PREFIX}timeline`, JSON.stringify(stateToSave));
-
+        // Each source file is stored once, not on every edit - re-writing a
+        // multi-GB video to IndexedDB on each change was pure waste.
         const seenSourceIds = new Set();
         for (const clip of timeline) {
           if (!clip.sourceId || seenSourceIds.has(clip.sourceId)) continue;
           seenSourceIds.add(clip.sourceId);
-          if (clip.file instanceof File) {
+          if (clip.file instanceof File && !persistedSourcesRef.current.has(clip.sourceId)) {
             await persistFile(`${STORAGE_PREFIX}source_${clip.sourceId}`, clip.file);
+            persistedSourcesRef.current.add(clip.sourceId);
           }
         }
 
@@ -450,15 +461,48 @@ export function usePersistedEditorState() {
         const orphaned = previouslyKnown.filter((id) => !seenSourceIds.has(id));
         for (const id of orphaned) {
           await removePersistedFile(`${STORAGE_PREFIX}source_${id}`);
+          persistedSourcesRef.current.delete(id);
         }
         localStorage.setItem(knownKey, JSON.stringify([...seenSourceIds]));
+      } catch (error) {
+        console.warn('Error persisting editor timeline:', error);
+      }
+    }, 300);
+
+    return () => clearTimeout(timer);
+  }, [restored, timeline]);
+
+  useEffect(() => {
+    // Until the clips have reached IndexedDB once, the previous save (which
+    // may still hold them inline, from before this split) is left alone.
+    if (!restored || !clipsInIdbRef.current) return;
+
+    const timer = setTimeout(() => {
+      try {
+        localStorage.setItem(`${STORAGE_PREFIX}timeline`, JSON.stringify({
+          version: SCHEMA_VERSION,
+          clipsIn: 'idb',
+          playhead,
+          activeClipIndex,
+          zoom,
+          canvasSize,
+          bannerVisible,
+          selectedClipId,
+          selectedClipIds,
+          expandedTracks,
+          snapEnabled,
+          autoFollowPlayhead,
+          insertMode,
+          trackMeta,
+          markers,
+        }));
       } catch (error) {
         console.warn('Error persisting editor state:', error);
       }
     }, 100);
 
     return () => clearTimeout(timer);
-  }, [restored, timeline, playhead, activeClipIndex, zoom, canvasSize, bannerVisible, selectedClipId, selectedClipIds, expandedTracks, snapEnabled, autoFollowPlayhead, insertMode, trackMeta, markers]);
+  }, [restored, clipsSavedTick, playhead, activeClipIndex, zoom, canvasSize, bannerVisible, selectedClipId, selectedClipIds, expandedTracks, snapEnabled, autoFollowPlayhead, insertMode, trackMeta, markers]);
 
   // Backend sync - only runs once a project has been explicitly saved to the
   // account (currentProjectId set) and the user is signed in. Longer debounce
@@ -506,7 +550,11 @@ export function usePersistedEditorState() {
     }, 3000);
 
     return () => clearTimeout(timer);
-  }, [restored, user, currentProjectId, projectName, timeline, playhead, activeClipIndex, zoom, canvasSize, bannerVisible, selectedClipId, selectedClipIds, expandedTracks, snapEnabled, autoFollowPlayhead, insertMode, trackMeta, markers]);
+    // Moving the playhead or changing the selection doesn't start a sync on
+    // its own (they're still saved with the next real change) - a long
+    // project is several MB, too much to re-upload on every click.
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [restored, user, currentProjectId, projectName, timeline, zoom, canvasSize, bannerVisible, expandedTracks, snapEnabled, autoFollowPlayhead, insertMode, trackMeta, markers]);
 
   useEffect(() => {
     try {
@@ -638,6 +686,7 @@ export function usePersistedEditorState() {
 
     localStorage.removeItem(`${STORAGE_PREFIX}timeline`);
     localStorage.removeItem(`${STORAGE_PREFIX}known_sources`);
+    persistedSourcesRef.current.clear();
     clearAllPersistedFiles();
   }, [timeline]);
 

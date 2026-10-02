@@ -79,6 +79,10 @@ app.use(cors({
   methods: ['GET', 'POST', 'PUT', 'PATCH', 'DELETE', 'OPTIONS'],
 }));
 app.use(cookieParser());
+// A saved project is its whole timeline as JSON; with hours of captions
+// that is several MB, far past express.json's 100 KB default - saving to the
+// account used to fail with 413. (MongoDB's own limit is 16 MB a document.)
+app.use('/api/projects', express.json({ limit: '12mb' }));
 app.use(express.json());
 applyRateLimits(app);
 app.use(createDiskGuard());

@@ -418,11 +418,56 @@ function ClipBlock({ clip, laneIndex, rowHeight, pxPerSecond, isSelected, isMult
   );
 }
 
+// How far outside the visible window clips are still rendered, so a quick
+// scroll doesn't show blank track before the next frame.
+const CLIP_RENDER_MARGIN_PX = 800;
+// Beyond this many clips in view (a zoomed-out long project), clips are
+// shown as merged summary bars instead of one element each.
+const MAX_INDIVIDUAL_CLIPS = 250;
+
+// Neighbouring clips merged into bars, by their real on-screen extent (no
+// 40px minimum), so a zoomed-out track shows where the clips are without
+// thousands of overlapping elements.
+function denseSegments(clips, pxPerSecond) {
+  const sorted = [...clips].sort((a, b) => a.startTime - b.startTime);
+  const segments = [];
+  sorted.forEach((clip) => {
+    const left = clip.startTime * pxPerSecond;
+    const right = Math.max(left + 2, (clip.startTime + clip.duration) * pxPerSecond);
+    const last = segments[segments.length - 1];
+    if (last && left <= last.right + 3) {
+      last.right = Math.max(last.right, right);
+      last.count += 1;
+    } else {
+      segments.push({ left, right, count: 1, firstId: clip.id });
+    }
+  });
+  return segments;
+}
+
 function TrackRow({
   clips, placeholder, pxPerSecond, totalWidth, selectedClipId, selectedClipIds, onSelectClip, onClipDragStart,
-  onTrimStart, onTrimEnd, expanded, onPlaceholderClick, trackType, laneIndex, locked, hidden, onGapContextMenu,
+  onTrimStart, onTrimEnd, expanded, onPlaceholderClick, trackType, laneIndex, locked, hidden, onGapContextMenu, view,
 }) {
   const rowHeight = laneHeight(expanded);
+  // Only the clips in (or near) the visible window become elements. A long
+  // project - hours of captions is thousands of clips on one track - would
+  // otherwise put every one of them in the page and make each click or
+  // playhead move take seconds. Selected clips always render so an edit in
+  // progress is never unmounted.
+  const fromTime = (view.left - CLIP_RENDER_MARGIN_PX) / pxPerSecond;
+  const toTime = (view.left + view.width + CLIP_RENDER_MARGIN_PX) / pxPerSecond;
+  const minDuration = 40 / pxPerSecond; // a clip is never drawn narrower than 40px
+  const inView = clips.length <= 60 ? clips : clips.filter((clip) => clip.startTime < toTime && clip.startTime + Math.max(clip.duration, minDuration) > fromTime);
+  const isSelectedClip = (clip) => clip.id === selectedClipId || selectedClipIds?.includes(clip.id);
+  const dense = inView.length > MAX_INDIVIDUAL_CLIPS;
+  const visibleClips = dense
+    ? clips.filter(isSelectedClip)
+    : (clips.length <= 60 ? clips : (() => {
+      const shown = new Set(inView);
+      return clips.filter((clip) => shown.has(clip) || isSelectedClip(clip));
+    })());
+  const segments = dense ? denseSegments(inView, pxPerSecond) : [];
   return (
     <div
       className={`st-track-row ${locked ? 'is-locked' : ''} ${hidden ? 'is-hidden' : ''}`}
@@ -437,7 +482,17 @@ function TrackRow({
         onGapContextMenu(e, trackType, laneIndex, time);
       }}
     >
-      {clips.map((clip) => (
+      {segments.map((segment) => (
+        <div
+          key={segment.firstId}
+          className={`st-clip-dense is-${trackType}`}
+          style={{ left: `${segment.left}px`, width: `${segment.right - segment.left}px` }}
+          title={`${segment.count.toLocaleString()} ${segment.count === 1 ? 'clip' : 'clips'} - zoom in to edit them`}
+        >
+          {segment.right - segment.left > 90 && <span>{segment.count.toLocaleString()} {segment.count === 1 ? 'clip' : 'clips'}</span>}
+        </div>
+      ))}
+      {visibleClips.map((clip) => (
         <ClipBlock
           key={clip.id}
           clip={clip}
@@ -501,11 +556,12 @@ function LaneLabels({
 
 function LaneRows({
   type, lanes, pxPerSecond, totalWidth, selectedClipId, selectedClipIds, onSelectClip, onClipDragStart,
-  onTrimStart, onTrimEnd, expanded, placeholder, activeTab, trackState, onPlaceholderClick, onGapContextMenu,
+  onTrimStart, onTrimEnd, expanded, placeholder, activeTab, trackState, onPlaceholderClick, onGapContextMenu, view,
 }) {
   return displayOrder(type, lanes.length).map((laneIndex) => (
     <TrackRow
       key={`${type}-row-${laneIndex}`}
+      view={view}
       clips={lanes[laneIndex]}
       placeholder={laneIndex === 0 ? placeholder : ''}
       pxPerSecond={pxPerSecond}
@@ -690,6 +746,30 @@ function BottomTimeline({
     const observer = new ResizeObserver(() => setSurfaceWidth(surface.clientWidth || 1100));
     observer.observe(surface);
     return () => observer.disconnect();
+  }, []);
+
+  // The part of the timeline currently scrolled into view (in pixels) - what
+  // TrackRow uses to render only nearby clips. Re-read at most once a frame
+  // while scrolling or resizing.
+  const [surfaceView, setSurfaceView] = useState({ left: 0, width: 1600 });
+  useEffect(() => {
+    const surface = trackSurfaceRef.current;
+    if (!surface) return undefined;
+    let frame = 0;
+    const sync = () => {
+      frame = 0;
+      setSurfaceView((prev) => (prev.left === surface.scrollLeft && prev.width === surface.clientWidth ? prev : { left: surface.scrollLeft, width: surface.clientWidth }));
+    };
+    const schedule = () => { if (!frame) frame = requestAnimationFrame(sync); };
+    schedule();
+    surface.addEventListener('scroll', schedule, { passive: true });
+    const observer = typeof ResizeObserver === 'function' ? new ResizeObserver(schedule) : null;
+    observer?.observe(surface);
+    return () => {
+      surface.removeEventListener('scroll', schedule);
+      observer?.disconnect();
+      cancelAnimationFrame(frame);
+    };
   }, []);
 
   // ---- Zoom -------------------------------------------------------------
@@ -1008,9 +1088,9 @@ function BottomTimeline({
           {activeTab === 'editor' && markers?.map((marker) => (
             <MarkerTick key={marker.id} marker={marker} pxPerSecond={pxPerSecond} onJump={onJumpToMarker} onRemove={onRemoveMarker} />
           ))}
-          <LaneRows type="text" lanes={tracks.text} expanded={expandedTracks.text} placeholder="Add text or captions" trackState={trackState?.text} onPlaceholderClick={onAddTextClip} onGapContextMenu={onGapContextMenu} {...laneListProps} />
-          <LaneRows type="video" lanes={tracks.video} expanded={expandedTracks.video} placeholder={activeTab === 'editor' ? 'Import media or drag it here' : 'Drop clips here'} trackState={trackState?.video} onGapContextMenu={onGapContextMenu} {...laneListProps} />
-          <LaneRows type="audio" lanes={tracks.audio} expanded={expandedTracks.audio} placeholder="Add music" trackState={trackState?.audio} onPlaceholderClick={onAddAudioClip} onGapContextMenu={onGapContextMenu} {...laneListProps} />
+          <LaneRows type="text" lanes={tracks.text} expanded={expandedTracks.text} placeholder="Add text or captions" trackState={trackState?.text} onPlaceholderClick={onAddTextClip} onGapContextMenu={onGapContextMenu} view={surfaceView} {...laneListProps} />
+          <LaneRows type="video" lanes={tracks.video} expanded={expandedTracks.video} placeholder={activeTab === 'editor' ? 'Import media or drag it here' : 'Drop clips here'} trackState={trackState?.video} onGapContextMenu={onGapContextMenu} view={surfaceView} {...laneListProps} />
+          <LaneRows type="audio" lanes={tracks.audio} expanded={expandedTracks.audio} placeholder="Add music" trackState={trackState?.audio} onPlaceholderClick={onAddAudioClip} onGapContextMenu={onGapContextMenu} view={surfaceView} {...laneListProps} />
         </div>
       </div>
       <HoverScrubPreview preview={hoverPreview} />
