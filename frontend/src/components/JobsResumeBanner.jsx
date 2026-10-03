@@ -52,7 +52,8 @@ export default function JobsResumeBanner() {
 // visit.
 function JobCard({ job, onDismiss }) {
   useAutoDismiss(job.status === 'error' ? job.jobId : null, () => onDismiss(job.jobId));
-  const label = KIND_LABEL[job.kind] || job.kind;
+  // A record can arrive without its kind (see backend jobTracker.js) - never crash on it.
+  const label = KIND_LABEL[job.kind] || (typeof job.kind === 'string' && job.kind) || 'Job';
   return (
     <div
       style={{
@@ -87,7 +88,7 @@ function JobCard({ job, onDismiss }) {
       )}
       {job.status === 'error' && (
         <div style={{ color: 'var(--danger)', marginTop: 4 }}>
-          {`Your ${label.toLowerCase()} couldn't be finished. `}
+          {`Your ${String(label).toLowerCase()} couldn't be finished. `}
           {friendlyError(job.error, 'Please try again.')}
         </div>
       )}

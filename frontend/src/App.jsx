@@ -20,6 +20,7 @@ import RightPanel from './components/RightPanel';
 import ErrorPopup from './components/ErrorPopup';
 import ProjectsModal from './components/ProjectsModal';
 import JobsResumeBanner from './components/JobsResumeBanner';
+import QuietErrorBoundary from './components/QuietErrorBoundary';
 import MontageTab from './components/MontageTab';
 import BottomTimeline, { PX_PER_SECOND, laneHeight } from './components/BottomTimeline';
 import ExportCompleteDialog from './components/ExportCompleteDialog';
@@ -3209,7 +3210,9 @@ function App() {
           }}
         />
       )}
-      <JobsResumeBanner />
+      <QuietErrorBoundary name="Jobs banner">
+        <JobsResumeBanner />
+      </QuietErrorBoundary>
       {projectsModalOpen && (
         <ProjectsModal
           onClose={() => setProjectsModalOpen(false)}
