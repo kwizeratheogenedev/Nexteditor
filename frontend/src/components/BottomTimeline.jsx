@@ -690,7 +690,7 @@ function BottomTimeline({
   activeTab, tracks, currentTime, totalDuration, zoom, onZoomChange, onSeek, onSplit, onDelete,
   onTrimStart, onTrimEnd, timelineHeight, onTimelineHeightChange, laneLabels, fps = 30, contentDuration,
   selectedClipId, selectedClipIds, onSelectClip, onClipDragStart, snapEnabled, onSnapToggle, expandedTracks, onTrackExpand, autoFollowPlayhead, onAutoFollowToggle, onPlayheadDragStart, onUndo, onRedo, onAddTextClip, onAddAudioClip, onAddTrack, trackState, onToggleLock, onToggleHidden, onRemoveTrack, onRenameTrack, onReorderTrack,
-  onRippleDelete, insertMode, onInsertModeToggle, onGapContextMenu, onGroupSelected, onUngroupSelected, onFreezeFrame, onAddAdjustmentLayer, onAutoCaptions, captionsStatus,
+  onRippleDelete, insertMode, onInsertModeToggle, onGapContextMenu, onGroupSelected, onUngroupSelected, onFreezeFrame, onAddAdjustmentLayer, onAutoCaptions, onDownloadCaptions, captionsStatus,
   markers, onAddMarker, onRemoveMarker, onRenameMarker, onJumpToMarker, onDropMedia,
 }) {
   const pxPerSecond = pxPerSecondFor(zoom);
@@ -990,6 +990,7 @@ function BottomTimeline({
       items: [
         onAddTextClip && { label: 'Text', onClick: onAddTextClip },
         onAutoCaptions && { label: captionsStatus ? 'Stop auto captions' : 'Auto captions', onClick: onAutoCaptions },
+        onDownloadCaptions && { label: 'Download captions (.srt)', onClick: onDownloadCaptions },
         onAddAudioClip && { label: 'Audio', onClick: onAddAudioClip },
         onAddTrack && { label: 'Video track', onClick: () => onAddTrack('video') },
         onAddTrack && { label: 'Text track', onClick: () => onAddTrack('text') },

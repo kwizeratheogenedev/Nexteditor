@@ -27,6 +27,7 @@ import { laneCode, laneName } from './timeline/laneNames';
 import { fitZoom } from './timeline/zoom';
 import { requestTimelineCaptions } from './timeline/captionsRequest';
 import { captionClipsFromWords, isCaptionClip, CAPTIONS_LANE_NAME } from './timeline/captionClips';
+import { captionsToSrt } from './timeline/captionsSrt';
 import './styles/studio.css';
 
 const VALID_TABS = ['media', 'captions', 'shorts', 'longmix', 'editor'];
@@ -2131,6 +2132,25 @@ function App() {
   };
   handleAutoCaptionsRef.current = handleAutoCaptions;
 
+  // The captions as an .srt file (UTF-8 with a byte-order mark so accented
+  // and non-Latin text opens correctly everywhere) - what you upload to
+  // YouTube for a long video rather than burning the text into the picture.
+  const handleDownloadCaptions = () => {
+    const srt = captionsToSrt(editorTimeline, trackMeta);
+    if (!srt) {
+      setErrorText('There are no visible captions to download yet - run Auto captions first.');
+      return;
+    }
+    const url = URL.createObjectURL(new Blob(['\uFEFF', srt], { type: 'application/x-subrip;charset=utf-8' }));
+    const link = document.createElement('a');
+    link.href = url;
+    link.download = `${slugify(projectName) || 'captions'}.srt`;
+    document.body.appendChild(link);
+    link.click();
+    link.remove();
+    setTimeout(() => URL.revokeObjectURL(url), 1000);
+  };
+
   // Adjustment layers (M13) always land on a brand-new video lane above
   // everything else - never lane 0, which stays the pure "base program"
   // (see editorLaneZeroVideoClips) - so a fresh layer never accidentally
@@ -3101,6 +3121,7 @@ function App() {
         onFreezeFrame={handleFreezeFrame}
         onAddAdjustmentLayer={handleAddAdjustmentLayer}
         onAutoCaptions={() => handleAutoCaptions()}
+        onDownloadCaptions={editorTextClips.some(isCaptionClip) ? handleDownloadCaptions : undefined}
         captionsStatus={captionsStatus}
         markers={markers}
         onAddMarker={handleAddMarker}
