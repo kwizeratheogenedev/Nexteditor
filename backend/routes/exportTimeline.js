@@ -6,6 +6,7 @@ import upload from '../middleware/upload.js';
 import { probeHasAudio } from '../services/ffmpeg.js';
 import { runWithEncoderFallback } from '../services/encoders.js';
 import { getFileSource } from '../services/fileResolve.js';
+import { holdFiles } from '../services/fileLeases.js';
 import { buildEditorExportGraph } from '../services/filterGraph/index.js';
 import { isVideoLikeClip, isImageClip } from '../services/filterGraph/clipKinds.js';
 import { laneTotalDuration } from '../services/filterGraph/transitionMath.js';
@@ -16,6 +17,7 @@ import { upsertJob } from '../services/jobTracker.js';
 import { renderLongMix } from '../services/longMixRender.js';
 import { isPro, checkAndConsumeExportQuota, FREE_EXPORT_MAX_SECONDS, FREE_STORAGE_BYTES_LIMIT } from '../services/planLimits.js';
 import { UPLOADS_DIR, CLIPS_DIR } from '../storagePaths.js';
+import { toUserMessage } from '../services/userMessage.js';
 
 const router = express.Router();
 const uploadsDir = UPLOADS_DIR;
@@ -230,7 +232,7 @@ router.post('/device-permit', requireAuth, async (req, res) => {
     res.json({ canvas, output, watermark: !userIsPro });
   } catch (error) {
     const status = error.code === 'UPGRADE_REQUIRED' ? 402 : error.code === 'INVALID_CANVAS' ? 400 : 500;
-    res.status(status).json({ error: error.message || 'Could not start the export.', code: error.code });
+    res.status(status).json({ error: toUserMessage(error, 'The export could not start. Please try again.'), code: error.code });
   }
 });
 
@@ -241,6 +243,9 @@ router.post('/', requireAuth, upload.any(), async (req, res) => {
   fs.mkdirSync(jobDir, { recursive: true });
   const jobId = req.headers['x-job-id'] || `export-${randomUUID()}`;
   const ownerId = req.user._id;
+  // A long export (LongMix runs for hours) outlives the hourly uploads
+  // cleanup - keep its source files until it's done.
+  const releaseUploads = holdFiles((req.files || []).map((file) => file.path));
   upsertJob(ownerId, { jobId, kind: 'export', status: 'running', progress: 0, message: 'Preparing timeline...' });
 
   try {
@@ -501,8 +506,8 @@ router.post('/', requireAuth, upload.any(), async (req, res) => {
   } catch (error) {
     const isUpgradeRequired = error.code === 'UPGRADE_REQUIRED';
     if (!isUpgradeRequired) console.error('Editor export failed:', error);
-    emitProgress(req, 0, 'Export failed', { error: error.message || 'Failed to export the timeline.', code: error.code });
-    upsertJob(ownerId, { jobId, status: 'error', error: error.message || 'Failed to export the timeline.' });
+    emitProgress(req, 0, 'Export failed', { error: toUserMessage(error, 'The export failed. Please try again.'), code: error.code });
+    upsertJob(ownerId, { jobId, status: 'error', error: toUserMessage(error, 'The export failed. Please try again.') });
     for (const filePath of outputFiles) {
       fs.rm(filePath, { force: true }, () => {});
     }
@@ -511,9 +516,10 @@ router.post('/', requireAuth, upload.any(), async (req, res) => {
     // request's response is already spent and emitProgress/upsertJob above
     // are what actually reach the client.
     if (!res.headersSent) {
-      res.status(isUpgradeRequired ? 403 : 500).json({ error: error.message || 'Failed to export the timeline.', ...(isUpgradeRequired ? { code: 'UPGRADE_REQUIRED' } : {}) });
+      res.status(isUpgradeRequired ? 403 : 500).json({ error: toUserMessage(error, 'The export failed. Please try again.'), ...(isUpgradeRequired ? { code: 'UPGRADE_REQUIRED' } : {}) });
     }
   } finally {
+    releaseUploads();
     for (const filePath of tempFiles) {
       fs.rm(filePath, { force: true }, () => {});
     }

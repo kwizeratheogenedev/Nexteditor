@@ -21,6 +21,11 @@ test('rejects path traversal that climbs out of the folder', () => {
   assert.equal(validateFilePath(`${base}/../secrets.txt`, [base]), false);
 });
 
+test('rejects a sibling folder whose name starts with the allowed one', () => {
+  assert.equal(validateFilePath(path.resolve('/srv/app/uploads-old/file'), [base]), false);
+  assert.equal(validateFilePath(path.resolve('/srv/app/uploadsX'), [base]), false);
+});
+
 test('rejects empty and non-string input', () => {
   assert.equal(validateFilePath('', [base]), false);
   assert.equal(validateFilePath(null, [base]), false);

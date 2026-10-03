@@ -5,6 +5,7 @@ import { requireAuth } from '../middleware/auth.js';
 import User from '../models/User.js';
 import { PRO_PERIOD_DAYS, extendProPeriod } from '../services/subscription.js';
 import { recordPayment } from '../services/payments.js';
+import { toUserMessage } from '../services/userMessage.js';
 
 const router = express.Router();
 
@@ -53,7 +54,7 @@ router.post('/checkout-session', requireAuth, async (req, res) => {
   } catch (err) {
     console.error('Flutterwave checkout creation failed:', err);
     const status = err.code === 'NOT_CONFIGURED' ? 500 : 502;
-    res.status(status).json({ error: err.message || 'Failed to start card payment.' });
+    res.status(status).json({ error: toUserMessage(err, 'Could not start the card payment. Please try again.') });
   }
 });
 
@@ -83,7 +84,7 @@ router.get('/verify', requireAuth, async (req, res) => {
     res.json({ status: 'failed' });
   } catch (err) {
     console.error('Flutterwave verification failed:', err);
-    res.status(502).json({ error: err.message || 'Failed to verify payment.' });
+    res.status(502).json({ error: toUserMessage(err, 'Could not confirm the payment yet. Please try again in a moment.') });
   }
 });
 

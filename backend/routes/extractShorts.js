@@ -1,11 +1,13 @@
 import express from 'express';
 import fs from 'fs';
 import path from 'path';
+import { randomUUID } from 'crypto';
 import upload from '../middleware/upload.js';
 import { probeDuration, runFFmpeg } from '../services/ffmpeg.js';
 import { deleteJob, registerJob, resolveJob } from '../services/jobStore.js';
 import { getIo } from '../socket.js';
 import { CLIPS_DIR } from '../storagePaths.js';
+import { toUserMessage } from '../services/userMessage.js';
 
 const router = express.Router();
 const clipsDir = CLIPS_DIR;
@@ -76,8 +78,11 @@ router.post('/', upload.single('video'), async (req, res) => {
       return;
     }
 
-    const sessionId = Date.now();
-    const managedSourcePath = path.join(clipsDir, `source_${sessionId}${path.extname(req.file.originalname) || '.mp4'}`);
+    // Random, so the uploaded video and its shorts in the public clips
+    // folder can't be guessed; the extension only from a known list.
+    const sessionId = randomUUID();
+    const sourceExt = path.extname(req.file.originalname || '').toLowerCase();
+    const managedSourcePath = path.join(clipsDir, `source_${sessionId}${['.mp4', '.mov', '.m4v', '.mkv', '.webm', '.avi'].includes(sourceExt) ? sourceExt : '.mp4'}`);
     await fs.promises.copyFile(videoPath, managedSourcePath);
     outputFiles.push(managedSourcePath);
     sourceJobId = registerJob(path.resolve(managedSourcePath));
@@ -172,7 +177,7 @@ router.post('/', upload.single('video'), async (req, res) => {
       deleteJob(sourceJobId);
     }
     if (!res.headersSent) {
-      res.status(500).json({ error: err.message });
+      res.status(500).json({ error: toUserMessage(err, 'Shorts could not be created from this video. Please try again.') });
     }
     emitProgress(req, 0, 'Shorts generation failed');
   } finally {

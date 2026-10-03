@@ -35,6 +35,8 @@ import { installCrashHandlers } from './services/crashHandlers.js';
 import healthRouter from './routes/health.js';
 import { UPLOADS_DIR, CLIPS_DIR } from './storagePaths.js';
 import { describeBudget } from './services/cpuBudget.js';
+import { isFileHeld } from './services/fileLeases.js';
+import { toUserMessage } from './services/userMessage.js';
 
 const app = express();
 installCrashHandlers();
@@ -86,7 +88,13 @@ app.use('/api/projects', express.json({ limit: '12mb' }));
 app.use(express.json());
 applyRateLimits(app);
 app.use(createDiskGuard());
-app.use('/clips', express.static(clipsDir));
+// Files in clips/ have random names; `?name=My song.mp4` saves one under a
+// readable name instead (for links opened directly, not fetched).
+app.use('/clips', (req, res, next) => {
+  const name = typeof req.query.name === 'string' ? req.query.name.replace(/[^\w .()-]/g, '').trim().slice(0, 120) : '';
+  if (name) res.attachment(/\.mp4$/i.test(name) ? name : `${name}.mp4`);
+  next();
+}, express.static(clipsDir));
 
 // Used by hosting platforms for restart/zero-downtime-deploy health checks.
 app.get('/health', (req, res) => {
@@ -125,7 +133,7 @@ app.use((err, req, res, next) => {
     return res.status(400).json({ error: 'Too many files' });
   }
   if (err instanceof Error && !res.headersSent) {
-    return res.status(400).json({ error: err.message });
+    return res.status(400).json({ error: toUserMessage(err, 'That request could not be handled. Please try again.') });
   }
   return next(err);
 });
@@ -156,6 +164,10 @@ setInterval(() => {
         return;
       }
       if (stats.isDirectory()) {
+        return;
+      }
+      // Still being read by a running job (services/fileLeases.js).
+      if (isFileHeld(filePath)) {
         return;
       }
       if (now - stats.mtime.getTime() > retentionMs) {

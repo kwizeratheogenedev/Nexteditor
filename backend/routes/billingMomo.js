@@ -3,6 +3,7 @@ import { requestToPay, getRequestToPayStatus } from '../services/momoClient.js';
 import { requireAuth } from '../middleware/auth.js';
 import User from '../models/User.js';
 import { recordPayment } from '../services/payments.js';
+import { toUserMessage } from '../services/userMessage.js';
 
 const router = express.Router();
 
@@ -84,7 +85,7 @@ router.post('/request-to-pay', requireAuth, async (req, res) => {
   } catch (err) {
     console.error('MoMo request-to-pay failed:', err);
     const status = err.code === 'NOT_CONFIGURED' ? 500 : 502;
-    res.status(status).json({ error: err.message || 'Failed to start MoMo payment.' });
+    res.status(status).json({ error: toUserMessage(err, 'Could not start the MoMo payment. Please try again.') });
   }
 });
 
@@ -100,7 +101,7 @@ router.get('/status/:referenceId', requireAuth, async (req, res) => {
     res.json({ status: data.status, reason: data.reason || null });
   } catch (err) {
     console.error('MoMo status check failed:', err);
-    res.status(502).json({ error: err.message || 'Failed to check payment status.' });
+    res.status(502).json({ error: toUserMessage(err, 'Could not check the payment yet. Please try again in a moment.') });
   }
 });
 

@@ -2,12 +2,13 @@ import express from 'express';
 import fs from 'fs';
 import path from 'path';
 import { createWriteStream } from 'fs';
-import { pipeline } from 'stream/promises';
 import crypto from 'crypto';
 import ytdl from '@distube/ytdl-core';
 import { probeDuration } from '../services/ffmpeg.js';
+import { MAX_DOWNLOAD_BYTES, downloadErrorMessage, downloadToFile } from '../services/safeDownload.js';
 import { getIo } from '../socket.js';
 import { UPLOADS_DIR } from '../storagePaths.js';
+import { toUserMessage } from '../services/userMessage.js';
 
 const uploadsDir = UPLOADS_DIR;
 const router = express.Router();
@@ -110,9 +111,15 @@ async function downloadYouTubeVideo(url, outputPath, socketId, progressEvent, sl
     const writeStream = createWriteStream(outputPath);
 
     stream.on('progress', (_chunkLength, downloaded, total) => {
+      if (downloaded > MAX_DOWNLOAD_BYTES) {
+        stream.destroy();
+        writeStream.destroy();
+        reject(new Error(`That video is larger than the ${Math.round(MAX_DOWNLOAD_BYTES / 1024 ** 3)} GB limit for links.`));
+        return;
+      }
       if (total > 0) emitProgress(socketId, progressEvent, { percent: Math.round((downloaded / total) * 100), slotId });
     });
-    stream.on('error', (err) => reject(new Error(`YouTube download failed: ${err.message}`)));
+    stream.on('error', (err) => { console.warn('YouTube download failed:', err?.message || err); reject(new Error('The YouTube video could not be downloaded. It may be private, age-restricted or unavailable.')); });
     writeStream.on('error', reject);
     writeStream.on('finish', resolve);
 
@@ -121,61 +128,26 @@ async function downloadYouTubeVideo(url, outputPath, socketId, progressEvent, sl
 }
 
 /**
- * Download video from HTTP/HTTPS URL using native fetch with progress tracking
+ * Download video from an HTTP/HTTPS URL with progress tracking - public
+ * addresses only, size-capped (see services/safeDownload.js).
  */
 async function downloadHttpVideo(url, outputPath, socketId, progressEvent, slotId) {
+  let lastPercent = -1;
   try {
-    const response = await fetch(url, {
-      method: 'GET',
-      headers: {
-        'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36',
+    await downloadToFile(url, outputPath, {
+      headers: { 'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36' },
+      onProgress: (received, total) => {
+        if (!total) return;
+        const percent = Math.round((received / total) * 100);
+        if (percent !== lastPercent) {
+          lastPercent = percent;
+          emitProgress(socketId, progressEvent, { percent, slotId });
+        }
       },
     });
-
-    if (!response.ok) {
-      if (response.status === 403 || response.status === 401) {
-        throw new Error('Access denied. The URL may be private or require authentication.');
-      }
-      if (response.status === 404) {
-        throw new Error('URL not found (404). Please check the link.');
-      }
-      throw new Error(`HTTP error: ${response.status} ${response.statusText}`);
-    }
-
-    const totalLength = response.headers.get('content-length');
-    let downloadedLength = 0;
-
-    if (!response.body) {
-      throw new Error('No response body received');
-    }
-
-    const writeStream = createWriteStream(outputPath);
-    
-    const reader = response.body.getReader();
-    const decoder = new TextDecoder();
-
-    while (true) {
-      const { done, value } = await reader.read();
-      if (done) break;
-      
-      downloadedLength += value.length;
-      writeStream.write(value);
-      
-      if (totalLength) {
-        const percent = (downloadedLength / parseInt(totalLength)) * 100;
-        emitProgress(socketId, progressEvent, { percent: Math.round(percent), slotId });
-      }
-    }
-
-    writeStream.end();
   } catch (err) {
-    if (err.message.includes('Access denied') || err.message.includes('not found')) {
-      throw err;
-    }
-    if (err.cause?.code === 'ENOTFOUND') {
-      throw new Error('Invalid domain or network error.');
-    }
-    throw new Error(`Failed to download video: ${err.message}`);
+    if (!err?.userFacing) console.warn('Link download failed:', err?.message || err);
+    throw new Error(downloadErrorMessage(err));
   }
 }
 
@@ -226,7 +198,10 @@ router.post('/', async (req, res) => {
     }
 
     emitProgress(socketId, events.progress, { percent: 90, status: `Probing ${mediaType} duration...`, slotId });
-    const duration = await probeDuration(outputPath);
+    // ffprobe's own error text names server folders - not passed on.
+    const duration = await probeDuration(outputPath).catch(() => {
+      throw new Error(`The link didn't lead to a ${mediaType} file that can be opened.`);
+    });
 
     emitProgress(socketId, events.progress, { percent: 100, status: 'Complete', slotId });
 
@@ -243,7 +218,7 @@ router.post('/', async (req, res) => {
       fs.unlinkSync(outputPath);
     }
 
-    const errorMessage = err.message || 'Unknown error occurred';
+    const errorMessage = toUserMessage(err, 'That link could not be downloaded. Please check it and try again.');
     emitProgress(socketId, events.error, { error: errorMessage, slotId });
 
     res.status(400).json({ error: errorMessage });

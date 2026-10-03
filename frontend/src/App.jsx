@@ -28,6 +28,7 @@ import { fitZoom } from './timeline/zoom';
 import { requestTimelineCaptions } from './timeline/captionsRequest';
 import { captionClipsFromWords, isCaptionClip, CAPTIONS_LANE_NAME } from './timeline/captionClips';
 import { captionsToSrt } from './timeline/captionsSrt';
+import { ERROR_DISPLAY_MS } from './utils/friendlyError.js';
 import './styles/studio.css';
 
 const VALID_TABS = ['media', 'captions', 'shorts', 'longmix', 'editor'];
@@ -576,7 +577,7 @@ function App() {
       return undefined;
     }
 
-    const timer = window.setTimeout(() => setErrorText(null), 6000);
+    const timer = window.setTimeout(() => setErrorText(null), ERROR_DISPLAY_MS);
     return () => window.clearTimeout(timer);
   }, [errorText]);
 

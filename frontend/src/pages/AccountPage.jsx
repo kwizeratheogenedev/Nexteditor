@@ -9,6 +9,8 @@ import {
   formatBytes, formatDate, formatMoney, timeAgo, useToasts,
 } from '../components/console/ui.jsx';
 import '../components/console/console.css';
+import { useAutoDismiss } from '../hooks/useAutoDismiss.js';
+import { friendlyError } from '../utils/friendlyError.js';
 
 const SECTIONS = [
   { id: 'profile', label: 'Profile', icon: 'profile' },
@@ -239,6 +241,7 @@ function DangerSection({ data }) {
   const [open, setOpen] = useState(false);
   const [value, setValue] = useState('');
   const [error, setError] = useState('');
+  useAutoDismiss(error, () => setError(''));
   const [busy, setBusy] = useState(false);
 
   const confirmDelete = async () => {
@@ -278,7 +281,7 @@ function DangerSection({ data }) {
             <span>{data.hasPassword ? 'Enter your password to confirm' : 'Type DELETE to confirm'}</span>
             <input type={data.hasPassword ? 'password' : 'text'} value={value} onChange={(e) => setValue(e.target.value)} autoComplete={data.hasPassword ? 'current-password' : 'off'} />
           </label>
-          {error && <p className="cs-error-text">{error}</p>}
+          {error && <p className="cs-error-text">{friendlyError(error)}</p>}
         </Modal>
       )}
     </Card>
@@ -291,6 +294,7 @@ export default function AccountPage() {
   const { refresh: refreshAuth } = useAuth();
   const [data, setData] = useState(null);
   const [error, setError] = useState('');
+  useAutoDismiss(error, () => setError(''));
   const { toast, toasts } = useToasts();
 
   const [version, setVersion] = useState(0);
@@ -314,7 +318,7 @@ export default function AccountPage() {
       active={active}
       onSelect={select}
     >
-      {error && <div className="cs-alert">{error}</div>}
+      {error && <div className="cs-alert">{friendlyError(error)}</div>}
       {!data && !error && <Spinner />}
       {data && (
         <div className="cs-stack">

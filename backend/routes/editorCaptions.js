@@ -13,6 +13,7 @@ import { buildCaptionAudioGraph } from '../services/filterGraph/captionAudio.js'
 import multer from 'multer';
 import { transcribeWords, transcribeAudioChunk } from '../services/captionTranscription.js';
 import { UPLOADS_DIR, CLIPS_DIR } from '../storagePaths.js';
+import { toUserMessage } from '../services/userMessage.js';
 
 // POST /api/editor/captions - auto-captions for the editor timeline.
 // Receives the same multipart upload as an export (timeline JSON plus one
@@ -119,7 +120,7 @@ router.post('/', requireAuth, upload.any(), async (req, res) => {
     res.json({ words: result.words, language: result.language, duration });
   } catch (err) {
     setProgress(req, 0, 'Failed');
-    if (!res.headersSent) res.status(err.status || 500).json({ error: err.message || 'Could not generate captions.' });
+    if (!res.headersSent) res.status(err.status || 500).json({ error: toUserMessage(err, 'Captions could not be created. Please try again.') });
   } finally {
     tempFiles.forEach((file) => fs.rm(file, { force: true }, () => {}));
     fs.rm(jobDir, { recursive: true, force: true }, () => {});
@@ -170,7 +171,7 @@ router.post('/chunk', requireAuth, (req, res, next) => {
       res.status(429).json({ error: 'The transcription quota is used up for the moment.', code: 'TRANSCRIPTION_QUOTA', retryAfter: err.retryAfter || 60 });
       return;
     }
-    res.status(502).json({ error: err.message || 'Could not transcribe this part.' });
+    res.status(502).json({ error: toUserMessage(err, 'This part could not be transcribed. Please try again.') });
   }
 });
 

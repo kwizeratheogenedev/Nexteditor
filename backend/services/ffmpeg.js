@@ -4,6 +4,7 @@ import ffmpegPath from 'ffmpeg-static';
 import ffprobePath from 'ffprobe-static';
 import { ffmpegGate } from './renderGate.js';
 import { FFMPEG_THREADS } from './cpuBudget.js';
+import { ffmpegError } from './userMessage.js';
 
 function resolveBinaryPath(pkgExport) {
   if (typeof pkgExport === 'string') return pkgExport;
@@ -56,13 +57,13 @@ export function probeDuration(filePath) {
 
     child.on('close', (code) => {
       if (code !== 0) {
-        reject(new Error(stderr.trim() || 'ffprobe failed'));
+        reject(ffmpegError(stderr));
         return;
       }
 
       const duration = Number.parseFloat(stdout.trim());
       if (!Number.isFinite(duration)) {
-        reject(new Error('Unable to determine media duration'));
+        reject(ffmpegError('Invalid data found when processing input'));
         return;
       }
 
@@ -162,7 +163,10 @@ function runFFmpegNow(args, { duration, onProgress, timeout, cwd, signal, lowPri
     // Set timeout to kill ffmpeg if it takes too long
     timeoutId = setTimeout(() => {
       child.kill('SIGTERM');
-      reject(new Error(`FFmpeg timeout exceeded (${FFMPEG_TIMEOUT}ms)`));
+      const error = new Error('This took too long to process and was stopped. Try a shorter video or a lower quality.');
+      error.code = 'FFMPEG_TIMEOUT';
+      error.userFacing = true;
+      reject(error);
     }, FFMPEG_TIMEOUT);
 
     child.stderr.on('data', (chunk) => {
@@ -189,13 +193,22 @@ function runFFmpegNow(args, { duration, onProgress, timeout, cwd, signal, lowPri
 
     child.on('error', (error) => {
       clearTimeout(timeoutId);
-      reject(error);
+      console.error('ffmpeg could not start:', error);
+      reject(ffmpegError('', { code: 'FFMPEG_UNAVAILABLE' }));
     });
 
-    child.on('close', (code) => {
+    child.on('close', (code, signal) => {
       clearTimeout(timeoutId);
       if (code !== 0) {
-        reject(new Error(stderr.trim() || 'ffmpeg failed'));
+        // Stopped on purpose (cancel/timeout above) - already reported.
+        if (signal === 'SIGTERM') {
+          reject(new Error('Render cancelled.'));
+          return;
+        }
+        // Killed by the system (most often for running out of memory).
+        const error = ffmpegError(signal === 'SIGKILL' ? 'Cannot allocate memory' : stderr);
+        console.error(`ffmpeg failed (${signal || `exit ${code}`}): ${error.details.slice(-1500)}`);
+        reject(error);
         return;
       }
       resolve();

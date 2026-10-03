@@ -4,6 +4,8 @@ import ThemeToggle from './ThemeToggle.jsx';
 import UserMenu from './UserMenu.jsx';
 import CanvasSettingsMenu from './CanvasSettingsMenu';
 import { setWorkspace } from '../analytics/tracker.js';
+import { useAutoDismiss } from '../hooks/useAutoDismiss.js';
+import { friendlyError } from '../utils/friendlyError.js';
 
 const CLOUD = 'M7 18a5 5 0 1 1 .9-9.9A6 6 0 0 1 19 10a4 4 0 0 1-1 7.9z';
 
@@ -15,6 +17,7 @@ function TopBar({ activeTab, onExport, exporting = false, exportProgress = 0, pr
   // Lets usage analytics know which tool (Editor, Montage, ...) is open.
   useEffect(() => { setWorkspace(activeTab); }, [activeTab]);
   const [saveError, setSaveError] = useState('');
+  useAutoDismiss(saveError, () => setSaveError(''));
   const [saving, setSaving] = useState(false);
   const [canvasMenuOpen, setCanvasMenuOpen] = useState(false);
 
@@ -63,7 +66,7 @@ function TopBar({ activeTab, onExport, exporting = false, exportProgress = 0, pr
                 {saving ? 'Saving…' : 'Save to account'}
               </button>
             )}
-            {saveError && <small className="st-save-error">{saveError}</small>}
+            {saveError && <small className="st-save-error">{friendlyError(saveError)}</small>}
           </div>
         )}
       </div>

@@ -1,6 +1,8 @@
 import { useEffect, useState } from 'react';
 import { API_ENDPOINTS } from '../config.js';
 import '../pages/pages.css';
+import { useAutoDismiss } from '../hooks/useAutoDismiss.js';
+import { friendlyError } from '../utils/friendlyError.js';
 
 function formatDate(iso) {
   if (!iso) return '';
@@ -11,6 +13,7 @@ function formatDate(iso) {
 export default function ProjectsModal({ onClose, onResume }) {
   const [projects, setProjects] = useState(null);
   const [error, setError] = useState('');
+  useAutoDismiss(error, () => setError(''));
   const [busyId, setBusyId] = useState(null);
 
   const load = async () => {
@@ -72,7 +75,7 @@ export default function ProjectsModal({ onClose, onResume }) {
           <button type="button" onClick={onClose} style={{ background: 'none', color: 'var(--text-secondary)', fontSize: 18, cursor: 'pointer' }}>&times;</button>
         </div>
 
-        {error && <div style={{ color: 'var(--danger)', fontSize: 13, marginBottom: 12 }}>{error}</div>}
+        {error && <div style={{ color: 'var(--danger)', fontSize: 13, marginBottom: 12 }}>{friendlyError(error)}</div>}
 
         {!projects && !error && <div style={{ color: 'var(--text-secondary)', fontSize: 14 }}>Loading...</div>}
         {projects && projects.length === 0 && (

@@ -1,24 +1,17 @@
 import express from 'express';
 import fs from 'fs';
 import path from 'path';
+import { randomUUID } from 'crypto';
 import { probeDuration, runFFmpeg } from '../services/ffmpeg.js';
+import { validateFilePath } from '../services/fileResolve.js';
 import { deleteJob, registerJob, resolveJob } from '../services/jobStore.js';
 import { getIo } from '../socket.js';
 import { UPLOADS_DIR, CLIPS_DIR } from '../storagePaths.js';
+import { toUserMessage } from '../services/userMessage.js';
 
 const router = express.Router();
 const clipsDir = CLIPS_DIR;
 const BACKEND_URL = process.env.BACKEND_URL || 'http://localhost:3000';
-
-// Validate that a file path is within allowed directories
-function validateFilePath(filePath, allowedBasePath = clipsDir) {
-  if (!filePath || typeof filePath !== 'string') {
-    return false;
-  }
-  const resolvedPath = path.resolve(filePath);
-  const resolvedBase = path.resolve(allowedBasePath);
-  return resolvedPath.startsWith(resolvedBase) && resolvedPath !== resolvedBase;
-}
 
 function emitToClient(req, eventName, payload) {
   const io = getIo();
@@ -48,13 +41,17 @@ router.post('/', async (req, res) => {
     }
 
     // Validate the resolved path is safe
-    if (!validateFilePath(originalVideo, clipsDir) && !validateFilePath(originalVideo, UPLOADS_DIR)) {
+    if (!validateFilePath(originalVideo, [clipsDir, UPLOADS_DIR])) {
       res.status(400).json({ error: 'Invalid file path' });
       return;
     }
 
     const taskId = `reformat-short-${Date.now()}`;
-    const newId = `${id}_edit_${Date.now()}`;
+    // `id` comes from the browser: only its plain characters are kept (so it
+    // can't steer the output path), plus a random part so the file in the
+    // public clips folder can't be guessed.
+    const safeId = String(id).replace(/[^a-zA-Z0-9_-]/g, '').slice(0, 80) || 'short';
+    const newId = `${safeId}_edit_${randomUUID()}`;
     const outputPath = path.join(clipsDir, `${newId}.mp4`);
     outputFiles.push(outputPath);
 
@@ -116,7 +113,7 @@ router.post('/', async (req, res) => {
       fs.rm(filePath, { force: true }, () => {});
     }
     if (!res.headersSent) {
-      res.status(500).json({ error: err.message });
+      res.status(500).json({ error: toUserMessage(err, 'This short could not be changed. Please try again.') });
     }
   } finally {
     for (const filePath of tempFiles) {

@@ -119,7 +119,7 @@ export async function runWithEncoderFallback(buildArgs, options, {
     return await run(buildArgs(videoEncoderArgs(encoder)), options);
   } catch (error) {
     const message = String(error?.message || '');
-    const notEncoderFault = /timeout exceeded|cancelled/i.test(message) || options?.signal?.aborted;
+    const notEncoderFault = error?.code === 'FFMPEG_TIMEOUT' || /cancelled/i.test(message) || options?.signal?.aborted;
     if (encoder === SOFTWARE || notEncoderFault) throw error;
     log.warn('Hardware encode failed, retrying with libx264', { encoder, err: error });
     return run(buildArgs(videoEncoderArgs(SOFTWARE)), options);

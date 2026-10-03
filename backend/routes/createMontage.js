@@ -5,6 +5,8 @@ import path from 'path';
 import { randomUUID } from 'crypto';
 import { runFFmpeg, probeDuration } from '../services/ffmpeg.js';
 import { getFileSource as resolveFileSource } from '../services/fileResolve.js';
+import { holdFiles } from '../services/fileLeases.js';
+import { toUserMessage } from '../services/userMessage.js';
 import { getIo } from '../socket.js';
 import { optionalAuth } from '../middleware/auth.js';
 import { upsertJob } from '../services/jobTracker.js';
@@ -244,6 +246,7 @@ router.post('/', optionalAuth, upload.any(), async (req, res) => {
   // progressByJob comment above).
   const jobId = req.headers['x-job-id'] || `montage-${Date.now()}-${Math.random().toString(16).slice(2)}`;
   const ownerId = req.user?._id;
+  let releaseFiles = () => {};
 
   if (ownerId) upsertJob(ownerId, { jobId, kind: 'montage', status: 'running', progress: 0, message: 'Starting montage...' });
 
@@ -310,6 +313,16 @@ router.post('/', optionalAuth, upload.any(), async (req, res) => {
       return res.status(400).json({ error: 'No valid audio sources found' });
     }
 
+    // A file fetched from a link earlier is only kept for a while - say so
+    // plainly rather than letting ffmpeg fail on it later.
+    if ([...videoFiles, ...audioSources].some((filePath) => !fs.existsSync(filePath))) {
+      const message = 'One of your videos or songs is no longer on the server (files are kept for 1 hour). Please add it again and try once more.';
+      if (ownerId) upsertJob(ownerId, { jobId, status: 'error', error: message });
+      return res.status(400).json({ error: message });
+    }
+    // Keep them from the hourly cleanup until this montage is finished.
+    releaseFiles = holdFiles([...videoFiles, ...audioSources]);
+
     // Everything needed to start is validated - respond now instead of
     // holding this one connection open for the entire render (which can
     // take several minutes). A screen lock/sleep, a backgrounded tab being
@@ -360,9 +373,13 @@ router.post('/', optionalAuth, upload.any(), async (req, res) => {
     }
 
     // Generate output filename
-    const outputFileName = sanitizeDownloadName(req.body.audioLabel || `montage-${Date.now()}`);
+    // The file on disk gets a random name: named after the song, it could
+    // be guessed in the public clips folder, and two people using the same
+    // song would overwrite each other's video. The song name is kept for
+    // the downloaded file.
+    const downloadName = sanitizeDownloadName(req.body.audioLabel || `montage-${Date.now()}`);
+    const outputFileName = `montage-${randomUUID()}.mp4`;
     const outputPath = path.join(outputDir, outputFileName);
-    const downloadName = outputFileName;
 
     // The montage always runs the full length of the audio track - an
     // 8-minute song produces an 8-minute video, not a truncated one.
@@ -597,7 +614,8 @@ router.post('/', optionalAuth, upload.any(), async (req, res) => {
     emitToClient(jobId, socketId, 'montage-progress', { percent: 100, currentTime: 'Complete', totalEstimatedTime: Math.round(estimatedTotalTime / 1000), timeSpent: Math.round((Date.now() - montageStartTime) / 1000), timeLeft: 0, result });
     if (ownerId) upsertJob(ownerId, { jobId, status: 'done', progress: 100, message: 'Complete', result });
   } catch (error) {
-    console.error('Montage creation error:', error && (error.stack || error));
+    // The whole error, so ffmpeg's raw output (error.details) is in the log.
+    console.error('Montage creation error:', error);
     if (concatListPath && fs.existsSync(concatListPath)) {
       try {
         fs.unlinkSync(concatListPath);
@@ -617,18 +635,19 @@ router.post('/', optionalAuth, upload.any(), async (req, res) => {
         }
       } catch (_error) {}
     });
-    emitToClient(jobId, socketId, 'montage-error', { error: error.message || 'Failed to create montage', stack: error.stack });
-    if (ownerId) upsertJob(ownerId, { jobId, status: 'error', error: error.message || 'Failed to create montage' });
+    const message = toUserMessage(error, 'The montage could not be created. Please try again.');
+    emitToClient(jobId, socketId, 'montage-error', { error: message });
+    if (ownerId) upsertJob(ownerId, { jobId, status: 'error', error: message });
     // Once the early 202 has gone out, this request's own response is
     // already spent - the emitToClient/upsertJob calls above are what
     // actually reach the client now. Only a validation failure that threw
     // before that early response (none currently do, but keep this
     // defensive) would still have a response left to send.
     if (!res.headersSent) {
-      const response = { error: error.message || 'Failed to create montage' };
-      if (process.env.NODE_ENV !== 'production') response.stack = error.stack;
-      res.status(500).json(response);
+      res.status(500).json({ error: message });
     }
+  } finally {
+    releaseFiles();
   }
 });
 

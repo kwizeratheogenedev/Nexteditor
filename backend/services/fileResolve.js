@@ -9,9 +9,11 @@ export function validateFilePath(filePath, allowedBasePaths) {
   }
   const bases = Array.isArray(allowedBasePaths) ? allowedBasePaths : [allowedBasePaths];
   const resolvedPath = path.resolve(filePath);
+  // Compared folder by folder, not as text: "uploads-old/x" starts with
+  // "uploads" but isn't inside it.
   return bases.some((base) => {
-    const resolvedBase = path.resolve(base);
-    return resolvedPath.startsWith(resolvedBase) && resolvedPath !== resolvedBase;
+    const relative = path.relative(path.resolve(base), resolvedPath);
+    return relative !== '' && !relative.startsWith('..') && !path.isAbsolute(relative);
   });
 }
 

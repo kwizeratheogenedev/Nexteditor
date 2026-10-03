@@ -2,6 +2,8 @@ import { useState } from 'react';
 import { Link, useNavigate } from 'react-router-dom';
 import { useAuth } from '../context/AuthContext.jsx';
 import './pages.css';
+import { useAutoDismiss } from '../hooks/useAutoDismiss.js';
+import { friendlyError } from '../utils/friendlyError.js';
 
 export default function SignupPage() {
   const { signup, loginWithGoogle } = useAuth();
@@ -10,6 +12,7 @@ export default function SignupPage() {
   const [email, setEmail] = useState('');
   const [password, setPassword] = useState('');
   const [error, setError] = useState('');
+  useAutoDismiss(error, () => setError(''));
   const [submitting, setSubmitting] = useState(false);
 
   const handleSubmit = async (e) => {
@@ -41,7 +44,7 @@ export default function SignupPage() {
         <h1>Create your account</h1>
         <p>Free forever for up to 3 projects.</p>
 
-        {error && <div className="auth-error">{error}</div>}
+        {error && <div className="auth-error">{friendlyError(error)}</div>}
 
         <form onSubmit={handleSubmit}>
           <div className="auth-field">

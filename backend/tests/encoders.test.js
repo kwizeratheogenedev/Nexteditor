@@ -70,10 +70,10 @@ test('a hardware encode that fails mid-export is retried once with libx264', asy
 });
 
 test('timeouts, cancellations and libx264 failures are not retried', async () => {
-  const failing = (message) => async () => { throw new Error(message); };
-  for (const [encoder, message] of [['h264_qsv', 'FFmpeg timeout exceeded (1000ms)'], ['h264_qsv', 'Render cancelled.'], ['libx264', 'boom']]) {
+  const failing = (message, code) => async () => { throw Object.assign(new Error(message), code ? { code } : {}); };
+  for (const [encoder, message, code] of [['h264_qsv', 'This took too long to process and was stopped.', 'FFMPEG_TIMEOUT'], ['h264_qsv', 'Render cancelled.'], ['libx264', 'boom']]) {
     let attempts = 0;
-    const run = async (...a) => { attempts += 1; return failing(message)(...a); };
+    const run = async (...a) => { attempts += 1; return failing(message, code)(...a); };
     await assert.rejects(
       runWithEncoderFallback((v) => v, {}, { run, getEncoder: async () => encoder, log: quietLog }),
       new RegExp(message.replace(/[().]/g, '\\$&')),

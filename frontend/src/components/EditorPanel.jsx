@@ -4,6 +4,8 @@ import { isVideoLikeClip, isImageClip } from '../timeline/clipKinds';
 import { getWaveformForClip, sliceWaveform } from '../timeline/waveform';
 import { formatTimecode, formatShortDuration } from '../timeline/timecode';
 import { MEDIA_DRAG_TYPE, setMediaDrag } from '../timeline/mediaDrag';
+import { useAutoDismiss } from '../hooks/useAutoDismiss.js';
+import { friendlyError } from '../utils/friendlyError.js';
 
 const Icon = ({ d, size = 18, strokeWidth = 1.8, filled = false }) => (
   <svg viewBox="0 0 24 24" width={size} height={size} fill={filled ? 'currentColor' : 'none'} stroke={filled ? 'none' : 'currentColor'} strokeWidth={strokeWidth} strokeLinecap="round" strokeLinejoin="round" aria-hidden="true">
@@ -89,6 +91,7 @@ function EditorPanel({
   const [zoomMode, setZoomMode] = useState('fit');
   const [link, setLink] = useState('');
   const [linkState, setLinkState] = useState({ status: 'idle', message: '' });
+  useAutoDismiss(linkState.status === 'error' ? linkState.message : null, () => setLinkState({ status: 'idle', message: '' }));
   const [dragOver, setDragOver] = useState(false);
   const mediaRef = useRef(null);
   const fps = canvasSize?.fps || 30;
@@ -165,7 +168,7 @@ function EditorPanel({
       setLink('');
       setLinkState({ status: 'idle', message: '' });
     } catch (err) {
-      setLinkState({ status: 'error', message: err.message || 'Could not fetch that link.' });
+      setLinkState({ status: 'error', message: friendlyError(err.message, 'Could not fetch that link.') });
     }
   };
 

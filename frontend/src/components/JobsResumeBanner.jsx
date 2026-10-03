@@ -1,5 +1,7 @@
 import { useEffect, useState } from 'react';
 import API_BASE_URL, { API_ENDPOINTS } from '../config.js';
+import { useAutoDismiss } from '../hooks/useAutoDismiss.js';
+import { friendlyError } from '../utils/friendlyError.js';
 
 const KIND_LABEL = {
   montage: 'Montage',
@@ -39,43 +41,56 @@ export default function JobsResumeBanner() {
   return (
     <div style={{ position: 'fixed', top: 56, right: 16, zIndex: 900, display: 'flex', flexDirection: 'column', gap: 8, maxWidth: 320 }}>
       {jobs.map((job) => (
-        <div
-          key={job.jobId}
-          style={{
-            background: 'var(--bg-surface)', border: '1px solid var(--border)', borderRadius: 'var(--radius-md)',
-            padding: 12, fontSize: 13, boxShadow: '0 4px 16px rgba(0,0,0,0.4)',
-          }}
-        >
-          <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'flex-start', gap: 8 }}>
-            <strong>{KIND_LABEL[job.kind] || job.kind}</strong>
-            <button type="button" onClick={() => dismiss(job.jobId)} style={{ background: 'none', color: 'var(--text-secondary)', cursor: 'pointer', fontSize: 14 }}>&times;</button>
-          </div>
-          {job.status === 'running' && (
-            <div style={{ color: 'var(--text-secondary)', marginTop: 4 }}>Still processing ({Math.round(job.progress || 0)}%) - this continued while you were away.</div>
-          )}
-          {job.status === 'done' && (
-            <div style={{ color: 'var(--text-secondary)', marginTop: 4 }}>
-              Finished while you were away.
-              {job.result?.fileName && (
-                <>
-                  {' '}
-                  <a
-                    href={`${API_BASE_URL}/clips/${encodeURIComponent(job.result.fileName)}`}
-                    target="_blank"
-                    rel="noreferrer"
-                    style={{ color: 'var(--accent)' }}
-                  >
-                    Download
-                  </a>
-                </>
-              )}
-            </div>
-          )}
-          {job.status === 'error' && (
-            <div style={{ color: 'var(--danger)', marginTop: 4 }}>Failed: {job.error || 'Unknown error'}</div>
+        <JobCard key={job.jobId} job={job} onDismiss={dismiss} />
+      ))}
+    </div>
+  );
+}
+
+// A failed job is shown for a few seconds and then dismissed for good (the
+// server forgets it too), so an old failure doesn't greet the user on every
+// visit.
+function JobCard({ job, onDismiss }) {
+  useAutoDismiss(job.status === 'error' ? job.jobId : null, () => onDismiss(job.jobId));
+  const label = KIND_LABEL[job.kind] || job.kind;
+  return (
+    <div
+      style={{
+        background: 'var(--bg-surface)', border: '1px solid var(--border)', borderRadius: 'var(--radius-md)',
+        padding: 12, fontSize: 13, boxShadow: '0 4px 16px rgba(0,0,0,0.4)',
+      }}
+    >
+      <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'flex-start', gap: 8 }}>
+        <strong>{label}</strong>
+        <button type="button" onClick={() => onDismiss(job.jobId)} style={{ background: 'none', color: 'var(--text-secondary)', cursor: 'pointer', fontSize: 14 }}>&times;</button>
+      </div>
+      {job.status === 'running' && (
+        <div style={{ color: 'var(--text-secondary)', marginTop: 4 }}>Still processing ({Math.round(job.progress || 0)}%) - this continued while you were away.</div>
+      )}
+      {job.status === 'done' && (
+        <div style={{ color: 'var(--text-secondary)', marginTop: 4 }}>
+          Finished while you were away.
+          {job.result?.fileName && (
+            <>
+              {' '}
+              <a
+                href={`${API_BASE_URL}/clips/${encodeURIComponent(job.result.fileName)}?name=${encodeURIComponent(job.result.downloadName || job.result.fileName)}`}
+                target="_blank"
+                rel="noreferrer"
+                style={{ color: 'var(--accent)' }}
+              >
+                Download
+              </a>
+            </>
           )}
         </div>
-      ))}
+      )}
+      {job.status === 'error' && (
+        <div style={{ color: 'var(--danger)', marginTop: 4 }}>
+          {`Your ${label.toLowerCase()} couldn't be finished. `}
+          {friendlyError(job.error, 'Please try again.')}
+        </div>
+      )}
     </div>
   );
 }

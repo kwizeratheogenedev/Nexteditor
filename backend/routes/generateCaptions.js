@@ -8,6 +8,7 @@ import { probeDuration, runFFmpeg } from '../services/ffmpeg.js';
 import { transcribeChunks } from '../services/captionTranscription.js';
 import { getIo } from '../socket.js';
 import { UPLOADS_DIR, CLIPS_DIR } from '../storagePaths.js';
+import { toUserMessage } from '../services/userMessage.js';
 
 const router = express.Router();
 const clipsDir = CLIPS_DIR;
@@ -117,7 +118,7 @@ router.post('/', captionUpload.single('video'), async (req, res) => {
     console.error('Caption generation failed:', error);
     emitProgress(req, 0, 'Caption generation failed');
     if (req.headers['x-job-id']) setTimeout(() => progressByJob.delete(req.headers['x-job-id']), 15 * 60 * 1000);
-    if (!res.headersSent) res.status(500).json({ error: error.message || 'Unable to generate captions.' });
+    if (!res.headersSent) res.status(500).json({ error: toUserMessage(error, 'Captions could not be created. Please try again.') });
   } finally {
     if (req.file?.path) fsp.rm(req.file.path, { force: true }).catch(() => {});
     fsp.rm(jobDir, { recursive: true, force: true }).catch(() => {});

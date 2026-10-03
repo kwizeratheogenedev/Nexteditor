@@ -1,10 +1,12 @@
 import express from 'express';
 import fs from 'fs';
 import path from 'path';
+import { randomUUID } from 'crypto';
 import { captionBurnUpload } from '../middleware/upload.js';
 import { probeDuration, runFFmpeg } from '../services/ffmpeg.js';
 import { getIo } from '../socket.js';
 import { CLIPS_DIR } from '../storagePaths.js';
+import { toUserMessage } from '../services/userMessage.js';
 
 const router = express.Router();
 const clipsDir = CLIPS_DIR;
@@ -65,7 +67,7 @@ router.post(
       const subPath = files.subtitle[0].path;
       tempFiles.push(videoPath, subPath);
 
-      const outputPath = path.join(clipsDir, `subtitled_${Date.now()}.mp4`);
+      const outputPath = path.join(clipsDir, `subtitled_${randomUUID()}.mp4`);
       outputFiles.push(outputPath);
       const taskId = `burn-subtitles-${Date.now()}`;
       const videoDuration = await probeDuration(videoPath);
@@ -117,7 +119,7 @@ router.post(
         fs.rm(filePath, { force: true }, () => {});
       }
       if (!res.headersSent) {
-        res.status(500).json({ error: err.message });
+        res.status(500).json({ error: toUserMessage(err, 'The subtitles could not be added to this video. Please try again.') });
       }
     } finally {
       for (const filePath of tempFiles) {

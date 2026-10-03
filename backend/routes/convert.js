@@ -1,12 +1,14 @@
 import express from 'express';
 import fs from 'fs';
 import path from 'path';
-import { pipeline } from 'stream/promises';
-import { Readable } from 'stream';
+import { randomUUID } from 'crypto';
 import upload from '../middleware/upload.js';
 import { probeDuration, runFFmpeg } from '../services/ffmpeg.js';
+import { getFileSource } from '../services/fileResolve.js';
+import { downloadErrorMessage, downloadToFile } from '../services/safeDownload.js';
 import { getIo } from '../socket.js';
-import { CLIPS_DIR } from '../storagePaths.js';
+import { CLIPS_DIR, UPLOADS_DIR } from '../storagePaths.js';
+import { toUserMessage } from '../services/userMessage.js';
 
 const router = express.Router();
 const clipsDir = CLIPS_DIR;
@@ -41,25 +43,13 @@ function clipArgs(inputFile, startTime, outputFile) {
   ];
 }
 
+// Public addresses only, size-capped - see services/safeDownload.js.
 async function downloadRemoteVideo(url, outputPath) {
-  let parsedUrl;
-
   try {
-    parsedUrl = new URL(url);
-  } catch {
-    throw new Error('Each video link must be a valid URL.');
+    await downloadToFile(url, outputPath);
+  } catch (err) {
+    throw new Error(`One of the video links failed: ${downloadErrorMessage(err)}`);
   }
-
-  if (!['http:', 'https:'].includes(parsedUrl.protocol)) {
-    throw new Error('Each video link must start with http:// or https://');
-  }
-
-  const response = await fetch(parsedUrl);
-  if (!response.ok || !response.body) {
-    throw new Error('Unable to download one of the provided video links.');
-  }
-
-  await pipeline(Readable.fromWeb(response.body), fs.createWriteStream(outputPath));
 }
 
 router.post(
@@ -81,7 +71,8 @@ router.post(
       // Handle different source modes: 'upload', 'link', 'path'
       let videoPaths = [];
       let audioPath = '';
-      const sessionId = Date.now();
+      // Random, so files waiting in the public clips folder can't be guessed.
+      const sessionId = randomUUID();
 
       if (sourceMode === 'path') {
         // Use file paths directly from URL fetches (YouTube, Drive, etc.)
@@ -95,22 +86,25 @@ router.post(
           return;
         }
 
-        // Verify files exist
-        if (!fs.existsSync(video1Path)) {
-          throw new Error(`Video 1 file not found: ${video1Path}`);
-        }
-        if (!fs.existsSync(video2Path)) {
-          throw new Error(`Video 2 file not found: ${video2Path}`);
-        }
-        if (!fs.existsSync(video3Path)) {
-          throw new Error(`Video 3 file not found: ${video3Path}`);
-        }
-        if (!fs.existsSync(audioPathVal)) {
-          throw new Error(`Audio file not found: ${audioPathVal}`);
+        // Only files the link fetcher (uploads/) or an earlier job (clips/)
+        // put on this server - never any other path on disk.
+        const resolved = [];
+        for (const [label, candidate] of [['Video 1', video1Path], ['Video 2', video2Path], ['Video 3', video3Path], ['Audio', audioPathVal]]) {
+          let sourcePath = null;
+          try {
+            sourcePath = getFileSource(null, candidate, [UPLOADS_DIR, CLIPS_DIR]);
+          } catch {
+            sourcePath = null;
+          }
+          if (!sourcePath || !fs.existsSync(sourcePath)) {
+            res.status(400).json({ error: `${label}: that file is no longer on the server - fetch the link again.` });
+            return;
+          }
+          resolved.push(sourcePath);
         }
 
-        videoPaths = [video1Path, video2Path, video3Path];
-        audioPath = audioPathVal;
+        videoPaths = resolved.slice(0, 3);
+        audioPath = resolved[3];
         
         emitToClient(req, 'ffmpeg-progress', { percent: 5, currentTime: 'Files verified...' });
       } else if (sourceMode === 'link') {
@@ -186,7 +180,7 @@ router.post(
           duration: 3,
           onProgress: (progress) => {
             // Scale progress: 10-40% for clip creation
-            const scaledPercent = 10 + (i / numClips) * 30 + (progress.percent / numClips);
+            const scaledPercent = Math.min(40, 10 + (i / numClips) * 30 + ((progress.percent / numClips) * 30) / 100);
             emitToClient(req, 'ffmpeg-progress', { 
               percent: Math.round(scaledPercent), 
               currentTime: `Creating clip ${i + 1}/${numClips}...` 
@@ -236,7 +230,7 @@ router.post(
           duration: audioDuration,
           onProgress: (progress) => {
             // Scale progress: 45-90% for merge
-            const scaledPercent = 45 + (progress.percent * 0.45);
+            const scaledPercent = Math.min(90, 45 + (progress.percent * 0.45));
             emitToClient(req, 'ffmpeg-progress', { 
               percent: Math.round(scaledPercent), 
               currentTime: progress.currentTime || 'Merging...' 
@@ -261,14 +255,14 @@ router.post(
     } catch (err) {
       console.error('Montage error:', err);
       emitToClient(req, 'ffmpeg-progress', { percent: 0, currentTime: '' });
-      emitToClient(req, 'ffmpeg-complete', { taskId: `convert-${Date.now()}`, status: 'error', error: err.message });
+      emitToClient(req, 'ffmpeg-complete', { taskId: `convert-${Date.now()}`, status: 'error', error: toUserMessage(err, 'The videos could not be merged. Please try again.') });
       
       for (const filePath of [...outputFiles, ...tempFiles]) {
         fs.rm(filePath, { force: true }, () => {});
       }
       
       if (!res.headersSent) {
-        res.status(500).json({ error: err.message });
+        res.status(500).json({ error: toUserMessage(err, 'The videos could not be merged. Please try again.') });
       }
     }
   },

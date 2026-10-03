@@ -14,6 +14,7 @@ import { getFileSource } from '../services/fileResolve.js';
 import { getIo } from '../socket.js';
 import { requireAuth, requireSubscription } from '../middleware/auth.js';
 import { CLIPS_DIR } from '../storagePaths.js';
+import { toUserMessage } from '../services/userMessage.js';
 
 const router = express.Router();
 const clipsDir = CLIPS_DIR;
@@ -115,7 +116,7 @@ router.get('/auth/callback', async (req, res) => {
     await req.user.save();
     res.send(htmlMessage('Connected!', 'You can close this tab and go back to NexEditor.'));
   } catch (err) {
-    res.status(500).send(htmlMessage('Connection failed', err.message || 'Unknown error'));
+    res.status(500).send(htmlMessage('Connection failed', toUserMessage(err, 'Could not connect to YouTube. Please try again.')));
   }
 });
 
@@ -139,7 +140,7 @@ router.get('/auth/status', async (req, res) => {
   } catch (err) {
     // A saved-but-revoked/expired token still counts as "not connected" to
     // the frontend, which should fall back to the connect flow.
-    res.json({ connected: false, configured, error: err.message });
+    res.json({ connected: false, configured, error: toUserMessage(err, 'Could not check the YouTube connection.') });
   }
 });
 
@@ -169,7 +170,7 @@ router.post('/upload', requireSubscription('youtubeUpload'), async (req, res) =>
     const candidate = requestedPath || (fileName ? path.join(clipsDir, fileName) : null);
     sourcePath = getFileSource(null, candidate, [clipsDir]);
   } catch (err) {
-    res.status(400).json({ error: err.message });
+    res.status(400).json({ error: toUserMessage(err, 'That video could not be found on the server. Please export it again.') });
     return;
   }
   if (!sourcePath || !fs.existsSync(sourcePath)) {
@@ -228,7 +229,7 @@ router.post('/upload', requireSubscription('youtubeUpload'), async (req, res) =>
     res.json({ videoId, videoUrl: `https://youtube.com/watch?v=${videoId}` });
   } catch (err) {
     console.error('YouTube upload failed:', err);
-    res.status(500).json({ error: err.errors?.[0]?.message || err.message || 'Upload failed.' });
+    res.status(500).json({ error: toUserMessage({ message: err.errors?.[0]?.message || err.message }, 'The upload to YouTube failed. Please try again.') });
   }
 });
 
@@ -291,7 +292,7 @@ router.patch('/videos/:videoId', requireSubscription('youtubeUpload'), async (re
     res.json({ ok: true, videoUrl: `https://youtube.com/watch?v=${videoId}` });
   } catch (err) {
     console.error('YouTube metadata update failed:', err);
-    res.status(500).json({ error: err.errors?.[0]?.message || err.message || 'Update failed.' });
+    res.status(500).json({ error: toUserMessage({ message: err.errors?.[0]?.message || err.message }, 'The YouTube details could not be saved. Please try again.') });
   }
 });
 

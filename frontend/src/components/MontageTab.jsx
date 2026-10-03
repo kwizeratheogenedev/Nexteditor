@@ -2,6 +2,11 @@ import { useEffect, useRef, useState, useCallback } from 'react';
 import { useSocket } from '../context/SocketContext';
 import { usePersistedMontageState } from '../hooks/usePersistedMontageState';
 import API_BASE, { API_ENDPOINTS } from '../config';
+import { useAutoDismiss } from '../hooks/useAutoDismiss.js';
+import { friendlyError } from '../utils/friendlyError.js';
+
+// A failed slot goes back to empty after a few seconds, ready to try again.
+const clearSlotError = (prev) => (prev.status === 'error' ? { ...prev, status:'idle', error:'', progress:0 } : prev);
 
 // ─── Utilities ────────────────────────────────────────────────────────────────
 
@@ -297,6 +302,7 @@ function MediaCard({ label, item, setItem, accept, type, onError, isOptional = f
   const isLoading = item.status === 'loading';
   const isReady   = item.status === 'ready';
   const isError   = item.status === 'error';
+  useAutoDismiss(isError ? item.error || 'error' : null, () => setItem(clearSlotError));
 
   const accent    = isAudio ? 'audio' : 'video';
   const accentClr = isAudio ? 'var(--accent-pink)' : 'var(--accent-violet)';
@@ -561,7 +567,7 @@ function MediaCard({ label, item, setItem, accept, type, onError, isOptional = f
         {/* error */}
         {isError && !isLoading && (
           <div style={{ display:'flex', alignItems:'flex-start', gap:8, padding:'8px 10px', background:'rgba(239,68,68,.06)', borderRadius:9, border:'1px solid rgba(239,68,68,.2)' }}>
-            <span style={{ fontSize:12, color:'var(--danger)', lineHeight:1.4 }}>{item.error}</span>
+            <span style={{ fontSize:12, color:'var(--danger)', lineHeight:1.4 }}>{friendlyError(item.error, `This ${type} couldn't be added. Please try again.`)}</span>
           </div>
         )}
       </div>
@@ -576,6 +582,7 @@ function AudioCard({ item, setItem, accept, onError }) {
   const isReady = item.status === 'ready';
   const isLoading = item.status === 'loading';
   const isError = item.status === 'error';
+  useAutoDismiss(isError ? item.error || 'error' : null, () => setItem(clearSlotError));
 
   const handleFile = (e) => {
     const file = e.target.files?.[0];
@@ -632,7 +639,7 @@ function AudioCard({ item, setItem, accept, onError }) {
         </div>
 
         {isError && (
-          <div style={{ color:'var(--danger)', fontSize:12, background:'rgba(239,68,68,.08)', border:'1px solid rgba(239,68,68,.18)', borderRadius:12, padding:'10px 12px' }}>{item.error}</div>
+          <div style={{ color:'var(--danger)', fontSize:12, background:'rgba(239,68,68,.08)', border:'1px solid rgba(239,68,68,.18)', borderRadius:12, padding:'10px 12px' }}>{friendlyError(item.error, `This song couldn't be added. Please try again.`)}</div>
         )}
       </div>
 
@@ -731,6 +738,7 @@ function YouTubePublishPanel({ outputFile, onClose }) {
   const [channel, setChannel] = useState(null);
   const [progress, setProgress] = useState(0);
   const [errorText, setErrorText] = useState('');
+  useAutoDismiss(errorText, () => setErrorText(''));
   const [saving, setSaving] = useState(false);
   const [videoId, setVideoId] = useState(null);
   const [videoUrl, setVideoUrl] = useState(null);
@@ -872,7 +880,7 @@ function YouTubePublishPanel({ outputFile, onClose }) {
         </div>
 
         {errorText && (
-          <div style={{ padding:'8px 10px', background:'rgba(239,68,68,.12)', border:'1px solid rgba(239,68,68,.3)', borderRadius:8, color:'var(--danger)', fontSize:12 }}>{errorText}</div>
+          <div style={{ padding:'8px 10px', background:'rgba(239,68,68,.12)', border:'1px solid rgba(239,68,68,.3)', borderRadius:8, color:'var(--danger)', fontSize:12 }}>{friendlyError(errorText)}</div>
         )}
 
         {status === 'checking' && (
@@ -1294,8 +1302,8 @@ function ErrorPreview({ error, onRetry, onServerFallback }) {
         <div style={{ width:24, height:24 }}><Icon.X /></div>
       </div>
       <div>
-        <div style={{ fontSize:16, fontWeight:600, color:'var(--text-primary)', marginBottom:8 }}>Merge Failed</div>
-        <div style={{ fontSize:12, color:'var(--text-muted)', fontFamily:'monospace', background:'var(--panel-surface-0)', border:'1px solid var(--panel-surface-2)', borderRadius:8, padding:'8px 12px', textAlign:'left', lineHeight:1.5 }}>{error}</div>
+        <div style={{ fontSize:16, fontWeight:600, color:'var(--text-primary)', marginBottom:8 }}>Montage failed</div>
+        <div style={{ fontSize:13, color:'var(--text-muted)', lineHeight:1.5 }}>{friendlyError(error, 'The montage could not be created. Please try again.')}</div>
       </div>
       <button onClick={onRetry}
         style={{ padding:'8px 24px', background:'rgba(239,68,68,.15)', border:'1px solid rgba(239,68,68,.3)', borderRadius:9, color:'var(--danger)', fontSize:12, fontWeight:600, cursor:'pointer' }}>
@@ -1560,6 +1568,13 @@ export default function MontageTab({ loadVideoInEditor, onError, onShurfer, onRe
 
   const isProcessing = mergeStatus === 'processing';
   const isSocketUnavailable = !socket && Boolean(socketError);
+  // The connection warning, like every error, clears itself after a few seconds.
+  const [hiddenSocketError, setHiddenSocketError] = useState('');
+  useAutoDismiss(isSocketUnavailable && socketError !== hiddenSocketError ? socketError : null, () => setHiddenSocketError(socketError));
+  // The failure screen returns to the montage setup after a few seconds -
+  // Merge (on either server) is right there to try again.
+  const resetFailedMerge = () => { setMergeStatus('idle'); setMergeError(''); setMergeProgress(0); setMergeStageText(''); setDeviceFailed(false); };
+  useAutoDismiss(mergeStatus === 'error' ? mergeError || 'error' : null, resetFailedMerge);
   const readyCount = videos.filter((v) => v.status === 'ready').length;
   const hasAudio = audio.status === 'ready';
   const canMerge = readyCount >= 2 && hasAudio && !isProcessing;
@@ -1771,9 +1786,9 @@ export default function MontageTab({ loadVideoInEditor, onError, onShurfer, onRe
           <span style={{ fontSize:12, color:'var(--panel-text-3)', marginLeft:4 }}>
             {readyCount === 0 ? 'add 3 videos and 1 audio track' : `${readyCount}/3 videos selected${hasAudio ? ' · audio ready' : ''}`}
           </span>
-          {isSocketUnavailable && (
+          {isSocketUnavailable && socketError !== hiddenSocketError && (
             <span style={{ fontSize:12, color:'var(--danger)', marginLeft:8 }}>
-              {socketError}
+              {friendlyError(socketError, `Can't connect to the progress service right now.`)}
             </span>
           )}
         </div>
@@ -1863,7 +1878,7 @@ export default function MontageTab({ loadVideoInEditor, onError, onShurfer, onRe
                   </div>
                 )}
                 {mergeStatus === 'success' && <SuccessPreview outputFile={outputFile} loadVideoInEditor={loadVideoInEditor} onShurfer={onShurfer} onReset={handleReset} />}
-                {mergeStatus === 'error' && <ErrorPreview error={mergeError} onRetry={() => { setMergeStatus('idle'); setMergeError(''); setMergeProgress(0); setMergeStageText(''); setDeviceFailed(false); }}
+                {mergeStatus === 'error' && <ErrorPreview error={mergeError} onRetry={resetFailedMerge}
                   onServerFallback={deviceFailed ? () => { chooseRenderMode('server'); setDeviceFailed(false); handleMergeOnServer(); } : undefined} />}
               </div>
             </div>

@@ -4,6 +4,8 @@ import { useAuth } from '../context/AuthContext.jsx';
 import { API_ENDPOINTS } from '../config.js';
 import ThemeToggle from '../components/ThemeToggle.jsx';
 import './pages.css';
+import { useAutoDismiss } from '../hooks/useAutoDismiss.js';
+import { friendlyError } from '../utils/friendlyError.js';
 
 const FREE_FEATURES = [
   'Up to 3 saved projects',
@@ -32,6 +34,7 @@ function MomoUpgradeCard({ onSuccess }) {
   const [state, setState] = useState('idle'); // idle | requesting | pending | success | error
   const [message, setMessage] = useState('');
   const pollRef = useRef(null);
+  useAutoDismiss(state === 'error' ? message : null, () => { setMessage(''); setState('idle'); });
 
   useEffect(() => () => clearInterval(pollRef.current), []);
 
@@ -78,7 +81,7 @@ function MomoUpgradeCard({ onSuccess }) {
       }, POLL_INTERVAL_MS);
     } catch (err) {
       setState('error');
-      setMessage(err.message || 'Failed to start MoMo payment.');
+      setMessage(friendlyError(err.message, 'Could not start the MoMo payment. Please try again.'));
     }
   };
 
@@ -115,6 +118,7 @@ function MomoUpgradeCard({ onSuccess }) {
 function CardUpgradeButton() {
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState('');
+  useAutoDismiss(error, () => setError(''));
 
   const handleClick = async () => {
     setBusy(true);
@@ -125,7 +129,7 @@ function CardUpgradeButton() {
       if (!res.ok) throw new Error(data.error || 'Failed to start card payment.');
       window.location.href = data.checkoutUrl;
     } catch (err) {
-      setError(err.message || 'Failed to start card payment.');
+      setError(friendlyError(err.message, 'Could not start the card payment. Please try again.'));
       setBusy(false);
     }
   };
@@ -145,6 +149,7 @@ export default function PricingPage() {
   const navigate = useNavigate();
   const [searchParams, setSearchParams] = useSearchParams();
   const [cardVerifyMessage, setCardVerifyMessage] = useState('');
+  useAutoDismiss(/could not/i.test(cardVerifyMessage) ? cardVerifyMessage : null, () => setCardVerifyMessage(''));
 
   const handleUpgraded = async () => {
     await refresh();
