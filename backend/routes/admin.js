@@ -428,7 +428,7 @@ router.patch('/payments/:id', async (req, res) => {
 router.get('/jobs', async (req, res) => {
   const { page: p, limit, skip } = page(req);
   const filter = {};
-  if (['running', 'done', 'error'].includes(req.query.status)) filter.status = req.query.status;
+  if (['running', 'done', 'error', 'cancelled'].includes(req.query.status)) filter.status = req.query.status;
   if (OPERATION_KINDS.includes(req.query.kind)) filter.kind = req.query.kind;
   if (req.query.who === 'guest') filter.guest = true;
   else if (req.query.who === 'user') filter.guest = false;

@@ -3,7 +3,7 @@ import { Badge, Card, Empty, Pager, Spinner, formatBytes, formatDate } from '../
 import { useApi } from './useApi.js';
 import { JOB_KIND_LABEL, formatProcessingTime } from './labels.js';
 
-const STATUS_TONE = { done: 'ok', error: 'danger', running: 'warn' };
+const STATUS_TONE = { done: 'ok', error: 'danger', running: 'warn', cancelled: 'neutral' };
 
 // Everything the server processed (backend/models/Operation.js), from
 // signed-in users and guests alike.
@@ -22,7 +22,7 @@ export default function Jobs({ onOpenUser }) {
     >
       <div className="cs-toolbar">
         <div className="cs-chips" role="group" aria-label="Filter by status">
-          {[['', 'All'], ['running', 'Running'], ['done', 'Done'], ['error', 'Failed']].map(([id, label]) => (
+          {[['', 'All'], ['running', 'Running'], ['done', 'Done'], ['error', 'Failed'], ['cancelled', 'Cancelled']].map(([id, label]) => (
             <button key={id || 'all'} type="button" className={`cs-chip ${status === id ? 'is-active' : ''}`} aria-pressed={status === id} onClick={() => { setStatus(id); setPageNo(1); }}>{label}</button>
           ))}
         </div>

@@ -678,8 +678,10 @@ function IdlePreview({ readyCount }) {
 
 // Shows only what is really happening: while uploading, the share of the
 // files actually sent; after that, the percent the server reports.
-function ProcessingPreview({ progress, status, totalEstimatedTime, timeSpent, timeLeft, uploading, note, onDevice }) {
+function ProcessingPreview({ progress, status, totalEstimatedTime, timeSpent, timeLeft, uploading, note, onDevice, onCancel }) {
   const fallbackStatus = uploading ? 'Uploading your files...' : 'Waiting for the server...';
+  // Cancel asks once more, so a stray click doesn't throw away a long render.
+  const [confirmingCancel, setConfirmingCancel] = useState(false);
 
   const r = 44;
   const circ = 2 * Math.PI * r;
@@ -718,6 +720,26 @@ function ProcessingPreview({ progress, status, totalEstimatedTime, timeSpent, ti
           </div>
         )}
       </div>
+      {onCancel && (confirmingCancel ? (
+        <div role="group" aria-label="Stop this montage?" style={{ display:'flex', flexDirection:'column', alignItems:'center', gap:8 }}>
+          <div style={{ fontSize:12, color:'var(--text-muted)' }}>Stop this montage? The progress so far will be lost.</div>
+          <div style={{ display:'flex', gap:8 }}>
+            <button type="button" onClick={onCancel}
+              style={{ padding:'7px 16px', background:'rgba(239,68,68,.15)', border:'1px solid rgba(239,68,68,.35)', borderRadius:9, color:'var(--danger)', fontSize:12, fontWeight:600, cursor:'pointer' }}>
+              Yes, stop it
+            </button>
+            <button type="button" onClick={() => setConfirmingCancel(false)}
+              style={{ padding:'7px 16px', background:'transparent', border:'1px solid var(--panel-surface-3)', borderRadius:9, color:'var(--panel-text-2)', fontSize:12, fontWeight:600, cursor:'pointer' }}>
+              Keep going
+            </button>
+          </div>
+        </div>
+      ) : (
+        <button type="button" onClick={() => setConfirmingCancel(true)}
+          style={{ padding:'7px 18px', background:'transparent', border:'1px solid var(--panel-surface-3)', borderRadius:9, color:'var(--panel-text-2)', fontSize:12, fontWeight:600, cursor:'pointer' }}>
+          Cancel
+        </button>
+      ))}
     </div>
   );
 }
@@ -1430,10 +1452,22 @@ export default function MontageTab({ loadVideoInEditor, onError, onShurfer, onRe
   const [connectionNote, setConnectionNote] = useState('');
   const uploadingRef = useRef(false);
   const unknownSinceRef = useRef(0);
+  // The montage this page is watching (updates from any other job - e.g.
+  // one just cancelled - are ignored), its upload, and whether the user
+  // cancelled it (so the stop isn't reported as a failure).
+  const activeJobIdRef = useRef(mergeJobId);
+  const uploadXhrRef = useRef(null);
+  const cancelRequestedRef = useRef(false);
+  // Follows the saved job too: after a reload it's restored a moment later.
+  useEffect(() => {
+    activeJobIdRef.current = mergeJobId;
+  }, [mergeJobId]);
 
   useEffect(() => {
     if (!socket) return;
     const onProg = (p) => {
+      if (p?.jobId && p.jobId !== activeJobIdRef.current) return;
+      if (p?.cancelled) return;
       // The server responds to the initial request as soon as the job is
       // accepted (see handleMerge) rather than holding the connection open
       // for the whole render - a screen lock, sleep/wake, or backgrounded
@@ -1471,6 +1505,7 @@ export default function MontageTab({ loadVideoInEditor, onError, onShurfer, onRe
       setMergeTimeLeft(typeof p?.timeLeft === 'number' ? p.timeLeft : 0);
     };
     const onErr = (p) => {
+      if (p?.jobId && p.jobId !== activeJobIdRef.current) return;
       const message = p?.error || 'Failed to create montage';
       setMergeError(message);
       setMergeStatus('error');
@@ -1521,6 +1556,15 @@ export default function MontageTab({ loadVideoInEditor, onError, onShurfer, onRe
           return;
         }
         unknownSinceRef.current = 0;
+        if (jobId !== activeJobIdRef.current) return;
+        if (status.cancelled) {
+          // Cancelled (from this page in another tab, or before a reload).
+          setMergeJobId('');
+          setMergeStatus('idle');
+          setMergeProgress(0);
+          setMergeStageText('');
+          return;
+        }
         if (status.error) {
           // The original request's own connection may have dropped (screen
           // lock/sleep, backgrounded tab, network blip) long before the
@@ -1576,6 +1620,31 @@ export default function MontageTab({ loadVideoInEditor, onError, onShurfer, onRe
   // Merge (on either server) is right there to try again.
   const resetFailedMerge = () => { setMergeStatus('idle'); setMergeError(''); setMergeProgress(0); setMergeStageText(''); setDeviceFailed(false); };
   useAutoDismiss(mergeStatus === 'error' ? mergeError || 'error' : null, resetFailedMerge);
+
+  // Stops the montage at whatever stage it's in - the upload, the render on
+  // Server 1 (the server kills its ffmpeg work and deletes the files) or the
+  // render on this device - and goes back to the setup with the videos and
+  // song still chosen.
+  const handleCancelMerge = () => {
+    cancelRequestedRef.current = true;
+    deviceAbortRef.current?.abort();
+    uploadXhrRef.current?.abort();
+    uploadXhrRef.current = null;
+    const jobId = activeJobIdRef.current;
+    if (jobId) {
+      fetch(`${API_BASE}/api/create-montage/cancel/${encodeURIComponent(jobId)}`, { method:'POST', credentials:'include' }).catch(() => {});
+    }
+    activeJobIdRef.current = '';
+    uploadingRef.current = false;
+    setUploading(false);
+    maxProgressRef.current = 0;
+    setConnectionNote('');
+    setMergeJobId('');
+    setMergeTotalEstimatedTime(0);
+    setMergeTimeSpent(0);
+    setMergeTimeLeft(0);
+    resetFailedMerge();
+  };
   const readyCount = videos.filter((v) => v.status === 'ready').length;
   const hasAudio = audio.status === 'ready';
   const canMerge = readyCount >= 2 && hasAudio && !isProcessing;
@@ -1612,6 +1681,8 @@ export default function MontageTab({ loadVideoInEditor, onError, onShurfer, onRe
       onError?.(message);
     };
     releaseLocalResult();
+    cancelRequestedRef.current = false;
+    activeJobIdRef.current = '';
     setMergeJobId('');
     setMergeStatus('processing');
     setMergeProgress(0);
@@ -1679,6 +1750,8 @@ export default function MontageTab({ loadVideoInEditor, onError, onShurfer, onRe
     // this until after the state update flushes) so it's available
     // immediately below for the X-Job-Id header.
     const newJobId = globalThis.crypto?.randomUUID?.() || `montage-${Date.now()}-${Math.random().toString(16).slice(2)}`;
+    cancelRequestedRef.current = false;
+    activeJobIdRef.current = newJobId;
     setMergeJobId(newJobId);
     setMergeStatus('processing');
     setMergeProgress(0);
@@ -1711,6 +1784,7 @@ export default function MontageTab({ loadVideoInEditor, onError, onShurfer, onRe
     // instead of a guess. The server answers (202 + jobId) as soon as the
     // files have arrived; completion then comes via the socket or the poller.
     const fail = (msg) => {
+      if (cancelRequestedRef.current) return;
       uploadingRef.current = false;
       setUploading(false);
       setMergeError(msg);
@@ -1736,6 +1810,8 @@ export default function MontageTab({ loadVideoInEditor, onError, onShurfer, onRe
       setMergeStageText('Upload complete - the server is receiving your files...');
     };
     xhr.onload = () => {
+      uploadXhrRef.current = null;
+      if (cancelRequestedRef.current) return;
       uploadingRef.current = false;
       setUploading(false);
       let data = {};
@@ -1756,6 +1832,7 @@ export default function MontageTab({ loadVideoInEditor, onError, onShurfer, onRe
     xhr.onabort = () => fail('Upload cancelled.');
     uploadingRef.current = true;
     setUploading(true);
+    uploadXhrRef.current = xhr;
     xhr.send(fd);
   }
 
@@ -1866,7 +1943,7 @@ export default function MontageTab({ loadVideoInEditor, onError, onShurfer, onRe
               <div style={{ width:'100%', maxWidth:840, minHeight:280, display:'flex', alignItems:'center', justifyContent:'center' }}>
                 {mergeStatus === 'processing' && (
                   <div style={{ display:'flex', flexDirection:'column', alignItems:'center', gap:18 }}>
-                    <ProcessingPreview progress={mergeProgress} status={mergeStageText} totalEstimatedTime={mergeTotalEstimatedTime} timeSpent={mergeTimeSpent} timeLeft={mergeTimeLeft} uploading={uploading} note={connectionNote} onDevice={onDevice && !mergeJobId} />
+                    <ProcessingPreview progress={mergeProgress} status={mergeStageText} totalEstimatedTime={mergeTotalEstimatedTime} timeSpent={mergeTimeSpent} timeLeft={mergeTimeLeft} uploading={uploading} note={connectionNote} onDevice={onDevice && !mergeJobId} onCancel={handleCancelMerge} />
                     <button
                       type="button"
                       onClick={handleOpenNewMontageTab}

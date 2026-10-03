@@ -9,7 +9,7 @@ import { holdFiles } from '../services/fileLeases.js';
 import { toUserMessage } from '../services/userMessage.js';
 import { getIo } from '../socket.js';
 import { optionalAuth } from '../middleware/auth.js';
-import { upsertJob } from '../services/jobTracker.js';
+import { removeJob, upsertJob } from '../services/jobTracker.js';
 import pLimit from 'p-limit';
 import { UPLOADS_DIR, CLIPS_DIR } from '../storagePaths.js';
 import { IS_LIMITED, EFFECTIVE_CPUS, MAX_PARALLEL_ENCODES } from '../services/cpuBudget.js';
@@ -62,7 +62,19 @@ function getFileSource(file, filePath) {
 // separate montage runs can ever collide here.
 const progressByJob = new Map();
 
-function emitToClient(jobId, socketId, eventName, payload) {
+// Montages that can still be cancelled: jobId -> AbortController. A cancel
+// that arrives before its montage has started (the upload was just
+// finishing) is remembered for a while in cancelledEarly instead.
+const activeMontages = new Map();
+const cancelledEarly = new Map(); // jobId -> when
+
+function emitToClient(jobId, socketId, eventName, rawPayload) {
+  // Every update names its job, so a page can ignore one from a montage it
+  // has moved on from (e.g. one it just cancelled).
+  const payload = jobId ? { ...rawPayload, jobId } : rawPayload;
+  // A cancelled montage stays cancelled: work still winding down mustn't
+  // report progress over it.
+  if (jobId && progressByJob.get(jobId)?.payload?.cancelled) return;
   if (jobId && (eventName === 'montage-progress' || eventName === 'montage-error')) {
     progressByJob.set(jobId, { eventName, payload, updatedAt: Date.now() });
   }
@@ -81,6 +93,9 @@ setInterval(() => {
   const cutoff = Date.now() - 60 * 60 * 1000;
   for (const [jobId, entry] of progressByJob.entries()) {
     if (entry.updatedAt < cutoff) progressByJob.delete(jobId);
+  }
+  for (const [jobId, at] of cancelledEarly.entries()) {
+    if (at < cutoff) cancelledEarly.delete(jobId);
   }
 }, 15 * 60 * 1000);
 
@@ -235,6 +250,17 @@ function buildClipArgs(inputFile, startTime, clipDuration, outputFile, { beautyS
   ];
 }
 
+// Stops a running montage: its ffmpeg processes are killed and its files
+// deleted. Knowing the job's id - a random id only the page that started it
+// has - is what allows it, the same as watching its progress.
+router.post('/cancel/:jobId', (req, res) => {
+  const { jobId } = req.params;
+  const controller = activeMontages.get(jobId);
+  if (controller) controller.abort();
+  else cancelledEarly.set(jobId, Date.now());
+  res.json({ cancelled: true });
+});
+
 router.post('/', optionalAuth, upload.any(), trackOperation('montage'), async (req, res) => {
   let concatListPath = '';
   const temporaryInputFiles = [];
@@ -248,6 +274,11 @@ router.post('/', optionalAuth, upload.any(), trackOperation('montage'), async (r
   const jobId = req.headers['x-job-id'] || `montage-${Date.now()}-${Math.random().toString(16).slice(2)}`;
   const ownerId = req.user?._id;
   let releaseFiles = () => {};
+  let outputPathToCleanUp = '';
+  const cancelController = new AbortController();
+  const { signal } = cancelController;
+  activeMontages.set(jobId, cancelController);
+  if (cancelledEarly.delete(jobId)) cancelController.abort();
 
   if (ownerId) upsertJob(ownerId, { jobId, kind: 'montage', status: 'running', progress: 0, message: 'Starting montage...' });
 
@@ -340,6 +371,8 @@ router.post('/', optionalAuth, upload.any(), trackOperation('montage'), async (r
     const trimmedAudioFiles = await Promise.all(
       audioSources.map((src) => audioLimit(async () => {
         const trimmed = path.join(uploadsDir, `trimmed-audio-${randomUUID()}.m4a`);
+        // Listed for cleanup before it exists, so a cancel mid-way removes it too.
+        temporaryInputFiles.push(trimmed);
         await runFFmpeg([
           '-i', src,
           '-vn',
@@ -347,8 +380,7 @@ router.post('/', optionalAuth, upload.any(), trackOperation('montage'), async (r
           '-b:a', '192k',
           '-y',
           trimmed,
-        ]);
-        temporaryInputFiles.push(trimmed);
+        ], { signal });
         return trimmed;
       })),
     );
@@ -360,6 +392,7 @@ router.post('/', optionalAuth, upload.any(), trackOperation('montage'), async (r
       const listContent = trimmedAudioFiles.map(p => `file '${p.replace(/\\/g, '/')}'`).join('\n');
       fs.writeFileSync(audioConcatList, listContent);
       const merged = path.join(uploadsDir, `merged-audio-${randomUUID()}.m4a`);
+      temporaryInputFiles.push(audioConcatList, merged);
       await runFFmpeg([
         '-f', 'concat',
         '-safe', '0',
@@ -367,10 +400,8 @@ router.post('/', optionalAuth, upload.any(), trackOperation('montage'), async (r
         '-c', 'copy',
         '-y',
         merged,
-      ]);
+      ], { signal });
       mergedAudioPath = merged;
-      temporaryInputFiles.push(audioConcatList);
-      temporaryInputFiles.push(merged);
     }
 
     // Generate output filename
@@ -381,6 +412,7 @@ router.post('/', optionalAuth, upload.any(), trackOperation('montage'), async (r
     const downloadName = sanitizeDownloadName(req.body.audioLabel || `montage-${Date.now()}`);
     const outputFileName = `montage-${randomUUID()}.mp4`;
     const outputPath = path.join(outputDir, outputFileName);
+    outputPathToCleanUp = outputPath;
 
     // The montage always runs the full length of the audio track - an
     // 8-minute song produces an 8-minute video, not a truncated one.
@@ -389,6 +421,7 @@ router.post('/', optionalAuth, upload.any(), trackOperation('montage'), async (r
       ...videoFiles.map((videoPath) => probeDuration(videoPath)),
     ]);
 
+    signal.throwIfAborted();
     emitToClient(jobId, socketId, 'montage-progress', { percent: 5, currentTime: 'Analyzing source media...' });
     if (ownerId) upsertJob(ownerId, { jobId, progress: 5, message: 'Analyzing source media...' });
 
@@ -449,6 +482,7 @@ router.post('/', optionalAuth, upload.any(), trackOperation('montage'), async (r
 
     const clipPromises = clipPlan.map((plan, i) =>
       clipLimit(async () => {
+        signal.throwIfAborted();
         const clipPath = path.join(clipsDir, `montage-clip-${randomUUID()}.mp4`);
         generatedClipFiles.push(clipPath);
 
@@ -474,6 +508,7 @@ router.post('/', optionalAuth, upload.any(), trackOperation('montage'), async (r
           }, false),
           {
             duration: plan.clipDuration,
+            signal,
             onProgress: (progress) => {
               const clipProgress = Math.max(0, Math.min(1, progress.percent / 100));
               const overallPercent = segmentStart + (clipProgress * segmentSize);
@@ -508,6 +543,7 @@ router.post('/', optionalAuth, upload.any(), trackOperation('montage'), async (r
     );
 
     await Promise.all(clipPromises);
+    signal.throwIfAborted();
 
     concatListPath = path.join(uploadsDir, `concat-${randomUUID()}.txt`);
     const concatList = generatedClipFiles.map((filePath) => `file '${filePath.replace(/\\/g, '/')}'`).join('\n');
@@ -544,6 +580,7 @@ router.post('/', optionalAuth, upload.any(), trackOperation('montage'), async (r
         ],
         {
           duration: audioDuration,
+          signal,
           onProgress: (progress) => {
             const scaledPercent = 90 + (progress.percent * 0.08);
             const mergeElapsed = Date.now() - mergeStartTime;
@@ -616,8 +653,9 @@ router.post('/', optionalAuth, upload.any(), trackOperation('montage'), async (r
     if (ownerId) upsertJob(ownerId, { jobId, status: 'done', progress: 100, message: 'Complete', result });
     req.operation.done();
   } catch (error) {
+    const cancelled = signal.aborted;
     // The whole error, so ffmpeg's raw output (error.details) is in the log.
-    console.error('Montage creation error:', error);
+    if (!cancelled) console.error('Montage creation error:', error);
     if (concatListPath && fs.existsSync(concatListPath)) {
       try {
         fs.unlinkSync(concatListPath);
@@ -637,6 +675,22 @@ router.post('/', optionalAuth, upload.any(), trackOperation('montage'), async (r
         }
       } catch (_error) {}
     });
+    // A half-written montage.
+    if (outputPathToCleanUp) fs.rm(outputPathToCleanUp, { force: true }, () => {});
+    // Once more shortly: an ffmpeg that was just stopped can still hold its
+    // file open for a moment (on Windows that blocks the delete above).
+    const uploadedAudio = (req.files || []).filter((f) => /^audio\d*$/.test(f.fieldname)).map((f) => f.path);
+    const leftovers = [...generatedClipFiles, outputPathToCleanUp, ...temporaryInputFiles, ...uploadedAudio].filter(Boolean);
+    setTimeout(() => leftovers.forEach((filePath) => fs.rm(filePath, { force: true }, () => {})), 5000).unref?.();
+    if (cancelled) {
+      // Stopped by the user: the page has already moved on - tell it (and
+      // any other tab watching) it's over, without calling it a failure.
+      emitToClient(jobId, socketId, 'montage-progress', { percent: 0, currentTime: 'Cancelled', cancelled: true });
+      if (ownerId) removeJob(ownerId, jobId);
+      req.operation.cancel();
+      if (!res.headersSent) res.status(409).json({ error: 'The montage was cancelled.' });
+      return;
+    }
     const message = toUserMessage(error, 'The montage could not be created. Please try again.');
     req.operation.fail(error);
     emitToClient(jobId, socketId, 'montage-error', { error: message });
@@ -651,6 +705,7 @@ router.post('/', optionalAuth, upload.any(), trackOperation('montage'), async (r
     }
   } finally {
     releaseFiles();
+    activeMontages.delete(jobId);
   }
 });
 

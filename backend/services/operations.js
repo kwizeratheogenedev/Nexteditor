@@ -9,7 +9,7 @@ import { toUserMessage } from './userMessage.js';
 // are recorded with no owner). It works out the result from the response:
 //   - 2xx: done; 4xx/5xx: failed, with the `error` the route sent the user;
 //   - 202 (a background job, e.g. montage): the route reports the end itself
-//     through req.operation.done() / req.operation.fail(error);
+//     through req.operation.done() / .fail(error) / .cancel();
 //   - connection dropped before an answer: failed.
 // Recording never affects the request: database problems are only logged.
 
@@ -41,6 +41,8 @@ export function startOperation(kind, { owner = null, inputBytes = 0 } = {}) {
   // `extra`: fields only known by the end, e.g. { kind: 'longmix' }.
   return {
     done: (extra = {}) => end({ ...extra, status: 'done' }),
+    // Stopped by the user - not a failure.
+    cancel: (extra = {}) => end({ ...extra, status: 'cancelled' }),
     fail: (error, extra = {}) => end({
       ...extra,
       status: 'error',

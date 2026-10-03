@@ -20,7 +20,7 @@ const operationSchema = new Schema({
   owner: { type: Schema.Types.ObjectId, ref: 'User', default: null, index: true },
   // No account (kept separately: a deleted user's rows also lose `owner`).
   guest: { type: Boolean, default: false },
-  status: { type: String, enum: ['running', 'done', 'error'], default: 'running' },
+  status: { type: String, enum: ['running', 'done', 'error', 'cancelled'], default: 'running' },
   inputBytes: { type: Number, default: 0 },
   durationMs: { type: Number, default: null },
   // What the user was told, and the technical detail behind it.

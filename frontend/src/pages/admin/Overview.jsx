@@ -53,6 +53,7 @@ export default function Overview({ onOpenUser, onGo }) {
   if (!data) return <Spinner />;
   const done = data.jobs.last24h.done || 0;
   const failed = data.jobs.last24h.error || 0;
+  const cancelled = data.jobs.last24h.cancelled || 0;
 
   return (
     <div className="cs-stack">
@@ -60,7 +61,7 @@ export default function Overview({ onOpenUser, onGo }) {
         <Stat label="Total users" value={data.users.total.toLocaleString()} sub={`+${data.users.new7d} this week`} />
         <Stat label="Pro users" value={data.users.pro.toLocaleString()} sub={`${data.users.total ? Math.round((data.users.pro / data.users.total) * 100) : 0}% of users`} tone="pro" />
         <Stat label="Revenue · 30 days" value={money(data.revenue.last30d)} sub={`All time: ${money(data.revenue.allTime)}`} tone="ok" />
-        <Stat label="Server activity · 24h" value={(done + failed + (data.jobs.last24h.running || 0)).toLocaleString()} sub={`${done} done · ${failed} failed · ${data.jobs.running} running`} tone={failed ? 'warn' : undefined} />
+        <Stat label="Server activity · 24h" value={(done + failed + cancelled + (data.jobs.last24h.running || 0)).toLocaleString()} sub={`${done} done · ${failed} failed${cancelled ? ` · ${cancelled} cancelled` : ''} · ${data.jobs.running} running`} tone={failed ? 'warn' : undefined} />
         <Stat label="Projects" value={data.projects.total.toLocaleString()} sub={`${data.users.suspended} suspended users`} />
         <Stat label="Render queue" value={`${data.system.render.active} / ${data.system.render.max}`} sub={`${data.system.render.queued} waiting · up ${formatDuration(data.system.uptimeSeconds)}`} />
       </div>
