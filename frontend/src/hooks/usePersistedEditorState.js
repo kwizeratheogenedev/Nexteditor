@@ -305,8 +305,11 @@ export function usePersistedEditorState() {
   const clipsInIdbRef = useRef(false);
   const persistedSourcesRef = useRef(new Set());
   const [clipsSavedTick, setClipsSavedTick] = useState(0);
-  const [timelineHistory, setTimelineHistory] = useState([]);
-  const [historyIndex, setHistoryIndex] = useState(-1);
+  // History starts with the timeline the session began from (empty here,
+  // re-seeded when a saved/opened/new project replaces it), so the first
+  // edit can be undone back to it.
+  const [timelineHistory, setTimelineHistory] = useState(() => [createEmptyTimeline()]);
+  const [historyIndex, setHistoryIndex] = useState(0);
   // Backend project sync (M4) - additive to the localStorage/IndexedDB
   // persistence above, which stays the instant local cache exactly as
   // before. currentProjectId is null until the user explicitly saves the
@@ -382,6 +385,8 @@ export function usePersistedEditorState() {
 
         if (!cancelled) {
           setTimeline(restoredClips);
+          setTimelineHistory([restoredClips.slice()]);
+          setHistoryIndex(0);
           setPlayhead(parsed.playhead || 0);
           setActiveClipIndex(parsed.activeClipIndex || 0);
           setZoom(parsed.zoom || 100);
@@ -650,8 +655,8 @@ export function usePersistedEditorState() {
     setInsertMode(parsed.insertMode === true);
     setTrackMeta(parsed.trackMeta || defaultTrackMeta());
     setMarkers(Array.isArray(parsed.markers) ? parsed.markers : []);
-    setTimelineHistory([]);
-    setHistoryIndex(-1);
+    setTimelineHistory([restoredClips.slice()]);
+    setHistoryIndex(0);
     setCurrentProjectId(payload.project._id);
     setProjectName(payload.project.name);
     setSyncStatus('saved');
@@ -678,8 +683,8 @@ export function usePersistedEditorState() {
     setInsertMode(false);
     setTrackMeta(defaultTrackMeta());
     setMarkers([]);
-    setTimelineHistory([]);
-    setHistoryIndex(-1);
+    setTimelineHistory([createEmptyTimeline()]);
+    setHistoryIndex(0);
     setCurrentProjectId(null);
     setProjectName('Untitled project');
     setSyncStatus('idle');

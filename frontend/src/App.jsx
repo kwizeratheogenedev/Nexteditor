@@ -1235,6 +1235,12 @@ function App() {
       setSelectedClipIds([clip.id]);
     };
 
+    tempAudio.onerror = () => {
+      tempAudio.removeAttribute('src');
+      URL.revokeObjectURL(url);
+      setErrorText(`"${file.name}" couldn't be opened - the file may be damaged, or this browser can't play its format.`);
+    };
+
     tempAudio.load();
   };
 
@@ -1295,9 +1301,13 @@ function App() {
       }
     };
 
+    // A broken file, or one this browser can't play (e.g. HEVC in some
+    // browsers): say so once. (Calling load() again here re-fired the error
+    // forever, hundreds of times a second.)
     tempVideo.onerror = () => {
-      // If metadata loading fails, try to get duration from the playing video
-      tempVideo.load();
+      tempVideo.removeAttribute('src');
+      URL.revokeObjectURL(url);
+      setErrorText(`"${file.name}" couldn't be opened - the file may be damaged, or this browser can't play its format.`);
     };
 
     tempVideo.load();
