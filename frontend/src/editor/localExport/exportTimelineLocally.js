@@ -9,6 +9,7 @@ import {
   Input,
   Mp4OutputFormat,
   Output,
+  StreamTarget,
   canEncodeVideo,
   getFirstEncodableAudioCodec,
 } from 'mediabunny';
@@ -114,21 +115,31 @@ async function openSources(clips, signal) {
 }
 
 // ---------------------------------------------------------------- audio
+//
+// The soundtrack is mixed and encoded a window at a time (AUDIO_WINDOW_SECONDS),
+// in step with the video frames, so memory stays flat however long the
+// program is - mixing all of it at once is ~4 GB for 3 hours of 48 kHz stereo.
 
-// The source audio a clip uses, [trimmedStart, trimmedEnd), as an AudioBuffer.
-async function decodeClipAudio(source, clip, signal) {
+const AUDIO_WINDOW_SECONDS = 20;
+
+// Decoding starts this much early and the extra is dropped: an AAC frame
+// decoded straight after a seek comes out partly silent (it's rebuilt with
+// the frame before it), which would click at every window seam.
+const DECODE_PREROLL_SECONDS = 0.1;
+
+// [from, to) seconds of a source's audio at its own rate (up to 2 channels).
+async function decodeRange(source, from, to, signal) {
   const track = source.audioTrack;
-  const from = source.audioStart + Math.max(0, clip.trimmedStart);
-  const to = source.audioStart + Math.max(clip.trimmedStart, clip.trimmedEnd);
   const rate = track.sampleRate;
   const channels = Math.max(1, Math.min(2, track.numberOfChannels));
   const length = Math.max(1, Math.round((to - from) * rate));
   const data = Array.from({ length: channels }, () => new Float32Array(length));
-  const sink = new AudioSampleSink(track);
-  for await (const sample of sink.samples(from, to)) {
+  if (!source.audioSink) source.audioSink = new AudioSampleSink(track);
+  const decodeFrom = source.audioStart + Math.max(0, from - DECODE_PREROLL_SECONDS);
+  for await (const sample of source.audioSink.samples(decodeFrom, source.audioStart + to)) {
     assertNotAborted(signal);
     const buffer = sample.toAudioBuffer();
-    const offset = Math.round((sample.timestamp - from) * rate);
+    const offset = Math.round((sample.timestamp - source.audioStart - from) * rate);
     for (let c = 0; c < channels; c += 1) {
       const src = buffer.getChannelData(Math.min(c, buffer.numberOfChannels - 1));
       const start = Math.max(0, -offset);
@@ -137,11 +148,24 @@ async function decodeClipAudio(source, clip, signal) {
     }
     sample.close();
   }
-  // Speed-curve clips aren't reversed on the server either (applyAudioSpeedCurve).
-  if (clip.reversed && !hasSpeedCurve(clip)) data.forEach((channel) => channel.reverse());
-  const audioBuffer = new AudioBuffer({ length, numberOfChannels: channels, sampleRate: rate });
-  data.forEach((channel, c) => audioBuffer.copyToChannel(channel, c));
-  return audioBuffer;
+  return { data, rate };
+}
+
+// The parts of a clip in its own output time, each with the source range
+// and speed it plays at. A speed curve plays its segments in order and
+// isn't reversed (the server's applyAudioSpeedCurve); a frozen clip's
+// audio plays on, like the server's.
+function clipAudioParts(clip) {
+  if (hasSpeedCurve(clip)) {
+    let at = 0;
+    return buildSpeedSegments(clip).map((seg) => {
+      const speed = seg.speed || 1;
+      const part = { outStart: at, outEnd: at + (seg.sourceEnd - seg.sourceStart) / speed, srcStart: clip.trimmedStart + seg.sourceStart, srcEnd: clip.trimmedStart + seg.sourceEnd, speed, reversed: false };
+      at = part.outEnd;
+      return part;
+    });
+  }
+  return [{ outStart: 0, outEnd: clipDuration(clip), srcStart: clip.trimmedStart, srcEnd: clip.trimmedEnd, speed: clip.speed || 1, reversed: Boolean(clip.reversed) }];
 }
 
 // How loud a clip is at output time `t`: its own volume/keyframes/fades
@@ -161,54 +185,44 @@ function clipGainAt(clip, t, lanes) {
   return resolveClipGain(clip, local, duration, { allowReversed: true }) * mix;
 }
 
-// A clip's audio at its output speed with the pitch kept (like ffmpeg
-// atempo): one stretch for a plain speed change, one per segment for a
-// speed curve (the server's per-segment atempo + concat).
-function stretchClipAudio(buffer, clip) {
-  const rate = buffer.sampleRate;
-  const channels = Array.from({ length: buffer.numberOfChannels }, (_, c) => buffer.getChannelData(c));
-  let stretched;
-  if (hasSpeedCurve(clip)) {
-    const parts = buildSpeedSegments(clip).map((seg) => timeStretch(
-      channels.map((channel) => channel.subarray(Math.round(seg.sourceStart * rate), Math.round(seg.sourceEnd * rate))),
-      seg.speed || 1,
-      rate,
-    ));
-    stretched = channels.map((_, c) => {
-      const total = parts.reduce((sum, part) => sum + part[c].length, 0);
-      const joined = new Float32Array(total);
-      let offset = 0;
-      parts.forEach((part) => { joined.set(part[c], offset); offset += part[c].length; });
-      return joined;
-    });
-  } else {
-    stretched = timeStretch(channels, clip.speed || 1, rate);
-  }
-  const result = new AudioBuffer({ length: Math.max(1, stretched[0].length), numberOfChannels: stretched.length, sampleRate: rate });
-  stretched.forEach((channel, c) => result.copyToChannel(channel, c));
-  return result;
-}
+// The given clips mixed for program samples [s0, s1): each clip's piece in
+// the window, reversed and time-stretched (pitch kept, like atempo) as
+// needed, under its volume envelope.
+async function renderAudioWindow(clips, sources, s0, s1, videoLanes, signal) {
+  const t0 = s0 / AUDIO_RATE;
+  const t1 = s1 / AUDIO_RATE;
+  const context = new OfflineAudioContext({ numberOfChannels: 2, length: Math.max(1, s1 - s0), sampleRate: AUDIO_RATE });
+  for (const clip of clips) {
+    const source = sources.get(clip.sourceId);
+    for (const part of clipAudioParts(clip)) {
+      const a = Math.max(part.outStart, t0 - clip.startTime);
+      const b = Math.min(part.outEnd, t1 - clip.startTime);
+      if (b - a <= 0.0005) continue;
+      const srcFrom = part.reversed ? part.srcEnd - (b - part.outStart) * part.speed : part.srcStart + (a - part.outStart) * part.speed;
+      const srcTo = part.reversed ? part.srcEnd - (a - part.outStart) * part.speed : part.srcStart + (b - part.outStart) * part.speed;
+      const { data, rate } = await decodeRange(source, Math.max(0, srcFrom), Math.max(0, srcTo), signal);
+      if (part.reversed) data.forEach((channel) => channel.reverse());
+      const channels = Math.abs(part.speed - 1) > 0.001 ? timeStretch(data, part.speed, rate) : data;
+      const buffer = new AudioBuffer({ length: Math.max(1, channels[0].length), numberOfChannels: channels.length, sampleRate: rate });
+      channels.forEach((channel, c) => buffer.copyToChannel(channel, c));
 
-// Places clips' prepared audio on the program timeline with their volume
-// envelopes and renders the mix.
-function renderMix(entries, length, videoLanes) {
-  const context = new OfflineAudioContext({ numberOfChannels: 2, length, sampleRate: AUDIO_RATE });
-  entries.forEach(({ clip, buffer }) => {
-    const outDuration = clipDuration(clip);
-    const node = context.createBufferSource();
-    node.buffer = buffer;
-    const gain = context.createGain();
-    node.connect(gain).connect(context.destination);
-    // Volume envelope sampled every 10 ms.
-    const step = 0.01;
-    const steps = Math.max(2, Math.ceil(outDuration / step) + 1);
-    const curve = new Float32Array(steps);
-    for (let i = 0; i < steps; i += 1) curve[i] = clipGainAt(clip, clip.startTime + Math.min(outDuration, i * step), videoLanes);
-    gain.gain.setValueAtTime(curve[0], clip.startTime);
-    gain.gain.setValueCurveAtTime(curve, clip.startTime, Math.max(0.01, (steps - 1) * step));
-    node.start(clip.startTime);
-    node.stop(clip.startTime + outDuration);
-  });
+      const node = context.createBufferSource();
+      node.buffer = buffer;
+      const gain = context.createGain();
+      node.connect(gain).connect(context.destination);
+      const at = clip.startTime + a - t0;
+      const span = b - a;
+      // Volume envelope sampled every 10 ms.
+      const step = 0.01;
+      const steps = Math.max(2, Math.ceil(span / step) + 1);
+      const curve = new Float32Array(steps);
+      for (let i = 0; i < steps; i += 1) curve[i] = clipGainAt(clip, clip.startTime + Math.min(b, a + i * step), videoLanes);
+      gain.gain.setValueAtTime(curve[0], at);
+      gain.gain.setValueCurveAtTime(curve, at, Math.max(0.01, (steps - 1) * step));
+      node.start(at);
+      node.stop(at + span);
+    }
+  }
   return context.startRendering();
 }
 
@@ -217,45 +231,54 @@ function duckAmount(clip) {
   return typeof clip.duck.amount === 'number' ? clip.duck.amount : 70;
 }
 
-async function mixAudio(clips, sources, duration, signal) {
-  const length = Math.max(1, Math.ceil(duration * AUDIO_RATE));
+// The program's soundtrack, one window per call (window k = samples
+// [k * size, (k + 1) * size)). Auto-duck, like the server: every ducked
+// music/voice clip is lowered by a sidechain compressor listening to
+// everything else; its state carries from one window to the next.
+function createAudioMixer(clips, sources, duration, signal) {
+  const totalSamples = Math.max(1, Math.ceil(duration * AUDIO_RATE));
   const videoLanes = new Map(groupLanes(clips.filter((clip) => isVideoLikeClip(clip))).map((lane) => [lane[0]?.trackIndex || 0, lane]));
-
   const sounding = clips.filter((clip) => (clip.type === 'audio' || (isVideoLikeClip(clip) && !isImageClip(clip)))
     && !clip.muted
     && clip.startTime < duration
     && sources.get(clip.sourceId)?.audioTrack);
+  const ducked = sounding.filter((clip) => duckAmount(clip) > 0);
+  const others = sounding.filter((clip) => !ducked.includes(clip));
+  const duckStates = new Map(ducked.map((clip) => [clip.id, { linSlope: 0 }]));
+  const windowSamples = AUDIO_WINDOW_SECONDS * AUDIO_RATE;
+  const inWindow = (clip, t0, t1) => clip.startTime < t1 && clip.startTime + clipDuration(clip) > t0;
 
-  const entries = [];
-  for (const clip of sounding) {
-    assertNotAborted(signal);
-    // A frozen clip's audio plays on, like the server's.
-    const decoded = await decodeClipAudio(sources.get(clip.sourceId), clip, signal);
-    entries.push({ clip, buffer: stretchClipAudio(decoded, clip) });
-  }
-
-  // Auto-duck, like the server: every ducked music/voice clip is lowered by
-  // a sidechain compressor listening to everything else (the other clips'
-  // audio and the non-ducked tracks).
-  const ducked = entries.filter(({ clip }) => duckAmount(clip) > 0);
-  const others = entries.filter((entry) => !ducked.includes(entry));
-  const main = await renderMix(others, length, videoLanes);
-  if (!ducked.length) return main;
-
-  const trigger = [main.getChannelData(0), main.getChannelData(1)];
-  const mixed = [new Float32Array(trigger[0]), new Float32Array(trigger[1])];
-  for (const entry of ducked) {
-    assertNotAborted(signal);
-    const alone = await renderMix([entry], length, videoLanes);
-    const gains = duckingGain(trigger, duckAmount(entry.clip), AUDIO_RATE);
-    for (let c = 0; c < 2; c += 1) {
-      const data = alone.getChannelData(c);
-      for (let n = 0; n < length; n += 1) mixed[c][n] += data[n] * gains[n];
-    }
-  }
-  const result = new AudioBuffer({ length, numberOfChannels: 2, sampleRate: AUDIO_RATE });
-  mixed.forEach((channel, c) => result.copyToChannel(channel, c));
-  return result;
+  return {
+    windowCount: Math.ceil(totalSamples / windowSamples),
+    windowSeconds: AUDIO_WINDOW_SECONDS,
+    async window(k) {
+      const s0 = k * windowSamples;
+      const s1 = Math.min(totalSamples, s0 + windowSamples);
+      const t0 = s0 / AUDIO_RATE;
+      const t1 = s1 / AUDIO_RATE;
+      const main = await renderAudioWindow(others.filter((clip) => inWindow(clip, t0, t1)), sources, s0, s1, videoLanes, signal);
+      if (!ducked.length) return main;
+      const trigger = [main.getChannelData(0), main.getChannelData(1)];
+      const mixed = [new Float32Array(trigger[0]), new Float32Array(trigger[1])];
+      for (const clip of ducked) {
+        const state = duckStates.get(clip.id);
+        if (!inWindow(clip, t0, t1)) {
+          // Keep the compressor's memory moving through windows it's silent in.
+          duckingGain(trigger, duckAmount(clip), AUDIO_RATE, state);
+          continue;
+        }
+        const alone = await renderAudioWindow([clip], sources, s0, s1, videoLanes, signal);
+        const gains = duckingGain(trigger, duckAmount(clip), AUDIO_RATE, state);
+        for (let c = 0; c < 2; c += 1) {
+          const data = alone.getChannelData(c);
+          for (let n = 0; n < data.length; n += 1) mixed[c][n] += data[n] * gains[n];
+        }
+      }
+      const result = new AudioBuffer({ length: s1 - s0, numberOfChannels: 2, sampleRate: AUDIO_RATE });
+      mixed.forEach((channel, c) => result.copyToChannel(channel, c));
+      return result;
+    },
+  };
 }
 
 // ---------------------------------------------------------------- video
@@ -310,10 +333,60 @@ async function loadFonts(textClips) {
   await document.fonts.ready;
 }
 
+// Where the finished MP4 is written. `saveTo`:
+//   { handle }  - a file the user picked (Chrome/Edge's "save as"): written
+//                 straight into it, nothing kept in memory;
+//   { browser } - a file in the browser's own disk storage (OPFS, every
+//                 modern browser), downloaded from there afterwards;
+//   nothing     - in memory, fine for short videos.
+async function openOutputTarget(saveTo) {
+  if (saveTo?.handle) {
+    const writable = await saveTo.handle.createWritable();
+    return {
+      target: new StreamTarget(writable, { chunked: true }),
+      finish: async () => ({ file: await saveTo.handle.getFile(), savedTo: 'picked' }),
+      discard: async () => {},
+    };
+  }
+  if (saveTo?.browser) {
+    const root = await navigator.storage.getDirectory();
+    const handle = await root.getFileHandle(saveTo.browser, { create: true });
+    const writable = await handle.createWritable();
+    return {
+      target: new StreamTarget(writable, { chunked: true }),
+      finish: async () => ({ file: await handle.getFile(), savedTo: 'browser' }),
+      discard: async () => { await root.removeEntry(saveTo.browser).catch(() => {}); },
+    };
+  }
+  return {
+    target: new BufferTarget(),
+    finish: async (output) => ({ file: new Blob([output.target.buffer], { type: 'video/mp4' }), savedTo: 'memory' }),
+    discard: async () => {},
+  };
+}
+
+// Whether long exports can be written to disk in this browser at all.
+export function canStreamExportToDisk() {
+  return typeof window !== 'undefined'
+    && (typeof window.showSaveFilePicker === 'function' || typeof navigator.storage?.getDirectory === 'function');
+}
+
+// Earlier exports left in the browser's storage (they're downloaded right
+// away, then only kept for "Download again").
+export async function clearBrowserStoredExports() {
+  try {
+    const root = await navigator.storage.getDirectory();
+    for await (const name of root.keys()) {
+      if (name.startsWith('nexeditor-export-')) await root.removeEntry(name).catch(() => {});
+    }
+  } catch { /* no browser file storage here */ }
+}
+
 // clips: the exportable timeline (hidden lanes and disabled clips already
 // removed). canvas: the project's {width, height, fps, fitMode}; output:
-// the size to encode (smaller for the free plan); watermark: free plan.
-export async function exportTimelineLocally({ clips, trackMeta, canvas, output, watermark, audioCodec, onProgress, signal }) {
+// the size to encode (smaller for the free plan); watermark: free plan;
+// saveTo: see openOutputTarget.
+export async function exportTimelineLocally({ clips, trackMeta, canvas, output, watermark, audioCodec, saveTo, onProgress, signal }) {
   const report = (percent, stage) => onProgress?.({ percent: Math.max(0, Math.min(100, percent)), currentTime: stage });
   const fps = canvas.fps || 30;
   const duration = programDuration(clips);
@@ -322,14 +395,11 @@ export async function exportTimelineLocally({ clips, trackMeta, canvas, output, 
 
   let sources = new Map();
   let exportOutput = null;
+  let destination = null;
   const iterators = [];
   try {
     report(0, 'Reading your media...');
     sources = await openSources(clips, signal);
-
-    report(1, 'Mixing the audio...');
-    const mixed = await mixAudio(clips, sources, duration, signal);
-    assertNotAborted(signal);
 
     const textClips = clips.filter((clip) => clip.type === 'text');
     await loadFonts(textClips);
@@ -351,13 +421,21 @@ export async function exportTimelineLocally({ clips, trackMeta, canvas, output, 
     const getScratchCanvas = createCanvasPool();
     const chromaPool = createCanvasPool();
 
+    const mixer = createAudioMixer(clips, sources, duration, signal);
+    destination = await openOutputTarget(saveTo);
     const videoSource = new CanvasSource(encodeCanvas, { codec: 'avc', bitrate: videoBitrate(output.width, output.height), keyFrameInterval: 2 });
     const audioSource = new AudioBufferSource({ codec: audioCodec, bitrate: AUDIO_BITRATE });
-    exportOutput = new Output({ format: new Mp4OutputFormat({ fastStart: 'in-memory' }), target: new BufferTarget() });
-    exportOutput.addVideoTrack(videoSource, { frameRate: fps });
-    exportOutput.addAudioTrack(audioSource);
+    // Written to disk as it goes, the file's index can't be kept in memory
+    // to be put first at the end ('in-memory'); 'reserve' leaves room for it
+    // at the start instead, sized from the known number of frames and audio
+    // packets (AAC 1024 / Opus 960 samples each), so the MP4 still starts
+    // playing (and uploads) straight away.
+    const streaming = Boolean(saveTo?.handle || saveTo?.browser);
+    const audioPackets = Math.ceil((duration * AUDIO_RATE) / 960) + 64;
+    exportOutput = new Output({ format: new Mp4OutputFormat({ fastStart: streaming ? 'reserve' : 'in-memory' }), target: destination.target });
+    exportOutput.addVideoTrack(videoSource, { frameRate: fps, ...(streaming ? { maximumPacketCount: totalFrames + 64 } : {}) });
+    exportOutput.addAudioTrack(audioSource, streaming ? { maximumPacketCount: audioPackets } : {});
     await exportOutput.start();
-    const audioDone = audioSource.add(mixed).then(() => audioSource.close());
 
     const { frames, timestampsByClip } = planFrames(videoLanes, totalFrames, fps);
     const streams = new Map();
@@ -374,59 +452,67 @@ export async function exportTimelineLocally({ clips, trackMeta, canvas, output, 
       return streams.get(clipId);
     };
 
-    for (let i = 0; i < totalFrames; i += 1) {
+    // Audio and video advance together, one audio window at a time, so
+    // neither track runs ahead and piles up in memory.
+    let frame = 0;
+    for (let k = 0; k < mixer.windowCount; k += 1) {
       assertNotAborted(signal);
-      const time = i / fps;
-      const current = new Map();
-      for (const clipId of frames[i]) {
-        const stream = streamFor(clipId);
-        const { value } = await stream.iterator.next();
-        if (value?.canvas) stream.last = value.canvas;
-        if (stream.last) current.set(clipId, { image: stream.last, width: stream.last.width, height: stream.last.height });
-        stream.remaining -= 1;
-      }
-      renderTimelineFrame(renderCtx, renderCanvas, time, {
-        videoLanes,
-        textLanes,
-        trackMeta,
-        fitMode: canvas.fitMode,
-        exactColor: true,
-        getChromaKeyCanvas: chromaPool,
-        getScratchCanvas,
-        getSource: (entry) => {
-          if (isImageClip(entry.clip)) {
-            const bitmap = sources.get(entry.clip.sourceId)?.image;
-            return bitmap ? { image: bitmap, width: bitmap.width, height: bitmap.height } : null;
-          }
-          return current.get(entry.clip.id) || null;
-        },
-      });
-      if (scaled) encodeCtx.drawImage(renderCanvas, 0, 0, output.width, output.height);
-      if (watermark) drawWatermark(encodeCtx, output.width, output.height);
-      await videoSource.add(i / fps, 1 / fps);
-      // A clip whose last frame has been used releases its decoder now.
-      for (const clipId of frames[i]) {
-        const stream = streams.get(clipId);
-        if (stream && stream.remaining === 0 && !stream.closed) {
-          stream.closed = true;
-          await stream.iterator.return?.();
+      await audioSource.add(await mixer.window(k));
+      const windowEnd = k === mixer.windowCount - 1 ? totalFrames : Math.min(totalFrames, Math.round((k + 1) * mixer.windowSeconds * fps));
+      for (; frame < windowEnd; frame += 1) {
+        assertNotAborted(signal);
+        const time = frame / fps;
+        const current = new Map();
+        for (const clipId of frames[frame]) {
+          const stream = streamFor(clipId);
+          const { value } = await stream.iterator.next();
+          if (value?.canvas) stream.last = value.canvas;
+          if (stream.last) current.set(clipId, { image: stream.last, width: stream.last.width, height: stream.last.height });
+          stream.remaining -= 1;
         }
+        renderTimelineFrame(renderCtx, renderCanvas, time, {
+          videoLanes,
+          textLanes,
+          trackMeta,
+          fitMode: canvas.fitMode,
+          exactColor: true,
+          getChromaKeyCanvas: chromaPool,
+          getScratchCanvas,
+          getSource: (entry) => {
+            if (isImageClip(entry.clip)) {
+              const bitmap = sources.get(entry.clip.sourceId)?.image;
+              return bitmap ? { image: bitmap, width: bitmap.width, height: bitmap.height } : null;
+            }
+            return current.get(entry.clip.id) || null;
+          },
+        });
+        if (scaled) encodeCtx.drawImage(renderCanvas, 0, 0, output.width, output.height);
+        if (watermark) drawWatermark(encodeCtx, output.width, output.height);
+        await videoSource.add(frame / fps, 1 / fps);
+        // A clip whose last frame has been used releases its decoder now.
+        for (const clipId of frames[frame]) {
+          const stream = streams.get(clipId);
+          if (stream && stream.remaining === 0 && !stream.closed) {
+            stream.closed = true;
+            await stream.iterator.return?.();
+          }
+        }
+        if (frame % 5 === 0) report(1 + (frame / totalFrames) * 97, `Rendering frame ${frame + 1} of ${totalFrames}`);
       }
-      if (i % 5 === 0) report(2 + (i / totalFrames) * 95, `Rendering frame ${i + 1} of ${totalFrames}`);
     }
+    audioSource.close();
     videoSource.close();
 
-    report(97, 'Adding the audio...');
-    await audioDone;
     report(99, 'Finishing the file...');
     await exportOutput.finalize();
-    const blob = new Blob([exportOutput.target.buffer], { type: 'video/mp4' });
+    const { file, savedTo } = await destination.finish(exportOutput);
     report(100, 'Export complete');
-    return { blob, duration, size: blob.size, width: output.width, height: output.height };
+    return { file, blob: file, savedTo, duration, size: file.size, width: output.width, height: output.height };
   } catch (error) {
     if (exportOutput && exportOutput.state !== 'finalized' && exportOutput.state !== 'canceled') {
       await exportOutput.cancel().catch(() => {});
     }
+    await destination?.discard();
     throw error;
   } finally {
     iterators.forEach((iterator) => iterator.return?.().catch?.(() => {}));

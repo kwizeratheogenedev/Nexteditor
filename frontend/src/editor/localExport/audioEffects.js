@@ -83,7 +83,9 @@ export function timeStretch(channels, speed, sampleRate) {
 // threshold = 0.3 * 0.02^a, ratio = 2 + 18a, attack 15 ms, release 300 ms,
 // knee 2.82843, RMS detection, channels averaged. Returns the per-sample
 // gain for the ducked audio, driven by `trigger` (everything else).
-export function duckingGain(trigger, amount, sampleRate) {
+// `state` ({ linSlope }) carries the compressor's level from one call to the
+// next, for audio processed a window at a time.
+export function duckingGain(trigger, amount, sampleRate, state = { linSlope: 0 }) {
   const length = trigger[0]?.length || 0;
   const gains = new Float32Array(length).fill(1);
   const a = Math.max(0, Math.min(100, Number(amount) || 0)) / 100;
@@ -119,7 +121,7 @@ export function duckingGain(trigger, amount, sampleRate) {
     return Math.exp(gain - slope);
   };
 
-  let linSlope = 0;
+  let { linSlope } = state;
   const channels = trigger.length;
   for (let n = 0; n < length; n += 1) {
     let level = 0;
@@ -129,5 +131,6 @@ export function duckingGain(trigger, amount, sampleRate) {
     linSlope += (level - linSlope) * (level > linSlope ? attackCoeff : releaseCoeff);
     if (linSlope > 0 && linSlope > adjKneeStart) gains[n] = outputGain(linSlope);
   }
+  state.linSlope = linSlope;
   return gains;
 }

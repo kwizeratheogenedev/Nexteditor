@@ -37,7 +37,7 @@ export default function ExportCompleteDialog({ result, onClose, onDownloadAgain 
         <div className="st-dialog-chips">
           <span>
             <svg viewBox="0 0 24 24" width="15" height="15" fill="none" stroke="currentColor" strokeWidth="1.9" strokeLinecap="round" strokeLinejoin="round" aria-hidden="true"><path d={DOWN} /></svg>
-            Downloaded to your device
+            {result.savedTo === 'picked' ? `Saved to ${result.fileName}` : 'Downloaded to your device'}
           </span>
           {result.savedToAccount ? (
             <span>

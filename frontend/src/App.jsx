@@ -60,6 +60,9 @@ async function readErrorMessage(response) {
 }
 
 // "Golden Hour — Promo" -> "golden-hour-promo" (export file names).
+// Device exports this long or longer are written to disk as they're made.
+const LONG_EXPORT_SECONDS = 600;
+
 function slugify(text) {
   return String(text || '').toLowerCase().normalize('NFKD').replace(/[\u0300-\u036f]/g, '')
     .replace(/[^a-z0-9]+/g, '-').replace(/^-+|-+$/g, '').slice(0, 60);
@@ -2593,6 +2596,27 @@ function App() {
   // for permission first (same plan rules and quota, no video sent), then
   // draws, mixes and encodes on the device and downloads the MP4.
   const exportOnDevice = async (exportableTimeline) => {
+    const fileName = `${slugify(projectName) || 'nexeditor-export'}.mp4`;
+    // Long videos (10+ minutes) are written to disk as they're made instead
+    // of being built in memory - a 3-hour export is many GB. Chrome/Edge ask
+    // where to save (asked first, while the Export click still counts as the
+    // user's go-ahead); other browsers use their own disk storage and
+    // download from there.
+    const length = laneTotalDuration(exportableTimeline.filter((clip) => isVideoLikeClip(clip) && (clip.trackIndex || 0) === 0), clipDuration);
+    let saveTo;
+    if (length >= LONG_EXPORT_SECONDS) {
+      if (typeof window.showSaveFilePicker === 'function') {
+        try {
+          saveTo = { handle: await window.showSaveFilePicker({ suggestedName: fileName, types: [{ description: 'MP4 video', accept: { 'video/mp4': ['.mp4'] } }] }) };
+        } catch (error) {
+          if (error?.name === 'AbortError') {
+            setProgress({ percent: 0, currentTime: '' });
+            return; // the save dialog was closed - nothing exported
+          }
+        }
+      }
+      if (!saveTo && typeof navigator.storage?.getDirectory === 'function') saveTo = { browser: `nexeditor-export-${Date.now()}.mp4` };
+    }
     const offerServer = (message) => {
       setErrorText(message);
       setErrorAction({
@@ -2603,7 +2627,7 @@ function App() {
       setProgress({ percent: 0, currentTime: '' });
     };
     try {
-      const { exportTimelineLocally, checkLocalExportSupport, programDuration } = await import('./editor/localExport/exportTimelineLocally.js');
+      const { exportTimelineLocally, checkLocalExportSupport, programDuration, clearBrowserStoredExports } = await import('./editor/localExport/exportTimelineLocally.js');
       setProgress({ percent: 0, currentTime: 'Checking your plan...' });
       const response = await fetch(`${API_BASE_URL}/api/editor/export/device-permit`, {
         method: 'POST',
@@ -2627,6 +2651,8 @@ function App() {
         offerServer(support.reason);
         return;
       }
+      // An earlier export kept in browser storage is no longer needed.
+      if (saveTo?.browser) await clearBrowserStoredExports();
       const result = await exportTimelineLocally({
         clips: exportableTimeline,
         trackMeta,
@@ -2634,22 +2660,29 @@ function App() {
         output: permit.output,
         watermark: permit.watermark,
         audioCodec: support.audioCodec,
+        saveTo,
         onProgress: setProgress,
       });
       if (localExportUrlRef.current) URL.revokeObjectURL(localExportUrlRef.current);
-      const url = URL.createObjectURL(result.blob);
-      localExportUrlRef.current = url;
-      const fileName = `${slugify(projectName) || 'nexeditor-export'}.mp4`;
-      const link = document.createElement('a');
-      link.href = url;
-      link.download = fileName;
-      document.body.appendChild(link);
-      link.click();
-      link.remove();
+      localExportUrlRef.current = '';
+      let url = '';
+      // Saved where the user chose: nothing to download. Otherwise download
+      // it - from browser storage this streams from disk, not memory.
+      if (result.savedTo !== 'picked') {
+        url = URL.createObjectURL(result.file);
+        localExportUrlRef.current = url;
+        const link = document.createElement('a');
+        link.href = url;
+        link.download = fileName;
+        document.body.appendChild(link);
+        link.click();
+        link.remove();
+      }
       setExportDone({
         local: true,
         localUrl: url,
-        fileName,
+        savedTo: result.savedTo,
+        fileName: result.savedTo === 'picked' ? result.file.name : fileName,
         resolution: `${Math.min(result.width, result.height)}p`,
         size: result.size,
         savedToAccount: Boolean(currentProjectId),
@@ -3147,7 +3180,7 @@ function App() {
         <ExportCompleteDialog
           result={exportDone}
           onClose={() => setExportDone(null)}
-          onDownloadAgain={() => {
+          onDownloadAgain={exportDone.savedTo === 'picked' ? undefined : () => {
             if (exportDone.local) {
               const link = document.createElement('a');
               link.href = exportDone.localUrl;
