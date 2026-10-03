@@ -1,5 +1,6 @@
 import { Badge, Card, Empty, Spinner, formatBytes, formatDate, formatDuration, formatMoney, timeAgo, Avatar } from '../../components/console/ui.jsx';
 import { useApi } from './useApi.js';
+import { JOB_KIND_LABEL, formatProcessingTime } from './labels.js';
 
 function Stat({ label, value, sub, tone }) {
   return (
@@ -16,6 +17,36 @@ function money(list) {
   return list.map((r) => formatMoney(r.total, r.currency)).join(' + ');
 }
 
+// One row per tool: 24-hour counts, with the 7-day totals alongside.
+function ActivityByTool({ day, week }) {
+  const weekByKind = new Map(week.map((row) => [row.kind, row]));
+  const kinds = [...new Set([...day.map((row) => row.kind), ...week.map((row) => row.kind)])];
+  if (kinds.length === 0) return <Empty>No server activity in the last 7 days.</Empty>;
+  const dayByKind = new Map(day.map((row) => [row.kind, row]));
+  return (
+    <div className="cs-table-wrap">
+      <table className="cs-table">
+        <thead><tr><th>Tool</th><th>Total</th><th>Failed</th><th>Guests</th><th>Avg. time</th></tr></thead>
+        <tbody>
+          {kinds.map((kind) => {
+            const d = dayByKind.get(kind) || { total: 0, failed: 0, guests: 0, avgMs: null };
+            const w = weekByKind.get(kind) || { total: 0, failed: 0, guests: 0 };
+            return (
+              <tr key={kind}>
+                <td>{JOB_KIND_LABEL[kind] || kind}</td>
+                <td>{d.total} <span className="cs-muted">({w.total})</span></td>
+                <td>{d.failed ? <span className="cs-error-text">{d.failed}</span> : 0} <span className="cs-muted">({w.failed})</span></td>
+                <td>{d.guests} <span className="cs-muted">({w.guests})</span></td>
+                <td>{formatProcessingTime(d.avgMs ?? w.avgMs)}</td>
+              </tr>
+            );
+          })}
+        </tbody>
+      </table>
+    </div>
+  );
+}
+
 export default function Overview({ onOpenUser, onGo }) {
   const { data, error } = useApi('/api/admin/overview');
   if (error) return <div className="cs-alert">{error}</div>;
@@ -29,7 +60,7 @@ export default function Overview({ onOpenUser, onGo }) {
         <Stat label="Total users" value={data.users.total.toLocaleString()} sub={`+${data.users.new7d} this week`} />
         <Stat label="Pro users" value={data.users.pro.toLocaleString()} sub={`${data.users.total ? Math.round((data.users.pro / data.users.total) * 100) : 0}% of users`} tone="pro" />
         <Stat label="Revenue · 30 days" value={money(data.revenue.last30d)} sub={`All time: ${money(data.revenue.allTime)}`} tone="ok" />
-        <Stat label="Renders · 24h" value={(done + failed + (data.jobs.last24h.running || 0)).toLocaleString()} sub={`${done} done · ${failed} failed · ${data.jobs.running} running`} tone={failed ? 'warn' : undefined} />
+        <Stat label="Server activity · 24h" value={(done + failed + (data.jobs.last24h.running || 0)).toLocaleString()} sub={`${done} done · ${failed} failed · ${data.jobs.running} running`} tone={failed ? 'warn' : undefined} />
         <Stat label="Projects" value={data.projects.total.toLocaleString()} sub={`${data.users.suspended} suspended users`} />
         <Stat label="Render queue" value={`${data.system.render.active} / ${data.system.render.max}`} sub={`${data.system.render.queued} waiting · up ${formatDuration(data.system.uptimeSeconds)}`} />
       </div>
@@ -65,15 +96,18 @@ export default function Overview({ onOpenUser, onGo }) {
             </ul>
           )}
         </Card>
-        <Card title="Recent failed renders" actions={<button type="button" className="cs-link" onClick={() => onGo('jobs')}>All renders</button>}>
-          {data.recentFailures.length === 0 ? <Empty>No failed renders.</Empty> : (
+        <Card title="Server activity by tool" subtitle="Last 24 hours, with the last 7 days in brackets. Guests are people who aren't signed in." actions={<button type="button" className="cs-link" onClick={() => onGo('jobs')}>All activity</button>}>
+          <ActivityByTool day={data.jobs.byKind.last24h} week={data.jobs.byKind.last7d} />
+        </Card>
+        <Card title="Recent failures" actions={<button type="button" className="cs-link" onClick={() => onGo('jobs')}>All activity</button>}>
+          {data.recentFailures.length === 0 ? <Empty>No failures.</Empty> : (
             <ul className="cs-mini-list">
               {data.recentFailures.map((j) => (
                 <li key={j._id}>
                   <div className="cs-mini-static">
                     <span className="cs-dot is-error" aria-hidden="true" />
-                    <span className="cs-mini-main"><strong>{j.kind}</strong><small title={j.error}>{j.error || 'Unknown error'}</small></span>
-                    <span className="cs-mini-side"><small>{j.owner?.email || '—'}</small><small>{timeAgo(j.createdAt)}</small></span>
+                    <span className="cs-mini-main"><strong>{JOB_KIND_LABEL[j.kind] || j.kind}</strong><small title={j.errorDetails || j.error}>{j.error || 'Unknown error'}</small></span>
+                    <span className="cs-mini-side"><small>{j.owner?.email || (j.guest ? 'Guest' : '—')}</small><small>{timeAgo(j.createdAt)}</small></span>
                   </div>
                 </li>
               ))}

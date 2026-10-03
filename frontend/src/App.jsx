@@ -927,6 +927,7 @@ function App() {
       
       const response = await fetch(API_ENDPOINTS.convert, {
         method: 'POST',
+        credentials: 'include',
         headers: socketId ? { 'X-Socket-Id': socketId } : {},
         body: formData,
       });
@@ -988,6 +989,7 @@ function App() {
         const progressEndpoint = isAutomatic ? API_ENDPOINTS.generateCaptions : API_ENDPOINTS.burnSubtitles;
         let progressTimer;
         request.open('POST', progressEndpoint);
+        request.withCredentials = true;
         request.responseType = 'blob';
         if (socketId) request.setRequestHeader('X-Socket-Id', socketId);
         request.setRequestHeader('X-Job-Id', jobId);
@@ -1058,6 +1060,7 @@ function App() {
         const jobId = globalThis.crypto?.randomUUID?.() || `${Date.now()}-${Math.random().toString(16).slice(2)}`;
         let progressTimer;
         request.open('POST', API_ENDPOINTS.extractShorts);
+        request.withCredentials = true;
         request.responseType = 'json';
         request.setRequestHeader('X-Job-Id', jobId);
         if (socketId) request.setRequestHeader('X-Socket-Id', socketId);
@@ -1102,6 +1105,7 @@ function App() {
 
       const response = await fetch(API_ENDPOINTS.reformatShort, {
         method: 'POST',
+        credentials: 'include',
         headers: {
           'Content-Type': 'application/json',
           ...(socketId ? { 'X-Socket-Id': socketId } : {}),

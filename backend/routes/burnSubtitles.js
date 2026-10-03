@@ -7,6 +7,8 @@ import { probeDuration, runFFmpeg } from '../services/ffmpeg.js';
 import { getIo } from '../socket.js';
 import { CLIPS_DIR } from '../storagePaths.js';
 import { toUserMessage } from '../services/userMessage.js';
+import { optionalAuth } from '../middleware/auth.js';
+import { trackOperation } from '../services/operations.js';
 
 const router = express.Router();
 const clipsDir = CLIPS_DIR;
@@ -47,10 +49,12 @@ function captionedFileName(originalName) {
 
 router.post(
   '/',
+  optionalAuth,
   captionBurnUpload.fields([
     { name: 'video', maxCount: 1 },
     { name: 'subtitle', maxCount: 1 },
   ]),
+  trackOperation('subtitles'),
   async (req, res) => {
     const tempFiles = [];
     const outputFiles = [];

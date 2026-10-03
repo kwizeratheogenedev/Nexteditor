@@ -1,7 +1,7 @@
 import { useCallback, useEffect, useState } from 'react';
 import { api } from '../../api/client.js';
 import { useAuth } from '../../context/AuthContext.jsx';
-import { ACTION_LABEL } from './labels.js';
+import { ACTION_LABEL, JOB_KIND_LABEL } from './labels.js';
 import { Avatar, Badge, Empty, Meter, Modal, Spinner, formatBytes, formatDate, formatMoney, timeAgo } from '../../components/console/ui.jsx';
 
 
@@ -228,7 +228,7 @@ export default function UserDrawer({ userId, onClose, onChanged, toast }) {
               <ul className="cs-rows">
                 {data.jobs.map((j) => (
                   <li key={j._id}>
-                    <strong>{j.kind}</strong>
+                    <strong>{JOB_KIND_LABEL[j.kind] || j.kind}</strong>
                     <Badge tone={j.status === 'done' ? 'ok' : j.status === 'error' ? 'danger' : 'warn'}>{j.status}</Badge>
                     <small title={j.error || ''}>{j.status === 'error' ? (j.error || '').slice(0, 80) : timeAgo(j.createdAt)}</small>
                   </li>

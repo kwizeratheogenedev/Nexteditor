@@ -8,6 +8,8 @@ import { deleteJob, registerJob, resolveJob } from '../services/jobStore.js';
 import { getIo } from '../socket.js';
 import { CLIPS_DIR } from '../storagePaths.js';
 import { toUserMessage } from '../services/userMessage.js';
+import { optionalAuth } from '../middleware/auth.js';
+import { trackOperation } from '../services/operations.js';
 
 const router = express.Router();
 const clipsDir = CLIPS_DIR;
@@ -46,7 +48,7 @@ router.get('/progress/:jobId', (req, res) => {
   res.json(progressByJob.get(req.params.jobId) || { percent: 0, currentTime: 'Waiting for upload...' });
 });
 
-router.post('/', upload.single('video'), async (req, res) => {
+router.post('/', optionalAuth, upload.single('video'), trackOperation('shorts'), async (req, res) => {
   const tempFiles = [];
   const outputFiles = [];
   let sourceJobId = null;

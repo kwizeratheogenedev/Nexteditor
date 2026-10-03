@@ -9,6 +9,8 @@ import { downloadErrorMessage, downloadToFile } from '../services/safeDownload.j
 import { getIo } from '../socket.js';
 import { CLIPS_DIR, UPLOADS_DIR } from '../storagePaths.js';
 import { toUserMessage } from '../services/userMessage.js';
+import { optionalAuth } from '../middleware/auth.js';
+import { trackOperation } from '../services/operations.js';
 
 const router = express.Router();
 const clipsDir = CLIPS_DIR;
@@ -54,12 +56,14 @@ async function downloadRemoteVideo(url, outputPath) {
 
 router.post(
   '/',
+  optionalAuth,
   upload.fields([
     { name: 'video1', maxCount: 1 },
     { name: 'video2', maxCount: 1 },
     { name: 'video3', maxCount: 1 },
     { name: 'audio', maxCount: 1 },
   ]),
+  trackOperation('merge'),
   async (req, res) => {
     const tempFiles = [];
     const outputFiles = [];

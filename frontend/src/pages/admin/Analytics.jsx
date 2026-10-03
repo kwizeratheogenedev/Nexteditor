@@ -237,7 +237,7 @@ function PeriodView({ onOpenUser }) {
         <ChartCard title="Sign-ups" subtitle={`New accounts per ${unit}.`} table={seriesTable([{ key: 'signups', label: 'Sign-ups' }])}>
           <ColumnChart data={data.series} series={[{ key: 'signups', label: 'Sign-ups', color: SERIES_COLORS.a }]} formatX={formatX} formatY={fmtInt} label={`Sign-ups per ${unit}`} />
         </ChartCard>
-        <ChartCard title="Renders" subtitle="Finished montages, exports, captions, shorts and uploads." table={seriesTable([{ key: 'rendersDone', label: 'Succeeded' }, { key: 'rendersFailed', label: 'Failed' }])}>
+        <ChartCard title="Renders" subtitle="Everything the server finished: montages, merges, shorts, captions, exports, link downloads and uploads - users and guests." table={seriesTable([{ key: 'rendersDone', label: 'Succeeded' }, { key: 'rendersFailed', label: 'Failed' }])}>
           <ColumnChart
             data={data.series}
             series={[{ key: 'rendersDone', label: 'Succeeded', color: SERIES_COLORS.good }, { key: 'rendersFailed', label: 'Failed', color: SERIES_COLORS.bad }]}

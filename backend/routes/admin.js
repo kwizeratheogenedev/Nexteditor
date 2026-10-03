@@ -6,7 +6,7 @@ import { requireAuth } from '../middleware/auth.js';
 import { requireAdmin } from '../middleware/admin.js';
 import User from '../models/User.js';
 import Project from '../models/Project.js';
-import Job from '../models/Job.js';
+import Operation, { OPERATION_KINDS } from '../models/Operation.js';
 import Payment from '../models/Payment.js';
 import AdminAction from '../models/AdminAction.js';
 import { isAdmin } from '../services/roles.js';
@@ -118,6 +118,24 @@ function refuseProtected(req, res, what) {
 
 // ---------- Overview ----------
 
+// Server operations since `since`, one row per tool: how many, how many
+// failed, how many by guests (no account), and the average processing time.
+function operationsByKind(since) {
+  return Operation.aggregate([
+    { $match: { createdAt: { $gte: since } } },
+    {
+      $group: {
+        _id: '$kind',
+        total: { $sum: 1 },
+        failed: { $sum: { $cond: [{ $eq: ['$status', 'error'] }, 1, 0] } },
+        guests: { $sum: { $cond: ['$guest', 1, 0] } },
+        avgMs: { $avg: '$durationMs' },
+      },
+    },
+    { $sort: { total: -1 } },
+  ]).then((rows) => rows.map((r) => ({ kind: r._id, total: r.total, failed: r.failed, guests: r.guests, avgMs: r.avgMs == null ? null : Math.round(r.avgMs) })));
+}
+
 router.get('/overview', async (_req, res) => {
   const now = new Date();
   const weekAgo = new Date(now - 7 * DAY_MS);
@@ -127,7 +145,7 @@ router.get('/overview', async (_req, res) => {
   const [
     totalUsers, newUsers7d, proUsers, suspendedUsers, adminUsers,
     totalProjects, jobs24h, runningJobs, revenueAll, revenue30d,
-    recentUsers, recentPayments, recentFailures,
+    recentUsers, recentPayments, recentFailures, byKind24h, byKind7d,
   ] = await Promise.all([
     User.countDocuments({}),
     User.countDocuments({ createdAt: { $gte: weekAgo } }),
@@ -135,13 +153,15 @@ router.get('/overview', async (_req, res) => {
     User.countDocuments({ status: 'suspended' }),
     User.countDocuments({ role: 'admin' }),
     Project.countDocuments({ isDeleted: false }),
-    Job.aggregate([{ $match: { createdAt: { $gte: dayAgo } } }, { $group: { _id: '$status', count: { $sum: 1 } } }]),
-    Job.countDocuments({ status: 'running' }),
+    Operation.aggregate([{ $match: { createdAt: { $gte: dayAgo } } }, { $group: { _id: '$status', count: { $sum: 1 } } }]),
+    Operation.countDocuments({ status: 'running' }),
     Payment.aggregate([{ $match: { status: 'successful' } }, { $group: { _id: '$currency', total: { $sum: '$amount' }, count: { $sum: 1 } } }]),
     Payment.aggregate([{ $match: { status: 'successful', createdAt: { $gte: monthAgo } } }, { $group: { _id: '$currency', total: { $sum: '$amount' }, count: { $sum: 1 } } }]),
     User.find({}).sort({ createdAt: -1 }).limit(6),
     Payment.find({}).sort({ createdAt: -1 }).limit(6).lean(),
-    Job.find({ status: 'error' }).sort({ createdAt: -1 }).limit(6).populate('owner', 'email').lean(),
+    Operation.find({ status: 'error' }).sort({ createdAt: -1 }).limit(6).populate('owner', 'email').lean(),
+    operationsByKind(dayAgo),
+    operationsByKind(weekAgo),
   ]);
 
   // Owners are always Pro/admin even when their stored record says otherwise.
@@ -157,6 +177,7 @@ router.get('/overview', async (_req, res) => {
     jobs: {
       last24h: Object.fromEntries(jobs24h.map((j) => [j._id, j.count])),
       running: runningJobs,
+      byKind: { last24h: byKind24h, last7d: byKind7d },
     },
     revenue: {
       allTime: revenueAll.map((r) => ({ currency: r._id || '?', total: r.total, count: r.count })),
@@ -221,7 +242,7 @@ router.get('/users/:id', loadTarget, async (req, res) => {
   const id = req.target._id;
   const [projects, jobs, payments, actions, projectCount] = await Promise.all([
     Project.find({ owner: id, isDeleted: false }).select('-data').sort({ updatedAt: -1 }).limit(50).lean(),
-    Job.find({ owner: id }).sort({ createdAt: -1 }).limit(30).lean(),
+    Operation.find({ owner: id }).sort({ createdAt: -1 }).limit(30).lean(),
     Payment.find({ user: id }).sort({ createdAt: -1 }).limit(50).lean(),
     AdminAction.find({ targetUser: id }).sort({ createdAt: -1 }).limit(30).lean(),
     Project.countDocuments({ owner: id, isDeleted: false }),
@@ -408,10 +429,12 @@ router.get('/jobs', async (req, res) => {
   const { page: p, limit, skip } = page(req);
   const filter = {};
   if (['running', 'done', 'error'].includes(req.query.status)) filter.status = req.query.status;
-  if (['montage', 'export', 'captions', 'shorts', 'youtube-upload'].includes(req.query.kind)) filter.kind = req.query.kind;
+  if (OPERATION_KINDS.includes(req.query.kind)) filter.kind = req.query.kind;
+  if (req.query.who === 'guest') filter.guest = true;
+  else if (req.query.who === 'user') filter.guest = false;
   const [jobs, total] = await Promise.all([
-    Job.find(filter).sort({ createdAt: -1 }).skip(skip).limit(limit).populate('owner', 'email name').lean(),
-    Job.countDocuments(filter),
+    Operation.find(filter).sort({ createdAt: -1 }).skip(skip).limit(limit).populate('owner', 'email name').lean(),
+    Operation.countDocuments(filter),
   ]);
   res.json({ jobs, total, page: p, pages: Math.max(1, Math.ceil(total / limit)) });
 });

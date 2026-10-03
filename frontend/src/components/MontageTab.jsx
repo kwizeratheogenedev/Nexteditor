@@ -284,6 +284,7 @@ function MediaCard({ label, item, setItem, accept, type, onError, isOptional = f
     try {
       const res = await fetch(API_ENDPOINTS.fetchUrlVideo, {
         method:'POST',
+        credentials:'include',
         headers:{'Content-Type':'application/json'},
         body: JSON.stringify({ url, type: isAudio ? 'audio' : 'video', socketId }),
       });

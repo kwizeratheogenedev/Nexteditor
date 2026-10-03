@@ -26,7 +26,8 @@ import adminAnalyticsRouter from './routes/adminAnalytics.js';
 import editorCaptionsRouter from './routes/editorCaptions.js';
 import { jobStore, deleteJob } from './services/jobStore.js';
 import { initSocket, isOriginAllowed } from './socket.js';
-import { connectDB } from './db.js';
+import { connectDB, isDBConnected } from './db.js';
+import { markInterruptedOperations } from './services/operations.js';
 import { ownerEmails } from './services/owners.js';
 import { securityHeaders, configureProxyTrust, applyRateLimits } from './middleware/security.js';
 import { createDiskGuard } from './middleware/diskGuard.js';
@@ -185,8 +186,13 @@ setInterval(() => {
   }
 }, 15 * 60 * 1000);
 
+// Work still marked running from before this start was cut off by the restart.
+const SERVER_STARTED_AT = new Date();
+
 function startServer(p, attempts = 0,hos ='0.0.0.0') {
-  connectDB();
+  connectDB()?.then(() => {
+    if (isDBConnected()) markInterruptedOperations(SERVER_STARTED_AT);
+  });
   const serverInstance = http.createServer(app);
   const io = initSocket(serverInstance, ALLOWED_ORIGINS.join(','));
   app.set('io', io);

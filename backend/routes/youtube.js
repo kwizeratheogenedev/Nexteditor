@@ -15,6 +15,7 @@ import { getIo } from '../socket.js';
 import { requireAuth, requireSubscription } from '../middleware/auth.js';
 import { CLIPS_DIR } from '../storagePaths.js';
 import { toUserMessage } from '../services/userMessage.js';
+import { trackOperation } from '../services/operations.js';
 
 const router = express.Router();
 const clipsDir = CLIPS_DIR;
@@ -157,7 +158,7 @@ router.get('/upload/progress/:jobId', (req, res) => {
   res.json(progressByJob.get(req.params.jobId) || { percent: 0 });
 });
 
-router.post('/upload', requireSubscription('youtubeUpload'), async (req, res) => {
+router.post('/upload', requireSubscription('youtubeUpload'), trackOperation('youtube-upload'), async (req, res) => {
   const oauth2Client = await getAuthorizedClient(req.user);
   if (!oauth2Client) {
     res.status(401).json({ error: 'Not connected to YouTube yet.' });

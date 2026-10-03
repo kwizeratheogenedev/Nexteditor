@@ -9,6 +9,8 @@ import { MAX_DOWNLOAD_BYTES, downloadErrorMessage, downloadToFile } from '../ser
 import { getIo } from '../socket.js';
 import { UPLOADS_DIR } from '../storagePaths.js';
 import { toUserMessage } from '../services/userMessage.js';
+import { optionalAuth } from '../middleware/auth.js';
+import { trackOperation } from '../services/operations.js';
 
 const uploadsDir = UPLOADS_DIR;
 const router = express.Router();
@@ -154,7 +156,7 @@ async function downloadHttpVideo(url, outputPath, socketId, progressEvent, slotI
 /**
  * Main POST route handler
  */
-router.post('/', async (req, res) => {
+router.post('/', optionalAuth, trackOperation('link-fetch'), async (req, res) => {
   const { url, socketId, type, slotId } = req.body;
   const mediaType = type === 'audio' ? 'audio' : 'video';
   const events = getEventNames(mediaType);

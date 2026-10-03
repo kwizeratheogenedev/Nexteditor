@@ -2,7 +2,7 @@ import express from 'express';
 import { requireAuth } from '../middleware/auth.js';
 import { requireAdmin } from '../middleware/admin.js';
 import User from '../models/User.js';
-import Job from '../models/Job.js';
+import Operation from '../models/Operation.js';
 import Payment from '../models/Payment.js';
 import VisitDay from '../models/VisitDay.js';
 import ServerHour from '../models/ServerHour.js';
@@ -22,8 +22,8 @@ router.get('/live', async (_req, res) => {
   const [visitorsToday, signupsToday, rendersToday, runningJobs] = await Promise.all([
     VisitDay.countDocuments({ day: today }),
     User.countDocuments({ createdAt: { $gte: from } }),
-    Job.countDocuments({ createdAt: { $gte: from } }),
-    Job.countDocuments({ status: 'running' }),
+    Operation.countDocuments({ createdAt: { $gte: from } }),
+    Operation.countDocuments({ status: 'running' }),
   ]);
   res.json({
     now: new Date(),
@@ -67,10 +67,10 @@ async function visitKpis(days) {
 async function otherKpis({ from, to }) {
   const [signups, jobs, avgRender, payments, server] = await Promise.all([
     User.countDocuments({ createdAt: { $gte: from, $lt: to } }),
-    Job.aggregate([{ $match: { createdAt: { $gte: from, $lt: to } } }, { $group: { _id: '$status', n: { $sum: 1 } } }]),
-    Job.aggregate([
+    Operation.aggregate([{ $match: { createdAt: { $gte: from, $lt: to } } }, { $group: { _id: '$status', n: { $sum: 1 } } }]),
+    Operation.aggregate([
       { $match: { createdAt: { $gte: from, $lt: to }, status: 'done' } },
-      { $group: { _id: null, avgMs: { $avg: { $subtract: ['$updatedAt', '$createdAt'] } } } },
+      { $group: { _id: null, avgMs: { $avg: '$durationMs' } } },
     ]),
     Payment.aggregate([
       { $match: { createdAt: { $gte: from, $lt: to }, status: 'successful' } },
@@ -127,7 +127,7 @@ async function seriesFor(window, granularity, primaryCurrency) {
         { $group: { _id: '$day', visitors: { $sum: 1 }, signedIn: { $sum: { $cond: [{ $ne: ['$user', null] }, 1, 0] } } } },
       ]),
     User.aggregate([{ $match: { createdAt: dateMatch } }, { $group: { _id: bucketExpr('$createdAt'), n: { $sum: 1 } } }]),
-    Job.aggregate([{ $match: { createdAt: dateMatch, status: { $in: ['done', 'error'] } } }, { $group: { _id: { b: bucketExpr('$createdAt'), s: '$status' }, n: { $sum: 1 } } }]),
+    Operation.aggregate([{ $match: { createdAt: dateMatch, status: { $in: ['done', 'error'] } } }, { $group: { _id: { b: bucketExpr('$createdAt'), s: '$status' }, n: { $sum: 1 } } }]),
     Payment.aggregate([{ $match: { createdAt: dateMatch, status: 'successful', currency: primaryCurrency } }, { $group: { _id: bucketExpr('$createdAt'), total: { $sum: '$amount' } } }]),
     ServerHour.aggregate([{ $match: { hour: dateMatch } }, { $group: { _id: bucketExpr('$hour'), requests: { $sum: '$requests' }, totalMs: { $sum: '$totalMs' } } }]),
   ]);
@@ -186,9 +186,9 @@ async function breakdownsFor(window) {
       { $sort: { minutes: -1 } },
       { $limit: 10 },
       { $lookup: { from: 'users', localField: '_id', foreignField: '_id', as: 'u', pipeline: [{ $project: { email: 1, name: 1 } }] } },
-      { $lookup: { from: 'jobs', localField: '_id', foreignField: 'owner', as: 'j', pipeline: [{ $match: { createdAt: { $gte: window.from, $lt: window.to } } }, { $count: 'n' }] } },
+      { $lookup: { from: 'operations', localField: '_id', foreignField: 'owner', as: 'j', pipeline: [{ $match: { createdAt: { $gte: window.from, $lt: window.to } } }, { $count: 'n' }] } },
     ]),
-    Job.aggregate([
+    Operation.aggregate([
       { $match: { createdAt: { $gte: window.from, $lt: window.to } } },
       { $group: { _id: '$kind', total: { $sum: 1 }, failed: { $sum: { $cond: [{ $eq: ['$status', 'error'] }, 1, 0] } } } },
       { $sort: { total: -1 } },

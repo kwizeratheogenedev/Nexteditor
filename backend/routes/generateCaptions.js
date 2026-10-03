@@ -9,6 +9,8 @@ import { transcribeChunks } from '../services/captionTranscription.js';
 import { getIo } from '../socket.js';
 import { UPLOADS_DIR, CLIPS_DIR } from '../storagePaths.js';
 import { toUserMessage } from '../services/userMessage.js';
+import { optionalAuth } from '../middleware/auth.js';
+import { trackOperation } from '../services/operations.js';
 
 const router = express.Router();
 const clipsDir = CLIPS_DIR;
@@ -61,7 +63,7 @@ function captionedFileName(originalName) {
   return `${base}-captioned.mp4`;
 }
 
-router.post('/', captionUpload.single('video'), async (req, res) => {
+router.post('/', optionalAuth, captionUpload.single('video'), trackOperation('captions'), async (req, res) => {
   const jobId = randomUUID();
   const jobDir = path.join(uploadsDir, `captions-${jobId}`);
   const outputPath = path.join(clipsDir, `captioned-${jobId}.mp4`);

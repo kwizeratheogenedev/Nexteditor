@@ -18,6 +18,7 @@ import { renderLongMix } from '../services/longMixRender.js';
 import { isPro, checkAndConsumeExportQuota, FREE_EXPORT_MAX_SECONDS, FREE_STORAGE_BYTES_LIMIT } from '../services/planLimits.js';
 import { UPLOADS_DIR, CLIPS_DIR } from '../storagePaths.js';
 import { toUserMessage } from '../services/userMessage.js';
+import { trackOperation } from '../services/operations.js';
 
 const router = express.Router();
 const uploadsDir = UPLOADS_DIR;
@@ -236,7 +237,7 @@ router.post('/device-permit', requireAuth, async (req, res) => {
   }
 });
 
-router.post('/', requireAuth, upload.any(), async (req, res) => {
+router.post('/', requireAuth, upload.any(), trackOperation('export'), async (req, res) => {
   const tempFiles = [];
   const outputFiles = [];
   const jobDir = path.join(uploadsDir, `export-${randomUUID()}`);
@@ -281,6 +282,7 @@ router.post('/', requireAuth, upload.any(), async (req, res) => {
       await req.user.save();
       emitProgress(req, 100, 'Export complete', { result });
       upsertJob(ownerId, { jobId, status: 'done', progress: 100, message: 'Export complete', result });
+      req.operation.done(extra.chapters ? { kind: 'longmix' } : {});
     };
 
     // LongMix Studio projects take a purpose-built, parallel pipeline instead
@@ -505,6 +507,7 @@ router.post('/', requireAuth, upload.any(), async (req, res) => {
     await finishExport(outputName, outputPath, totalDuration);
   } catch (error) {
     const isUpgradeRequired = error.code === 'UPGRADE_REQUIRED';
+    req.operation.fail(error, req.body?.longMix ? { kind: 'longmix' } : {});
     if (!isUpgradeRequired) console.error('Editor export failed:', error);
     emitProgress(req, 0, 'Export failed', { error: toUserMessage(error, 'The export failed. Please try again.'), code: error.code });
     upsertJob(ownerId, { jobId, status: 'error', error: toUserMessage(error, 'The export failed. Please try again.') });

@@ -8,6 +8,8 @@ import { deleteJob, registerJob, resolveJob } from '../services/jobStore.js';
 import { getIo } from '../socket.js';
 import { UPLOADS_DIR, CLIPS_DIR } from '../storagePaths.js';
 import { toUserMessage } from '../services/userMessage.js';
+import { optionalAuth } from '../middleware/auth.js';
+import { trackOperation } from '../services/operations.js';
 
 const router = express.Router();
 const clipsDir = CLIPS_DIR;
@@ -22,7 +24,7 @@ function emitToClient(req, eventName, payload) {
   }
 }
 
-router.post('/', async (req, res) => {
+router.post('/', optionalAuth, trackOperation('short-edit'), async (req, res) => {
   const tempFiles = [];
   const outputFiles = [];
 

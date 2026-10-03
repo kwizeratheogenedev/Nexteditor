@@ -13,6 +13,7 @@ import { upsertJob } from '../services/jobTracker.js';
 import pLimit from 'p-limit';
 import { UPLOADS_DIR, CLIPS_DIR } from '../storagePaths.js';
 import { IS_LIMITED, EFFECTIVE_CPUS, MAX_PARALLEL_ENCODES } from '../services/cpuBudget.js';
+import { trackOperation } from '../services/operations.js';
 
 
 const router = express.Router();
@@ -234,7 +235,7 @@ function buildClipArgs(inputFile, startTime, clipDuration, outputFile, { beautyS
   ];
 }
 
-router.post('/', optionalAuth, upload.any(), async (req, res) => {
+router.post('/', optionalAuth, upload.any(), trackOperation('montage'), async (req, res) => {
   let concatListPath = '';
   const temporaryInputFiles = [];
   const generatedClipFiles = [];
@@ -613,6 +614,7 @@ router.post('/', optionalAuth, upload.any(), async (req, res) => {
     // what a client reconnecting after a dropped connection picks back up.
     emitToClient(jobId, socketId, 'montage-progress', { percent: 100, currentTime: 'Complete', totalEstimatedTime: Math.round(estimatedTotalTime / 1000), timeSpent: Math.round((Date.now() - montageStartTime) / 1000), timeLeft: 0, result });
     if (ownerId) upsertJob(ownerId, { jobId, status: 'done', progress: 100, message: 'Complete', result });
+    req.operation.done();
   } catch (error) {
     // The whole error, so ffmpeg's raw output (error.details) is in the log.
     console.error('Montage creation error:', error);
@@ -636,6 +638,7 @@ router.post('/', optionalAuth, upload.any(), async (req, res) => {
       } catch (_error) {}
     });
     const message = toUserMessage(error, 'The montage could not be created. Please try again.');
+    req.operation.fail(error);
     emitToClient(jobId, socketId, 'montage-error', { error: message });
     if (ownerId) upsertJob(ownerId, { jobId, status: 'error', error: message });
     // Once the early 202 has gone out, this request's own response is

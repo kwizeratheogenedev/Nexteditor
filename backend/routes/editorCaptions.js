@@ -14,6 +14,7 @@ import multer from 'multer';
 import { transcribeWords, transcribeAudioChunk } from '../services/captionTranscription.js';
 import { UPLOADS_DIR, CLIPS_DIR } from '../storagePaths.js';
 import { toUserMessage } from '../services/userMessage.js';
+import { trackOperation } from '../services/operations.js';
 
 // POST /api/editor/captions - auto-captions for the editor timeline.
 // Receives the same multipart upload as an export (timeline JSON plus one
@@ -57,7 +58,7 @@ function parseClips(raw) {
     && (clip.type === 'audio' || (isVideoLikeClip(clip) && !isImageClip(clip))));
 }
 
-router.post('/', requireAuth, upload.any(), async (req, res) => {
+router.post('/', requireAuth, upload.any(), trackOperation('editor-captions'), async (req, res) => {
   const jobDir = path.join(uploadsDir, `captions-${randomUUID()}`);
   const tempFiles = [];
   try {
@@ -149,7 +150,7 @@ router.post('/chunk', requireAuth, (req, res, next) => {
     }
     next();
   });
-}, async (req, res) => {
+}, trackOperation('caption-part'), async (req, res) => {
   try {
     const languageKey = String(req.body.language || 'auto');
     if (!(languageKey in CAPTION_LANGUAGES)) {
