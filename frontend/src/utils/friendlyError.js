@@ -21,6 +21,11 @@ export function friendlyError(text, fallback = 'Something went wrong. Please try
   if (/No such file or directory/i.test(message)) {
     return 'One of your files is no longer on the server (uploaded files are kept for a limited time). Please add it again and try once more.';
   }
+  // The browser's own video decoder gave up (WebCodecs reports just
+  // "Decoding error" / "Decoder failure").
+  if (/^(EncodingError:?\s*)?(Decoding error|Decoder (error|failure))\.?$|^EncodingError\b/i.test(message)) {
+    return 'One of your videos couldn\'t be read on this device. Use Server 1 instead - it processes the video on our server.';
+  }
   if (message.length > 300 || TECHNICAL.test(message)) return fallback;
   return message;
 }

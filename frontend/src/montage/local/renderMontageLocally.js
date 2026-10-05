@@ -13,6 +13,7 @@ import {
 } from 'mediabunny';
 import { parseSkipSeconds, planClips } from './planClips.js';
 import { createGradeRenderer, montageLook } from './gradeRenderer.js';
+import { framesWithFallback } from './decodeFallback.js';
 
 // Makes a Montage entirely in the browser: the videos and the song are read
 // from the user's device, every frame is decoded and encoded with the
@@ -128,7 +129,19 @@ export async function renderMontageLocally({ videoFiles, audioFile, settings, au
     // The song is encoded alongside the video; the muxer interleaves them.
     const songDone = audioSource.add(song).then(() => audioSource.close());
 
-    const sinks = opened.map((v) => new CanvasSink(v.track, { width: WIDTH, height: HEIGHT, fit: 'contain', poolSize: 2 }));
+    // One reader per video; it switches itself to software decoding if the
+    // device's decoder fails (see decodeFallback.js).
+    const sources = opened.map((v, i) => {
+      const makeSink = (software) => new CanvasSink(v.track, {
+        width: WIDTH,
+        height: HEIGHT,
+        fit: 'contain',
+        poolSize: 2,
+        ...(software ? { decoderOptions: { hardwareAcceleration: 'prefer-software' } } : {}),
+      });
+      return { sink: makeSink(false), software: false, label: `Video ${i + 1}`, fileName: videoFiles[i].name, makeSink };
+    });
+    let slowerNote = '';
     let frameIndex = 0;
     let clipStart = 0;
     for (let c = 0; c < clips.length; c += 1) {
@@ -142,16 +155,20 @@ export async function renderMontageLocally({ videoFiles, audioFile, settings, au
 
       const source = opened[clip.sourceIndex];
       const timestamps = Array.from({ length: frames }, (_, k) => source.firstTimestamp + clip.startTime + k / FPS);
-      const stage = `Rendering clip ${c + 1} of ${clips.length}`;
+      const stage = () => `Rendering clip ${c + 1} of ${clips.length}${slowerNote}`;
       let lastCanvas = null;
-      for await (const wrapped of sinks[clip.sourceIndex].canvasesAtTimestamps(timestamps)) {
+      const onSwitch = () => {
+        slowerNote = ' (using a slower, safer decoder)';
+        report((frameIndex / totalFrames) * 97, stage());
+      };
+      for await (const wrapped of framesWithFallback(sources[clip.sourceIndex], timestamps, { onSwitch })) {
         assertNotAborted(signal);
         // Past the end of a short video the last frame simply holds.
         lastCanvas = wrapped?.canvas || lastCanvas;
         if (lastCanvas) renderer.draw(lastCanvas);
         await videoSource.add(frameIndex / FPS, 1 / FPS);
         frameIndex += 1;
-        if (frameIndex % 5 === 0) report((frameIndex / totalFrames) * 97, stage);
+        if (frameIndex % 5 === 0) report((frameIndex / totalFrames) * 97, stage());
       }
     }
     // The clip plan stops within 0.05 s of the song's end; hold the last
