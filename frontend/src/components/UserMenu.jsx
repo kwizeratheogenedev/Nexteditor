@@ -2,6 +2,7 @@ import { useEffect, useRef, useState } from 'react';
 import { Link, useNavigate } from 'react-router-dom';
 import { useAuth } from '../context/AuthContext.jsx';
 import { Avatar, Badge, userIsPro } from './console/ui.jsx';
+import { leaveSafely } from '../utils/leaveGuard.js';
 import './UserMenu.css';
 
 // The account button in the top bar: opens a menu with the account page,
@@ -27,10 +28,18 @@ export default function UserMenu() {
   if (!user) return null;
   const pro = userIsPro(user);
 
-  const handleLogout = async () => {
+  const handleLogout = () => {
     setOpen(false);
-    await logout();
-    navigate('/login');
+    // Leaving the editor stops a montage being made on this device - ask first.
+    leaveSafely(async () => {
+      await logout();
+      navigate('/login');
+    });
+  };
+  const goTo = (to) => (event) => {
+    event.preventDefault();
+    setOpen(false);
+    leaveSafely(() => navigate(to));
   };
 
   return (
@@ -60,9 +69,9 @@ export default function UserMenu() {
               </div>
             </div>
           </div>
-          <Link role="menuitem" to="/account" className="um-item" onClick={() => setOpen(false)}>Account &amp; billing</Link>
-          {user.isAdmin && <Link role="menuitem" to="/admin" className="um-item" onClick={() => setOpen(false)}>Admin panel</Link>}
-          {!pro && <Link role="menuitem" to="/pricing" className="um-item um-upgrade" onClick={() => setOpen(false)}>Upgrade to Pro</Link>}
+          <Link role="menuitem" to="/account" className="um-item" onClick={goTo('/account')}>Account &amp; billing</Link>
+          {user.isAdmin && <Link role="menuitem" to="/admin" className="um-item" onClick={goTo('/admin')}>Admin panel</Link>}
+          {!pro && <Link role="menuitem" to="/pricing" className="um-item um-upgrade" onClick={goTo('/pricing')}>Upgrade to Pro</Link>}
           <div className="um-sep" />
           <button role="menuitem" type="button" className="um-item" onClick={handleLogout}>Log out</button>
         </div>

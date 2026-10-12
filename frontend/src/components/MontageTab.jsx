@@ -1,9 +1,10 @@
-import { useEffect, useRef, useState, useCallback } from 'react';
+import { useEffect, useRef, useState, useCallback, useMemo } from 'react';
 import { useSocket } from '../context/SocketContext';
-import { usePersistedMontageState } from '../hooks/usePersistedMontageState';
+import { usePersistedMontageState, DEFAULT_VIDEO_SLOTS, MAX_MONTAGE_VIDEOS } from '../hooks/usePersistedMontageState';
 import API_BASE, { API_ENDPOINTS } from '../config';
 import { useAutoDismiss } from '../hooks/useAutoDismiss.js';
 import { friendlyError } from '../utils/friendlyError.js';
+import { setLeaveGuard } from '../utils/leaveGuard.js';
 
 // A failed slot goes back to empty after a few seconds, ready to try again.
 const clearSlotError = (prev) => (prev.status === 'error' ? { ...prev, status:'idle', error:'', progress:0 } : prev);
@@ -66,6 +67,11 @@ const Icon = {
   X: () => (
     <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
       <line x1="18" y1="6" x2="6" y2="18"/><line x1="6" y1="6" x2="18" y2="18"/>
+    </svg>
+  ),
+  Trash: () => (
+    <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
+      <path d="M3 6h18"/><path d="M8 6V4h8v2"/><path d="M19 6l-1 14H6L5 6"/>
     </svg>
   ),
   Spin: () => (
@@ -232,7 +238,7 @@ function injectStyles() {
 
 // ─── MediaCard ────────────────────────────────────────────────────────────────
 
-function MediaCard({ label, item, setItem, accept, type, onError, isOptional = false, isAudio = false, animDelay = '' }) {
+function MediaCard({ label, item, setItem, accept, type, onError, isOptional = false, isAudio = false, animDelay = '', onRemove }) {
   const fileInputRef = useRef(null);
   const videoRef = useRef(null);
   const { socket, socketId } = useSocket();
@@ -334,6 +340,12 @@ function MediaCard({ label, item, setItem, accept, type, onError, isOptional = f
             <div style={{ fontSize:13, fontWeight:600, color:'var(--text-primary)', letterSpacing:'-0.01em' }}>{label}</div>
             {isOptional && <div style={{ fontSize:12, color:'var(--panel-border-strong)', marginTop:1 }}>optional</div>}
           </div>
+          {onRemove && (
+            <button type="button" onClick={onRemove} title="Remove this video slot" aria-label={`Remove ${label}`}
+              style={{ marginLeft:4, width:24, height:24, display:'flex', alignItems:'center', justifyContent:'center', borderRadius:7, border:'1px solid var(--panel-surface-2)', background:'transparent', color:'var(--panel-text-3)', cursor:'pointer', padding:0 }}>
+              <div style={{ width:13, height:13 }}><Icon.Trash /></div>
+            </button>
+          )}
         </div>
         {!isReady && !isLoading && item.sourceMode === 'device' && (
           <button
@@ -1375,6 +1387,8 @@ export default function MontageTab({ loadVideoInEditor, onError, onShurfer, onRe
   const {
     videos,
     updateVideo,
+    addVideoSlot,
+    removeVideoSlot,
     audio,
     setAudio,
     mergeStatus,
@@ -1428,9 +1442,12 @@ export default function MontageTab({ loadVideoInEditor, onError, onShurfer, onRe
   // Stable per-slot setters - MediaCard's internal effect re-subscribes its
   // socket listeners whenever `setItem` changes identity, so a fresh inline
   // arrow here on every render was tearing down/re-subscribing constantly.
-  const setVideo0 = useCallback((u) => updateVideo(0, u), [updateVideo]);
-  const setVideo1 = useCallback((u) => updateVideo(1, u), [updateVideo]);
-  const setVideo2 = useCallback((u) => updateVideo(2, u), [updateVideo]);
+  // One stable update function per slot (each card subscribes to progress
+  // updates with it); rebuilt only when slots are added or removed.
+  const videoSetters = useMemo(
+    () => Array.from({ length: videos.length }, (_, i) => (u) => updateVideo(i, u)),
+    [videos.length, updateVideo],
+  );
 
   // Clip generation runs several ffmpeg processes concurrently (pLimit on
   // the backend), so their progress events don't arrive in percent order -
@@ -1612,6 +1629,24 @@ export default function MontageTab({ loadVideoInEditor, onError, onShurfer, onRe
 
 
   const isProcessing = mergeStatus === 'processing';
+  // A montage being made on this device (Server 2 - no server job) stops if
+  // the user leaves this tab or the page, so while one runs: other tabs ask
+  // first (utils/leaveGuard.js), and so does the browser on close/reload
+  // (with its own standard wording - browsers don't allow custom text).
+  const deviceRendering = isProcessing && !mergeJobId;
+  useEffect(() => {
+    if (!deviceRendering) return undefined;
+    setLeaveGuard(true);
+    const onBeforeUnload = (event) => {
+      event.preventDefault();
+      event.returnValue = '';
+    };
+    window.addEventListener('beforeunload', onBeforeUnload);
+    return () => {
+      setLeaveGuard(false);
+      window.removeEventListener('beforeunload', onBeforeUnload);
+    };
+  }, [deviceRendering]);
   const isSocketUnavailable = !socket && Boolean(socketError);
   // The connection warning, like every error, clears itself after a few seconds.
   const [hiddenSocketError, setHiddenSocketError] = useState('');
@@ -1764,7 +1799,7 @@ export default function MontageTab({ loadVideoInEditor, onError, onShurfer, onRe
     const fd = new FormData();
     videos.forEach((v, i) => {
       if (v.file) fd.append(`video${i + 1}`, v.file);
-      else if (v.filePath) fd.append(`videoPath${i + 1}`, v.filePath);
+      else if (v.filePath) fd.append(`video${i + 1}Path`, v.filePath);
     });
     if (audio.file) fd.append('audio', audio.file);
     else if (audio.filePath) fd.append('audioPath', audio.filePath);
@@ -1862,7 +1897,7 @@ export default function MontageTab({ loadVideoInEditor, onError, onShurfer, onRe
           </div>
           <span style={{ fontSize:13, fontWeight:600, color:'var(--accent-purple-light)', letterSpacing:'-0.01em' }}>Montage Creator</span>
           <span style={{ fontSize:12, color:'var(--panel-text-3)', marginLeft:4 }}>
-            {readyCount === 0 ? 'add 3 videos and 1 audio track' : `${readyCount}/3 videos selected${hasAudio ? ' · audio ready' : ''}`}
+            {readyCount === 0 ? 'add at least 2 videos and 1 audio track' : `${readyCount} video${readyCount === 1 ? '' : 's'} selected${hasAudio ? ' · audio ready' : ''}`}
           </span>
           {isSocketUnavailable && socketError !== hiddenSocketError && (
             <span style={{ fontSize:12, color:'var(--danger)', marginLeft:8 }}>
@@ -1921,14 +1956,26 @@ export default function MontageTab({ loadVideoInEditor, onError, onShurfer, onRe
                 </div>
 
                 <div className="mt-video-grid">
-                  <MediaCard label="Video Source 1" item={videos[0]} setItem={setVideo0} accept="video/*" type="video" onError={onError} animDelay="mt-stagger-1" />
-                  <MediaCard label="Video Source 2" item={videos[1]} setItem={setVideo1} accept="video/*" type="video" onError={onError} animDelay="mt-stagger-2" />
-                  <MediaCard label="Video Source 3" item={videos[2]} setItem={setVideo2} accept="video/*" type="video" onError={onError} animDelay="mt-stagger-3" />
-                  <div className="mt-card mt-add-card" style={{ borderRadius:20, border:'1px dashed rgba(124,58,237,.3)', background:'var(--panel-surface-0)', display:'flex', flexDirection:'column', alignItems:'center', justifyContent:'center', gap:12, padding:20, textAlign:'center', minHeight:210, cursor:'default' }}>
-                    <div style={{ width:44, height:44, borderRadius:14, background:'rgba(124,58,237,.15)', display:'flex', alignItems:'center', justifyContent:'center', color:'var(--accent-purple)' }}><Icon.Plus /></div>
-                    <div style={{ fontSize:13, fontWeight:700, color:'var(--text-primary)' }}>Add more video</div>
-                    <div style={{ fontSize:12, color:'var(--panel-text-3)', lineHeight:1.6 }}>Use extra clips to expand your montage rhythm and create a fuller story.</div>
-                  </div>
+                  {videos.map((slot, i) => (
+                    <MediaCard
+                      key={slot.id}
+                      label={`Video Source ${i + 1}`}
+                      item={slot}
+                      setItem={videoSetters[i]}
+                      accept="video/*"
+                      type="video"
+                      onError={onError}
+                      animDelay={i < 3 ? `mt-stagger-${i + 1}` : ''}
+                      onRemove={i >= DEFAULT_VIDEO_SLOTS ? () => removeVideoSlot(i) : undefined}
+                    />
+                  ))}
+                  {videos.length < MAX_MONTAGE_VIDEOS && (
+                    <button type="button" onClick={addVideoSlot} className="mt-card mt-add-card" style={{ borderRadius:20, border:'1px dashed rgba(124,58,237,.3)', background:'var(--panel-surface-0)', display:'flex', flexDirection:'column', alignItems:'center', justifyContent:'center', gap:12, padding:20, textAlign:'center', minHeight:210, cursor:'pointer', font:'inherit' }}>
+                      <div style={{ width:44, height:44, borderRadius:14, background:'rgba(124,58,237,.15)', display:'flex', alignItems:'center', justifyContent:'center', color:'var(--accent-purple)' }}><Icon.Plus /></div>
+                      <div style={{ fontSize:13, fontWeight:700, color:'var(--text-primary)' }}>Add more video</div>
+                      <div style={{ fontSize:12, color:'var(--panel-text-3)', lineHeight:1.6 }}>Up to {MAX_MONTAGE_VIDEOS} videos - each one adds more variety to your montage.</div>
+                    </button>
+                  )}
                 </div>
               </div>
 

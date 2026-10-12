@@ -6,7 +6,7 @@
 //
 // Clip planning, copied rule for rule from createMontage.js so a device
 // montage is cut exactly like a server one: 3 or 4 second clips taking
-// turns between the videos, each starting at a random point after the
+// turns between the videos (see createClipOrder below), each starting at a random point after the
 // "skip intro" seconds and never overlapping another clip from the same
 // video, until the song is covered.
 
@@ -67,19 +67,60 @@ export function pickRandomStart(duration, clipDuration, usedRanges, skipSeconds 
   return fallback;
 }
 
+// Which video each clip comes from - the same rules as the server's
+// backend/services/clipOrder.js: rounds that use every video once, each in a
+// new order (1,2,3 then 3,1,2 then 2,3,1 ...); never two clips from the same
+// video in a row, also where rounds meet; with 3+ videos a round never
+// repeats the order of the one before.
+function shuffled(items, random) {
+  const out = items.slice();
+  for (let i = out.length - 1; i > 0; i -= 1) {
+    const j = Math.floor(random() * (i + 1));
+    [out[i], out[j]] = [out[j], out[i]];
+  }
+  return out;
+}
+
+function nextRound(count, previous, random) {
+  const indices = Array.from({ length: count }, (_, i) => i);
+  if (!previous || count < 2) return shuffled(indices, random);
+  const sameOrder = (round) => round.every((v, i) => v === previous[i]);
+  for (let attempt = 0; attempt < 50; attempt += 1) {
+    const round = shuffled(indices, random);
+    if (round[0] === previous[count - 1]) continue;
+    if (count > 2 && sameOrder(round)) continue;
+    return round;
+  }
+  return previous.slice(1).concat(previous[0]);
+}
+
+export function createClipOrder(videoCount, random = Math.random) {
+  let round = [];
+  let position = 0;
+  return () => {
+    if (position >= round.length) {
+      round = nextRound(videoCount, round.length ? round : null, random);
+      position = 0;
+    }
+    const index = round[position];
+    position += 1;
+    return index;
+  };
+}
+
 // [{ sourceIndex, startTime, clipDuration }] covering `audioDuration`.
 export function planClips({ audioDuration, videoDurations, syncMode, tempoSensitivity, skipSeconds, random = Math.random }) {
   const clipPlan = [];
   const usedRangesBySource = videoDurations.map(() => []);
   let remainingDuration = audioDuration;
-  let sourceIndex = 0;
+  const nextSourceIndex = createClipOrder(videoDurations.length, random);
 
   while (remainingDuration > 0.05) {
+    const sourceIndex = nextSourceIndex();
     const clipDuration = pickClipDuration(remainingDuration, syncMode, tempoSensitivity, random);
     const startTime = pickRandomStart(videoDurations[sourceIndex], clipDuration, usedRangesBySource[sourceIndex], skipSeconds, random);
     clipPlan.push({ sourceIndex, startTime, clipDuration });
     remainingDuration -= clipDuration;
-    sourceIndex = (sourceIndex + 1) % videoDurations.length;
   }
   return clipPlan;
 }

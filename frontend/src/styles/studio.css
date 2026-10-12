@@ -1881,6 +1881,14 @@ button.st-track-hint {
   font-size: 16px;
 }
 
+/* A sentence of explanation (not file details) under a dialog's title. */
+.st-dialog-text {
+  margin: 12px 0 0;
+  color: var(--st-text-2);
+  font-size: 15px;
+  line-height: 1.5;
+}
+
 .st-dialog-chips {
   display: flex;
   flex-wrap: wrap;

@@ -3,6 +3,12 @@ import { persistFile, getPersistedFile, removePersistedFile } from '../utils/ind
 
 const BASE_STORAGE_PREFIX = 'nexeditor_montage_';
 
+// Video slots: three to start with; "Add more video" adds more, up to the
+// maximum. Both Server 1 and Server 2 use every video given.
+export const DEFAULT_VIDEO_SLOTS = 3;
+export const MAX_MONTAGE_VIDEOS = 10;
+const defaultVideoSlots = () => Array.from({ length: DEFAULT_VIDEO_SLOTS }, (_, i) => createVideoSlot(i + 1));
+
 function createVideoSlot(id) {
   return { id, sourceMode: 'device', file: null, url: '', filePath: '', fileName: '', duration: null, status: 'idle', progress: 0, error: '' };
 }
@@ -60,7 +66,7 @@ async function persistSlot(storageKey, fileKey, slotState) {
 // pre-existing users already have data under.
 export function usePersistedMontageState(sessionId = '') {
   const STORAGE_PREFIX = sessionId ? `${BASE_STORAGE_PREFIX}${sessionId}_` : BASE_STORAGE_PREFIX;
-  const [videos, setVideos] = useState(() => [createVideoSlot(1), createVideoSlot(2), createVideoSlot(3)]);
+  const [videos, setVideos] = useState(defaultVideoSlots);
   const [audio, setAudio] = useState(() => createAudioSlot());
   const [mergeStatus, setMergeStatus] = useState('idle');
   const [mergeProgress, setMergeProgress] = useState(0);
@@ -92,7 +98,12 @@ export function usePersistedMontageState(sessionId = '') {
     let cancelled = false;
 
     async function restore() {
-      const videoPromises = [0, 1, 2].map((index) => {
+      let slotCount = DEFAULT_VIDEO_SLOTS;
+      try {
+        const savedCount = Number(localStorage.getItem(`${STORAGE_PREFIX}video_count`));
+        if (Number.isInteger(savedCount)) slotCount = Math.min(MAX_MONTAGE_VIDEOS, Math.max(DEFAULT_VIDEO_SLOTS, savedCount));
+      } catch { /* default */ }
+      const videoPromises = Array.from({ length: slotCount }, (_, index) => index).map((index) => {
         const storageKey = `${STORAGE_PREFIX}video_${index}`;
         const fileKey = `${storageKey}_file`;
         return restoreSlot(storageKey, fileKey, createVideoSlot(index + 1));
@@ -113,10 +124,11 @@ export function usePersistedMontageState(sessionId = '') {
         console.warn('Error restoring processing state:', error);
       }
 
-      const [v0, v1, v2, a] = await Promise.all([...videoPromises, audioPromise]);
+      const restoredSlots = await Promise.all([...videoPromises, audioPromise]);
+      const a = restoredSlots.pop();
 
       if (!cancelled) {
-        setVideos([v0, v1, v2]);
+        setVideos(restoredSlots);
         setAudio(a);
 
         if (processingState) {
@@ -144,8 +156,10 @@ export function usePersistedMontageState(sessionId = '') {
           setMergeTotalEstimatedTime(processingState.mergeTotalEstimatedTime || 0);
           setMergeTimeSpent(processingState.mergeTimeSpent || 0);
           setMergeTimeLeft(processingState.mergeTimeLeft || 0);
+          // Almost always a montage made on this device (Server 2), which
+          // stops when the user leaves the Montage tab or the page.
           setMergeError(trulyInterrupted
-            ? 'Your previous montage job was interrupted by a page reload. Please check your downloads, or start a new merge.'
+            ? 'Your montage stopped because you left the Montage tab or the page. Press Merge Montage to start it again.'
             : (processingState.mergeError || ''));
           setMergeJobId(resumableJobId);
           setOutputFile(processingState.outputFile || { filePath:'', fileName:'', downloadName:'', duration:'', size:'' });
@@ -182,6 +196,15 @@ export function usePersistedMontageState(sessionId = '') {
         const fileKey = `${storageKey}_file`;
         persistSlot(storageKey, fileKey, video);
       });
+      // Slots that were removed since the last save.
+      try {
+        localStorage.setItem(`${STORAGE_PREFIX}video_count`, String(videos.length));
+        for (let index = videos.length; index < MAX_MONTAGE_VIDEOS; index += 1) {
+          if (localStorage.getItem(`${STORAGE_PREFIX}video_${index}`) === null) continue;
+          localStorage.removeItem(`${STORAGE_PREFIX}video_${index}`);
+          removePersistedFile(`${STORAGE_PREFIX}video_${index}_file`);
+        }
+      } catch { /* storage unavailable */ }
 
       const audioStorageKey = `${STORAGE_PREFIX}audio`;
       const audioFileKey = `${audioStorageKey}_file`;
@@ -228,8 +251,18 @@ export function usePersistedMontageState(sessionId = '') {
     });
   }, []);
 
+  // "Add more video" / the remove button on an extra slot.
+  const addVideoSlot = useCallback(() => {
+    setVideos((prev) => (prev.length >= MAX_MONTAGE_VIDEOS
+      ? prev
+      : [...prev, createVideoSlot(Math.max(0, ...prev.map((slot) => slot.id || 0)) + 1)]));
+  }, []);
+  const removeVideoSlot = useCallback((index) => {
+    setVideos((prev) => (prev.length <= DEFAULT_VIDEO_SLOTS ? prev : prev.filter((_, i) => i !== index)));
+  }, []);
+
   const clearAll = useCallback(() => {
-    setVideos([createVideoSlot(1), createVideoSlot(2), createVideoSlot(3)]);
+    setVideos(defaultVideoSlots());
     setAudio(createAudioSlot());
     setMergeStatus('idle');
     setMergeProgress(0);
@@ -252,10 +285,11 @@ export function usePersistedMontageState(sessionId = '') {
     setContrastPolish(true);
     setSkipStartSeconds(40);
 
-    for (let i = 0; i < 3; i += 1) {
+    for (let i = 0; i < MAX_MONTAGE_VIDEOS; i += 1) {
       localStorage.removeItem(`${STORAGE_PREFIX}video_${i}`);
       removePersistedFile(`${STORAGE_PREFIX}video_${i}_file`);
     }
+    localStorage.removeItem(`${STORAGE_PREFIX}video_count`);
     localStorage.removeItem(`${STORAGE_PREFIX}audio`);
     removePersistedFile(`${STORAGE_PREFIX}audio_file`);
     localStorage.removeItem(`${STORAGE_PREFIX}processing`);
@@ -265,6 +299,8 @@ export function usePersistedMontageState(sessionId = '') {
     videos,
     setVideos,
     updateVideo,
+    addVideoSlot,
+    removeVideoSlot,
     audio,
     setAudio,
     mergeStatus,

@@ -6,6 +6,7 @@ import { randomUUID } from 'crypto';
 import { runFFmpeg, probeDuration } from '../services/ffmpeg.js';
 import { getFileSource as resolveFileSource } from '../services/fileResolve.js';
 import { holdFiles } from '../services/fileLeases.js';
+import { createClipOrder } from '../services/clipOrder.js';
 import { toUserMessage } from '../services/userMessage.js';
 import { getIo } from '../socket.js';
 import { optionalAuth } from '../middleware/auth.js';
@@ -23,6 +24,8 @@ const MIN_CLIP_DURATION = 3;
 const MAX_CLIP_DURATION = 4;
 const DEFAULT_SKIP_INPUT_VIDEO_SECONDS = 40;
 const MAX_SKIP_INPUT_VIDEO_SECONDS = 600;
+// Videos one montage can use (fields video1..videoN); the page allows the same.
+const MAX_MONTAGE_VIDEOS = 10;
 
 // Configure multer for video and audio uploads
 const storage = multer.diskStorage({
@@ -43,7 +46,8 @@ const storage = multer.diskStorage({
 
 const upload = multer({
   storage,
-  limits: { fileSize: 500 * 1024 * 1024 }, // 500MB
+  // 500MB each; the videos plus a few songs.
+  limits: { fileSize: 500 * 1024 * 1024, files: MAX_MONTAGE_VIDEOS + 5 },
 });
 
 // Handle both file uploads and URL-based file paths
@@ -294,7 +298,7 @@ router.post('/', optionalAuth, upload.any(), trackOperation('montage'), async (r
     const videoFiles = [];
     
     // Handle uploaded files
-    for (let i = 1; i <= 3; i++) {
+    for (let i = 1; i <= MAX_MONTAGE_VIDEOS; i++) {
       const videoFile = req.files?.find(f => f.fieldname === `video${i}`);
       const videoPath = req.body[`video${i}Path`];
       
@@ -439,9 +443,12 @@ router.post('/', optionalAuth, upload.any(), trackOperation('montage'), async (r
     const clipPlan = [];
     const usedRangesByPath = new Map();
     let remainingDuration = audioDuration;
-    let sourceIndex = 0;
+    // Rounds of every video in a new order, never the same video twice in a
+    // row (services/clipOrder.js).
+    const nextSourceIndex = createClipOrder(videoFiles.length);
 
     while (remainingDuration > 0.05) {
+      const sourceIndex = nextSourceIndex();
       const clipDuration = pickClipDuration(remainingDuration, syncMode, tempoSensitivity);
       const videoDuration = videoDurations[sourceIndex];
       const rangeKey = videoFiles[sourceIndex];
@@ -456,7 +463,6 @@ router.post('/', optionalAuth, upload.any(), trackOperation('montage'), async (r
       });
 
       remainingDuration -= clipDuration;
-      sourceIndex = (sourceIndex + 1) % videoFiles.length;
     }
 
     emitToClient(jobId, socketId, 'montage-progress', { percent: 10, currentTime: 'Creating random clips...' });

@@ -21,6 +21,8 @@ import ErrorPopup from './components/ErrorPopup';
 import ProjectsModal from './components/ProjectsModal';
 import JobsResumeBanner from './components/JobsResumeBanner';
 import QuietErrorBoundary from './components/QuietErrorBoundary';
+import LeaveMontageDialog from './components/LeaveMontageDialog';
+import { leaveSafely, setLeaveAsker } from './utils/leaveGuard.js';
 import MontageTab from './components/MontageTab';
 import BottomTimeline, { PX_PER_SECOND, laneHeight } from './components/BottomTimeline';
 import ExportCompleteDialog from './components/ExportCompleteDialog';
@@ -217,6 +219,18 @@ function App() {
     try { localStorage.setItem('nex.editor.exportOnDevice', on ? '1' : '0'); } catch { /* preference only */ }
   };
   const [errorAction, setErrorAction] = useState(null);
+  // Leaving the Montage tab while a montage is made on this device stops it -
+  // the step the user asked for waits here until they confirm (utils/leaveGuard.js).
+  const [pendingLeave, setPendingLeave] = useState(null);
+  useEffect(() => {
+    setLeaveAsker((proceed) => setPendingLeave(() => proceed));
+    return () => setLeaveAsker(null);
+  }, []);
+  // Switching tabs from the sidebar, top bar or Projects window.
+  const changeTab = (id, apply = () => setActiveTab(id)) => {
+    if (id === activeTab) apply();
+    else leaveSafely(apply);
+  };
   const localExportUrlRef = useRef('');
   // Auto captions: null when idle, else the status line shown in the timeline.
   const [captionsStatus, setCaptionsStatus] = useState(null);
@@ -2876,7 +2890,8 @@ function App() {
   );
   const longMixRuntime = longMixResult?.duration || 0;
 
-  const handleSidebarSelect = (id) => {
+  const handleSidebarSelect = (id) => changeTab(id === 'library' ? 'editor' : id, () => selectSidebarItem(id));
+  const selectSidebarItem = (id) => {
     if (id === 'library') {
       setActiveTab('editor');
       setEditorPane('media');
@@ -3041,7 +3056,7 @@ function App() {
     <div id="app-shell">
       <TopBar
         activeTab={activeTab}
-        onTabChange={setActiveTab}
+        onTabChange={(id) => changeTab(id)}
         onExport={triggerExport}
         deviceExport={deviceExport}
         onDeviceExportChange={setDeviceExport}
@@ -3210,6 +3225,16 @@ function App() {
           }}
         />
       )}
+      {pendingLeave && (
+        <LeaveMontageDialog
+          onStay={() => setPendingLeave(null)}
+          onLeave={() => {
+            const proceed = pendingLeave;
+            setPendingLeave(null);
+            proceed();
+          }}
+        />
+      )}
       <QuietErrorBoundary name="Jobs banner">
         <JobsResumeBanner />
       </QuietErrorBoundary>
@@ -3218,7 +3243,7 @@ function App() {
           onClose={() => setProjectsModalOpen(false)}
           onResume={async (id) => {
             await loadProjectFromAccount(id);
-            setActiveTab('editor');
+            changeTab('editor');
           }}
         />
       )}
