@@ -1,7 +1,7 @@
 import { useState, useSyncExternalStore } from 'react';
 import './LongMixPanel.css';
 import './AudioMergePanel.css';
-import { formatTime, planAudioMerge, TARGET_SECONDS } from '../audioMerge/plan';
+import { formatTime, planAudioMerge, planExtend, TARGET_SECONDS } from '../audioMerge/plan';
 import { addMerge, clearMerges, getMerges, hasRunningMerge, removeMerge, subscribeToMerges } from '../audioMerge/mergeQueue';
 
 // Resolves 0 on a file the <audio> element can't read; the merge itself still
@@ -44,17 +44,20 @@ function AudioSlot({ number, title, hint, value, onPick }) {
   );
 }
 
-function mergeButtonLabel(job) {
-  if (!job) return 'Merge audio';
+function mergeButtonLabel(job, extend) {
+  if (!job) return extend ? 'Extend audio' : 'Merge audio';
   if (job.status === 'waiting') return 'Waiting for another merge...';
-  if (job.status === 'merging') return `Merging... ${job.progress}%`;
+  if (job.status === 'merging') return `${job.extended ? 'Extending' : 'Merging'}... ${job.progress}%`;
   if (job.status === 'encoding') return `Making the MP3... ${job.mp3Progress}%`;
-  return 'Merged';
+  return job.extended ? 'Extended' : 'Merged';
 }
 
 function MergeRow({ job, onUseInMontage, onMergeAnother }) {
-  const [format, setFormat] = useState('wav');
+  const [chosenFormat, setFormat] = useState('wav');
+  const format = job.mp3Failed ? 'wav' : chosenFormat;
   const blob = format === 'wav' ? job.wav : job.mp3;
+  const downloadUrl = format === 'wav' ? job.wavUrl : job.mp3Url;
+  const downloadLabel = `Download ${format.toUpperCase()}`;
   const useFile = () => onUseInMontage({ file: new File([blob], `${job.name}.${format}`, { type: blob.type }), duration: TARGET_SECONDS });
   const mergeAnotherButton = onMergeAnother && <button type="button" className="longmix-build-button" onClick={onMergeAnother}>Merge another</button>;
 
@@ -75,8 +78,8 @@ function MergeRow({ job, onUseInMontage, onMergeAnother }) {
         )}
         {job.mp3Failed && <p className="audiomerge-error" role="alert">The MP3 could not be made, but the WAV is ready to use.</p>}
         <div className="audiomerge-format">
-          <span>Format for Montage</span>
-          <div className="longmix-choice-row" role="group" aria-label="Format for Montage">
+          <span>Format</span>
+          <div className="longmix-choice-row" role="group" aria-label="Format">
             <button type="button" className={format === 'wav' ? 'is-active' : ''} aria-pressed={format === 'wav'} onClick={() => setFormat('wav')}>WAV</button>
             <button type="button" className={format === 'mp3' ? 'is-active' : ''} aria-pressed={format === 'mp3'} disabled={job.mp3Failed} onClick={() => setFormat('mp3')}>MP3</button>
           </div>
@@ -84,12 +87,9 @@ function MergeRow({ job, onUseInMontage, onMergeAnother }) {
         <button type="button" className="longmix-build-button" disabled={!blob} onClick={useFile}>
           {blob ? 'Use it in Montage' : `Making the MP3... ${job.mp3Progress}%`}
         </button>
-        <div className="audiomerge-downloads">
-          {job.mp3Url
-            ? <a className="longmix-secondary-button" href={job.mp3Url} download={`${job.name}.mp3`}>Download MP3</a>
-            : <button type="button" className="longmix-secondary-button" disabled>Download MP3</button>}
-          <a className="longmix-secondary-button" href={job.wavUrl} download={`${job.name}.wav`}>Download WAV</a>
-        </div>
+        {downloadUrl
+          ? <a className="longmix-secondary-button audiomerge-download" href={downloadUrl} download={`${job.name}.${format}`}>{downloadLabel}</a>
+          : <button type="button" className="longmix-secondary-button audiomerge-download" disabled>{downloadLabel}</button>}
         {mergeAnotherButton}
       </li>
     );
@@ -105,7 +105,7 @@ function MergeRow({ job, onUseInMontage, onMergeAnother }) {
         <p className="audiomerge-error" role="alert">{job.error}</p>
       ) : (
         <>
-          <small>{job.status === 'waiting' ? 'Waiting for another merge to finish...' : `Merging on this device... ${job.progress}%`}</small>
+          <small>{job.status === 'waiting' ? 'Waiting for another merge to finish...' : `${job.extended ? 'Extending' : 'Merging'} on this device... ${job.progress}%`}</small>
           <div className="audiomerge-bar"><span style={{ width: `${job.progress}%` }} /></div>
         </>
       )}
@@ -116,6 +116,7 @@ function MergeRow({ job, onUseInMontage, onMergeAnother }) {
 
 export default function AudioMergePanel({ onUseInMontage }) {
   const merges = useSyncExternalStore(subscribeToMerges, getMerges);
+  const [extend, setExtend] = useState(false);
   const [first, setFirst] = useState(null);
   const [second, setSecond] = useState(null);
   const [submittedId, setSubmittedId] = useState(null);
@@ -130,7 +131,15 @@ export default function AudioMergePanel({ onUseInMontage }) {
     setSlot((current) => (current?.file === file ? { file, duration } : current));
   };
 
-  const plan = first?.duration && second?.duration ? planAudioMerge(first.duration, second.duration) : null;
+  const chooseMode = (next) => {
+    setExtend(next);
+    setSecond(null);
+    setSubmittedId(null);
+  };
+
+  const twoAudiosPlan = first?.duration && second?.duration ? planAudioMerge(first.duration, second.duration) : null;
+  const extendPlan = first?.duration ? planExtend(first.duration) : null;
+  const plan = extend ? extendPlan : twoAudiosPlan;
 
   // Starts over on a clean screen, finished merges included. If one is still
   // being made, a new browser tab starts over instead, so it isn't disturbed:
@@ -154,13 +163,37 @@ export default function AudioMergePanel({ onUseInMontage }) {
         <div>
           <span className="longmix-kicker">AUDIO MERGE</span>
           <h1>Make an 8-minute audio</h1>
-          <p>The first audio plays in full. The second is cut to fill the time left, up to exactly 8:00.</p>
+          <p>{extend
+            ? 'Your audio plays in full, with a cut from its middle added to reach exactly 8:00.'
+            : 'The first audio plays in full. The second is cut to fill the time left, up to exactly 8:00.'}</p>
         </div>
       </header>
 
       <div className="audiomerge-card longmix-card">
-        <AudioSlot number={1} title="First audio" hint="Kept whole, shorter than 8:00" value={first} onPick={(file) => pick(file, setFirst)} />
-        <AudioSlot number={2} title="Second audio" hint="Cut from its start to fill the rest" value={second} onPick={(file) => pick(file, setSecond)} />
+        <div className="audiomerge-format">
+          <span>Use</span>
+          <div className="longmix-choice-row" role="group" aria-label="Use">
+            <button type="button" className={extend ? '' : 'is-active'} aria-pressed={!extend} onClick={() => chooseMode(false)}>Two audios</button>
+            <button type="button" className={extend ? 'is-active' : ''} aria-pressed={extend} onClick={() => chooseMode(true)}>Extend one audio</button>
+          </div>
+        </div>
+
+        <AudioSlot
+          number={1}
+          title={extend ? 'Your audio' : 'First audio'}
+          hint={extend ? 'Its middle part fills the time to 8:00' : 'Kept whole, shorter than 8:00'}
+          value={first}
+          onPick={(file) => pick(file, setFirst)}
+        />
+        {!extend && <AudioSlot number={2} title="Second audio" hint="Cut from its start to fill the rest" value={second} onPick={(file) => pick(file, setSecond)} />}
+
+        {plan?.addedSeconds > 0 && (
+          <ul className="longmix-summary audiomerge-summary">
+            <li><span>Your audio</span><b>{formatTime(first.duration)}</b></li>
+            <li><span>Added from middle</span><b>{formatTime(plan.addedSeconds)}</b></li>
+            <li><span>Final length</span><b>8:00</b></li>
+          </ul>
+        )}
 
         {plan?.secondSeconds > 0 && (
           <ul className="longmix-summary audiomerge-summary">
@@ -175,10 +208,10 @@ export default function AudioMergePanel({ onUseInMontage }) {
         <button
           type="button"
           className="longmix-build-button"
-          disabled={!first || !second || Boolean(plan?.error) || Boolean(submitted)}
-          onClick={() => setSubmittedId(addMerge(first.file, second.file))}
+          disabled={!first || (!extend && !second) || Boolean(plan?.error) || Boolean(submitted)}
+          onClick={() => setSubmittedId(addMerge(first.file, extend ? null : second.file))}
         >
-          {mergeButtonLabel(submitted)}
+          {mergeButtonLabel(submitted, extend)}
         </button>
 
         {merges.length > 0 && (

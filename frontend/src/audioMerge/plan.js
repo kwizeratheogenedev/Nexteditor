@@ -24,6 +24,35 @@ export function planAudioMerge(firstDuration, secondDuration, target = TARGET_SE
   return { secondSeconds };
 }
 
+// Extend: a cut from the middle of the audio fills the time left, never slowed
+// down. Returns { addedSeconds } - how much is added - or { error }.
+export function planExtend(duration, target = TARGET_SECONDS) {
+  if (duration >= target) {
+    return { error: `This audio is ${formatTime(duration)}, so there is nothing to extend. It must be shorter than ${formatTime(target)}.` };
+  }
+  return { addedSeconds: target - duration };
+}
+
+// Fills `pcm` from the audio in pcm[0..end) by playing a middle section again
+// right after itself, so the start and the natural ending both stay. The
+// section is what's needed, or the middle half at most: a short audio plays
+// that half as many times as it takes. Returns the new end.
+export function extendFromMiddle(pcm, end) {
+  if (end < 4) throw new Error('No audio could be read from this file.');
+  const added = pcm.length - end;
+  if (added <= 0) return end;
+  // Whole stereo frames only (the buffer holds left/right pairs).
+  const section = Math.min(added, Math.floor(end / 2)) & ~1;
+  const sectionStart = Math.floor((end - section) / 2) & ~1;
+  const sectionEnd = sectionStart + section;
+
+  pcm.copyWithin(sectionEnd + added, sectionEnd, end);
+  for (let at = sectionEnd; at < sectionEnd + added; at += section) {
+    pcm.copyWithin(at, sectionStart, sectionStart + Math.min(section, sectionEnd + added - at));
+  }
+  return pcm.length;
+}
+
 // Writes decoded float samples into the interleaved 16-bit `pcm`, starting at
 // index `at`. Mono plays on both sides. Stops when `pcm` is full, which is what
 // lands the join exactly on the target, and returns where it got to.

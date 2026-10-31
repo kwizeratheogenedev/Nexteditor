@@ -10,12 +10,13 @@ import {
   WavOutputFormat,
 } from 'mediabunny';
 import { registerMp3Encoder } from '@mediabunny/mp3-encoder';
-import { planAudioMerge, readWavData, TARGET_SECONDS, wavHeader, writeStereo } from './plan.js';
+import { extendFromMiddle, planAudioMerge, planExtend, readWavData, TARGET_SECONDS, wavHeader, writeStereo } from './plan.js';
 
 // Makes one merged audio on the user's device. Both inputs are decoded into a
 // single 8-minute PCM buffer, which stops decoding the second audio the moment
-// it is full, so a long second audio costs no more than the part used. That
-// gives the WAV within seconds; the MP3 is encoded from it afterwards, since
+// it is full, so a long second audio costs no more than the part used. With no
+// second audio (Extend) a cut from the first's middle fills the buffer instead.
+// That gives the WAV within seconds; the MP3 is encoded from it afterwards, since
 // that is the slow part and shouldn't hold back a finished audio.
 // One worker runs per merge.
 
@@ -41,7 +42,8 @@ async function run(conversion, name, onProgress) {
 
 // The browser's own decoder, read directly. Far quicker than a Conversion, so
 // it's used whenever nothing needs resampling or mixing down.
-async function decodeDirectly(track, pcm, at, onProgress) {
+async function decodeDirectly(track, pcm, at, end, onProgress) {
+  const expected = end * track.sampleRate * 2;
   let index = at;
   let left = new Float32Array(0);
   let right = left;
@@ -55,7 +57,7 @@ async function decodeDirectly(track, pcm, at, onProgress) {
     if (sample.numberOfChannels > 1) sample.copyTo(right, { planeIndex: 1, format: 'f32-planar' });
     index = writeStereo(pcm, index, left, sample.numberOfChannels > 1 ? right : left, frames);
     sample.close();
-    onProgress((index - at) / (pcm.length - at));
+    onProgress(Math.min(1, (index - at) / expected));
     if (index >= pcm.length) break;
   }
   return index;
@@ -83,7 +85,7 @@ async function decodeWithConversion(file, pcm, at, sampleRate, end, onProgress) 
 
 function decode({ track }, file, pcm, at, sampleRate, end, onProgress) {
   return track.sampleRate === sampleRate && track.numberOfChannels <= 2
-    ? decodeDirectly(track, pcm, at, onProgress)
+    ? decodeDirectly(track, pcm, at, end, onProgress)
     : decodeWithConversion(file, pcm, at, sampleRate, end, onProgress);
 }
 
@@ -100,20 +102,21 @@ async function encodeMp3(wav, onProgress) {
 }
 
 async function merge(first, second) {
-  const [firstAudio, secondAudio] = await Promise.all([readAudio(first), readAudio(second)]);
-  const plan = planAudioMerge(firstAudio.duration, secondAudio.duration);
+  const [firstAudio, secondAudio] = await Promise.all([readAudio(first), second && readAudio(second)]);
+  const plan = second ? planAudioMerge(firstAudio.duration, secondAudio.duration) : planExtend(firstAudio.duration);
   if (plan.error) throw new Error(plan.error);
 
   // Keeps the first audio's sample rate when an MP3 can carry it.
   const rate = firstAudio.track.sampleRate;
   const sampleRate = SAMPLE_RATES.includes(rate) ? rate : 44100;
   const pcm = new Int16Array(TARGET_SECONDS * sampleRate * 2);
-  const firstShare = firstAudio.duration / TARGET_SECONDS;
+  const firstShare = second ? firstAudio.duration / TARGET_SECONDS : 1;
   const report = (progress) => self.postMessage({ type: 'progress', progress });
 
   const firstEnd = await decode(firstAudio, first, pcm, 0, sampleRate, firstAudio.duration, (p) => report(p * firstShare));
-  const secondEnd = Math.min(plan.secondSeconds + 1, secondAudio.duration);
-  const end = await decode(secondAudio, second, pcm, firstEnd, sampleRate, secondEnd, (p) => report(firstShare + (p * (1 - firstShare))));
+  const end = second
+    ? await decode(secondAudio, second, pcm, firstEnd, sampleRate, Math.min(plan.secondSeconds + 1, secondAudio.duration), (p) => report(firstShare + (p * (1 - firstShare))))
+    : extendFromMiddle(pcm, firstEnd);
 
   const audio = pcm.subarray(0, end);
   const wav = new Blob([wavHeader(audio.byteLength, sampleRate), audio], { type: 'audio/wav' });

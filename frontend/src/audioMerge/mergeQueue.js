@@ -18,9 +18,9 @@ function publish(next) {
 
 const update = (id, patch) => publish(jobs.map((job) => (job.id === id ? { ...job, ...patch } : job)));
 
-function outputName(file) {
+function outputName(file, extended) {
   const base = file.name.replace(/\.[^.]+$/, '').replace(/[^\p{L}\p{N} _.-]/gu, '').trim() || 'audio';
-  return `${base}-merge-8min`;
+  return `${base}-${extended ? 'extended' : 'merge'}-8min`;
 }
 
 function finish(id, patch) {
@@ -63,9 +63,10 @@ function startWaiting() {
   jobs.filter((job) => job.status === 'waiting').slice(0, MAX_RUNNING - running).forEach(start);
 }
 
-export function addMerge(first, second) {
+// With no second audio, the first is extended to 8 minutes instead.
+export function addMerge(first, second = null) {
   const id = nextId++;
-  publish([{ id, name: outputName(first), first, second, status: 'waiting', progress: 0 }, ...jobs]);
+  publish([{ id, name: outputName(first, !second), extended: !second, first, second, status: 'waiting', progress: 0 }, ...jobs]);
   startWaiting();
   return id;
 }
