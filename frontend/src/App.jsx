@@ -34,7 +34,7 @@ import { captionsToSrt } from './timeline/captionsSrt';
 import { ERROR_DISPLAY_MS } from './utils/friendlyError.js';
 import './styles/studio.css';
 
-const VALID_TABS = ['media', 'captions', 'shorts', 'longmix', 'editor'];
+const VALID_TABS = ['media', 'captions', 'shorts', 'longmix', 'audiomerge', 'editor'];
 
 // A long mix is a music video, not motion footage - 30fps is plenty and
 // halves the render time against 60. The user picks the frame size in the
@@ -230,6 +230,14 @@ function App() {
   const changeTab = (id, apply = () => setActiveTab(id)) => {
     if (id === activeTab) apply();
     else leaveSafely(apply);
+  };
+  // Audio Merge: the finished files (kept here so they survive a tab switch)
+  // and a merged audio on its way into the Montage tab's audio slot.
+  const [audioMergeResult, setAudioMergeResult] = useState(null);
+  const [montageImportedAudio, setMontageImportedAudio] = useState(null);
+  const sendAudioToMontage = (imported) => {
+    setMontageImportedAudio(imported);
+    changeTab('media');
   };
   const localExportUrlRef = useRef('');
   // Auto captions: null when idle, else the status line shown in the timeline.
@@ -618,10 +626,10 @@ function App() {
   }, [activeTab, effectiveTimelineDuration, setTimelineZoom]);
 
   useEffect(() => {
-    if (!VALID_TABS.includes(activeTab)) {
+    if (!VALID_TABS.includes(activeTab) || (activeTab === 'audiomerge' && !user?.isAdmin)) {
       setActiveTab('editor');
     }
-  }, [activeTab, setActiveTab]);
+  }, [activeTab, setActiveTab, user]);
 
   // A `montageSession` URL param means this tab was opened via MontageTab's
   // "Create another montage" button - land on the Montage tab explicitly
@@ -2961,6 +2969,8 @@ function App() {
     onVideo3UrlFetch: handleVideo3UrlFetch,
     onAudioUrlFetch: handleAudioUrlFetch,
     onShurfer: () => setActiveTab('shorts'),
+    importedAudio: montageImportedAudio,
+    onAudioImported: () => setMontageImportedAudio(null),
   };
 
   const captionsProps = {
@@ -3072,7 +3082,7 @@ function App() {
       />
       <EditorStateProvider timelineValue={editorTimelineContextValue} playbackValue={editorPlaybackContextValue}>
       <div id="main-area">
-        <LeftSidebar activeTab={activeTab} editorPane={editorPane} onSelect={handleSidebarSelect} onOpenProjects={() => setProjectsModalOpen(true)} />
+        <LeftSidebar activeTab={activeTab} editorPane={editorPane} isAdmin={Boolean(user?.isAdmin)} onSelect={handleSidebarSelect} onOpenProjects={() => setProjectsModalOpen(true)} />
         <div className="st-workspace">
         <div className="st-workspace-upper">
         <CenterPanel
@@ -3081,6 +3091,7 @@ function App() {
           captionsProps={captionsProps}
           shortsProps={shortsProps}
           longMixProps={longMixProps}
+          audioMergeProps={user?.isAdmin ? { result: audioMergeResult, onResult: setAudioMergeResult, onUseInMontage: sendAudioToMontage } : null}
           resultUrl={resultUrl}
           shortsResults={shortsResults}
           selectedShortId={selectedShortId}

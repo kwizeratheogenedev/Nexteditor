@@ -48,7 +48,7 @@ function trafficSource() {
   return source;
 }
 
-const WORKSPACE_AREA = { editor: 'editor', media: 'montage', captions: 'captions', shorts: 'shorts', longmix: 'longmix' };
+const WORKSPACE_AREA = { editor: 'editor', media: 'montage', captions: 'captions', shorts: 'shorts', longmix: 'longmix', audiomerge: 'audiomerge' };
 
 function areaFor(pathname) {
   if (pathname === '/') return 'landing';

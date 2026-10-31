@@ -1356,7 +1356,7 @@ function ErrorPreview({ error, onRetry, onServerFallback }) {
 
 // ─── MontageTab ───────────────────────────────────────────────────────────────
 
-export default function MontageTab({ loadVideoInEditor, onError, onShurfer, onReset }) {
+export default function MontageTab({ loadVideoInEditor, onError, onShurfer, onReset, importedAudio, onAudioImported }) {
   injectStyles();
   const { socket, socketId, socketError } = useSocket();
 
@@ -1384,6 +1384,16 @@ export default function MontageTab({ loadVideoInEditor, onError, onShurfer, onRe
   const [montageSessionId] = useState(() => new URLSearchParams(window.location.search).get('montageSession') || '');
 
   const montage = usePersistedMontageState(montageSessionId);
+  // A merged audio sent from the Audio Merge tab. Waits for `restored`, or the
+  // saved slots loading in a moment later would overwrite it. A finished or
+  // failed montage's screen hides the audio slot, so that goes back to the form.
+  const { restored, setAudio: setMontageAudio, setMergeStatus: setMontageStatus, mergeStatus: montageStatus } = montage;
+  useEffect(() => {
+    if (!importedAudio || !restored) return;
+    setMontageAudio({ ...createAudioSlot(), file: importedAudio.file, fileName: importedAudio.file.name, duration: importedAudio.duration, status: 'ready', progress: 100 });
+    if (montageStatus !== 'processing') setMontageStatus('idle');
+    onAudioImported();
+  }, [importedAudio, restored, setMontageAudio, setMontageStatus, montageStatus, onAudioImported]);
   const {
     videos,
     updateVideo,

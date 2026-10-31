@@ -9,6 +9,7 @@ const ICON_PATHS = {
   captions: 'M3 5h18v14H3z M7 13h4 M13 13h4 M7 16h10',
   shorts: 'M8 3h8v18H8z M11 18h2',
   mix: 'M4 12h3l2-6 3 12 3-9 2 3h3',
+  audiomerge: 'M4 7h6c3 0 4 2 4 5s1 5 4 5h2 M4 17h6c1.500 0 2.500-.500 3.100-1.500 M17 4l3 3-3 3 M17 14l3 3-3 3 M14 7h6',
   projects: 'M3 7h7l2 2h9v10H3z',
 };
 
@@ -21,7 +22,7 @@ function ToolIcon({ name }) {
 }
 
 // Same order and icons as the hero demo: Media, Edit, Montage, Captions,
-// Shorts, Long Mix, Projects. Media and Edit both open the editor - Media
+// Shorts, Long Mix, Audio Merge, Projects. Media and Edit both open the editor - Media
 // with the media bin in focus (nothing selected), Edit for working on clips.
 const tools = [
   { id: 'library', label: 'Media', icon: 'media' },
@@ -30,14 +31,16 @@ const tools = [
   { id: 'captions', label: 'Captions', icon: 'captions' },
   { id: 'shorts', label: 'Shorts', icon: 'shorts' },
   { id: 'longmix', label: 'Long Mix', icon: 'mix' },
+  { id: 'audiomerge', label: 'Audio Merge', icon: 'audiomerge', adminOnly: true },
 ];
 
-function LeftSidebar({ activeTab, editorPane = 'edit', onSelect, onOpenProjects }) {
+function LeftSidebar({ activeTab, editorPane = 'edit', onSelect, onOpenProjects, isAdmin = false }) {
   const activeTool = activeTab === 'editor' ? (editorPane === 'media' ? 'library' : 'editor') : activeTab;
+  const visibleTools = tools.filter((tool) => isAdmin || !tool.adminOnly);
 
   return (
     <aside className="left-sidebar st-sidebar" aria-label="Tools">
-      {tools.map((tool) => (
+      {visibleTools.map((tool) => (
         <button
           key={tool.id}
           type="button"

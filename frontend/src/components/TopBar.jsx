@@ -9,7 +9,7 @@ import { friendlyError } from '../utils/friendlyError.js';
 
 const CLOUD = 'M7 18a5 5 0 1 1 .9-9.9A6 6 0 0 1 19 10a4 4 0 0 1-1 7.9z';
 
-const MODE_LABEL = { media: 'Montage', shorts: 'Shorts', longmix: 'LongMix Studio', captions: 'Captions' };
+const MODE_LABEL = { media: 'Montage', shorts: 'Shorts', longmix: 'LongMix Studio', captions: 'Captions', audiomerge: 'Audio Merge' };
 
 function TopBar({ activeTab, onExport, exporting = false, exportProgress = 0, projectName, currentProjectId, projectSyncStatus, onSaveProject, onOpenProjects, canvasSize, onCanvasSizeChange, deviceExport = false, onDeviceExportChange }) {
   const { user } = useAuth();

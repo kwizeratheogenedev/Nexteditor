@@ -7,7 +7,7 @@ import { logger } from './logger.js';
 // per minute for the live view, ServerHour rows for history).
 
 export const TIMEZONE = process.env.ANALYTICS_TIMEZONE || 'Africa/Kigali';
-export const AREAS = ['landing', 'pricing', 'auth', 'editor', 'montage', 'captions', 'shorts', 'longmix', 'account', 'admin', 'other'];
+export const AREAS = ['landing', 'pricing', 'auth', 'editor', 'montage', 'captions', 'shorts', 'longmix', 'audiomerge', 'account', 'admin', 'other'];
 export const LIVE_WINDOW_MS = 5 * 60 * 1000;
 const MIN_PING_GAP_MS = 45 * 1000;
 const MINUTE_MS = 60 * 1000;

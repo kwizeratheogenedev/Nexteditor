@@ -7,7 +7,7 @@ import './analytics.css';
 
 const AREA_LABEL = {
   landing: 'Landing page', pricing: 'Pricing page', auth: 'Sign in / sign up', editor: 'Editor', montage: 'Montage',
-  captions: 'Captions', shorts: 'Shorts', longmix: 'Long Mix', account: 'Account page', admin: 'Admin panel', other: 'Other',
+  captions: 'Captions', shorts: 'Shorts', longmix: 'Long Mix', audiomerge: 'Audio Merge', account: 'Account page', admin: 'Admin panel', other: 'Other',
 };
 const SOURCE_LABEL = {
   direct: 'Direct (typed or bookmarked)', google: 'Google', youtube: 'YouTube', facebook: 'Facebook', instagram: 'Instagram',

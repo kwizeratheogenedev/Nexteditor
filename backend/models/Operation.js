@@ -10,7 +10,7 @@ const { Schema } = mongoose;
 
 export const OPERATION_KINDS = [
   'montage', 'merge', 'shorts', 'short-edit', 'subtitles', 'captions',
-  'editor-captions', 'caption-part', 'export', 'longmix', 'link-fetch', 'youtube-upload',
+  'editor-captions', 'caption-part', 'export', 'longmix', 'link-fetch', 'youtube-upload', 'audio-merge',
 ];
 
 const RETENTION_DAYS = Number(process.env.OPERATIONS_RETENTION_DAYS) > 0 ? Number(process.env.OPERATIONS_RETENTION_DAYS) : 30;

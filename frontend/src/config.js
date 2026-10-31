@@ -32,6 +32,8 @@ export const API_ENDPOINTS = {
   fetchUrlVideo: `${API_BASE_URL}/api/fetch-url-video`,
   fetchUrlFile: (name, kind) => `${API_BASE_URL}/api/fetch-url-video/file/${name}?kind=${kind}`,
   createMontage: `${API_BASE_URL}/api/create-montage`,
+  mergeAudio: `${API_BASE_URL}/api/merge-audio`,
+  mergeAudioDownload: (fileName, name) => `${API_BASE_URL}/api/merge-audio/download/${fileName}?name=${encodeURIComponent(name)}`,
   youtubeAuthUrl: `${API_BASE_URL}/api/youtube/auth/url`,
   youtubeAuthStatus: `${API_BASE_URL}/api/youtube/auth/status`,
   youtubeAuthDisconnect: `${API_BASE_URL}/api/youtube/auth/disconnect`,

@@ -1,0 +1,18 @@
+/* Audio Merge - built on the LongMix classes, only the slots and result are its own. */
+.audiomerge-card{width:min(640px,100%);min-height:0;margin:0 auto}
+.audiomerge-slot{display:flex;align-items:center;gap:10px;padding:14px;border:1px dashed var(--panel-border-strong);border-radius:12px;background:var(--panel-surface-0);cursor:pointer}
+.audiomerge-slot.is-disabled{opacity:.6;cursor:not-allowed}
+.audiomerge-slot input{position:absolute;width:1px;height:1px;opacity:0}
+.audiomerge-slot:focus-within{outline:2px solid var(--accent-purple-strong);outline-offset:2px}
+.audiomerge-slot-text{display:flex;flex:1;flex-direction:column;gap:3px;min-width:0}
+.audiomerge-slot-text strong{font-size:13px}
+.audiomerge-slot-text small{overflow:hidden;color:var(--panel-text-3);font-size:11px;text-overflow:ellipsis;white-space:nowrap}
+.audiomerge-slot>b{flex:none;padding:8px 12px;border-radius:8px;background:var(--accent-purple-soft);color:var(--accent-purple-light);font-size:11px}
+.audiomerge-summary{grid-template-columns:repeat(3,1fr)}
+.audiomerge-error{margin:0;padding:11px;border:1px solid rgba(245,158,11,.35);border-radius:10px;background:rgba(245,158,11,.08);color:var(--panel-text-1);font-size:12px;line-height:1.5}
+.audiomerge-result{display:flex;flex-direction:column;gap:10px;padding-top:14px;border-top:1px solid var(--panel-border)}
+.audiomerge-result strong{color:var(--success);font-size:13px}
+.audiomerge-result audio{width:100%}
+.audiomerge-downloads{display:grid;grid-template-columns:1fr 1fr;gap:8px}
+.audiomerge-downloads a{text-align:center;text-decoration:none}
+@media (max-width:520px){.audiomerge-slot{flex-wrap:wrap}.audiomerge-summary{grid-template-columns:1fr}}

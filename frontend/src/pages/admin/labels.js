@@ -30,6 +30,7 @@ export const JOB_KIND_LABEL = {
   longmix: 'LongMix',
   'link-fetch': 'Link download',
   'youtube-upload': 'YouTube upload',
+  'audio-merge': 'Audio merge',
 };
 
 // How long the server worked on something: "850 ms", "42 s", "3 m 05 s", "1 h 12 m".
