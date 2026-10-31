@@ -81,6 +81,15 @@ export function removeMerge(id) {
   startWaiting();
 }
 
+const isRunning = (job) => job.status !== 'done' && job.status !== 'error';
+
+export const hasRunningMerge = () => jobs.some(isRunning);
+
+// Back to an empty list. Only for when nothing is running.
+export function clearMerges() {
+  jobs.forEach((job) => removeMerge(job.id));
+}
+
 export function subscribeToMerges(listener) {
   listeners.add(listener);
   return () => listeners.delete(listener);
@@ -89,5 +98,5 @@ export function subscribeToMerges(listener) {
 export const getMerges = () => jobs;
 
 window.addEventListener('beforeunload', (event) => {
-  if (jobs.some((job) => job.status !== 'done' && job.status !== 'error')) event.preventDefault();
+  if (hasRunningMerge()) event.preventDefault();
 });

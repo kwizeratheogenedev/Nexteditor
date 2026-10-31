@@ -2,7 +2,7 @@ import { useState, useSyncExternalStore } from 'react';
 import './LongMixPanel.css';
 import './AudioMergePanel.css';
 import { formatTime, planAudioMerge, TARGET_SECONDS } from '../audioMerge/plan';
-import { addMerge, getMerges, removeMerge, subscribeToMerges } from '../audioMerge/mergeQueue';
+import { addMerge, clearMerges, getMerges, hasRunningMerge, removeMerge, subscribeToMerges } from '../audioMerge/mergeQueue';
 
 // Resolves 0 on a file the <audio> element can't read; the merge itself still
 // gets the final say, since it can decode formats this element can't.
@@ -52,8 +52,9 @@ function mergeButtonLabel(job) {
   return 'Merged';
 }
 
-function MergeRow({ job, onUseInMontage }) {
+function MergeRow({ job, onUseInMontage, onMergeAnother }) {
   const useFile = () => onUseInMontage({ file: new File([job.mp3], `${job.name}.mp3`, { type: 'audio/mpeg' }), duration: TARGET_SECONDS });
+  const mergeAnotherButton = onMergeAnother && <button type="button" className="longmix-build-button" onClick={onMergeAnother}>Merge another</button>;
 
   if (job.wavUrl) {
     const encoding = job.status === 'encoding';
@@ -78,6 +79,7 @@ function MergeRow({ job, onUseInMontage }) {
             : <button type="button" className="longmix-secondary-button" disabled>Download MP3</button>}
           <a className="longmix-secondary-button" href={job.wavUrl} download={`${job.name}.wav`}>Download WAV</a>
         </div>
+        {mergeAnotherButton}
       </li>
     );
   }
@@ -96,6 +98,7 @@ function MergeRow({ job, onUseInMontage }) {
           <div className="audiomerge-bar"><span style={{ width: `${job.progress}%` }} /></div>
         </>
       )}
+      {mergeAnotherButton}
     </li>
   );
 }
@@ -118,7 +121,17 @@ export default function AudioMergePanel({ onUseInMontage }) {
 
   const plan = first?.duration && second?.duration ? planAudioMerge(first.duration, second.duration) : null;
 
+  // Starts over on a clean screen, finished merges included. If one is still
+  // being made, a new browser tab starts over instead, so it isn't disturbed:
+  // each tab has its own merge list (see App.jsx's `audioMerge` URL param).
   const mergeAnother = () => {
+    if (hasRunningMerge()) {
+      const url = new URL(window.location.href);
+      url.searchParams.set('audioMerge', 'new');
+      window.open(url.toString(), '_blank', 'noopener');
+      return;
+    }
+    clearMerges();
     setFirst(null);
     setSecond(null);
     setSubmittedId(null);
@@ -157,11 +170,11 @@ export default function AudioMergePanel({ onUseInMontage }) {
           {mergeButtonLabel(submitted)}
         </button>
 
-        {submitted && <button type="button" className="longmix-secondary-button" onClick={mergeAnother}>Merge another</button>}
-
         {merges.length > 0 && (
           <ul className="audiomerge-jobs">
-            {merges.map((job) => <MergeRow key={job.id} job={job} onUseInMontage={onUseInMontage} />)}
+            {merges.map((job, index) => (
+              <MergeRow key={job.id} job={job} onUseInMontage={onUseInMontage} onMergeAnother={index === 0 ? mergeAnother : null} />
+            ))}
           </ul>
         )}
       </div>
