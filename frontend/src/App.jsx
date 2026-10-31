@@ -231,9 +231,7 @@ function App() {
     if (id === activeTab) apply();
     else leaveSafely(apply);
   };
-  // Audio Merge: the finished files (kept here so they survive a tab switch)
-  // and a merged audio on its way into the Montage tab's audio slot.
-  const [audioMergeResult, setAudioMergeResult] = useState(null);
+  // A merged audio on its way from the Audio Merge tab into Montage's audio slot.
   const [montageImportedAudio, setMontageImportedAudio] = useState(null);
   const sendAudioToMontage = (imported) => {
     setMontageImportedAudio(imported);
@@ -3091,7 +3089,7 @@ function App() {
           captionsProps={captionsProps}
           shortsProps={shortsProps}
           longMixProps={longMixProps}
-          audioMergeProps={user?.isAdmin ? { result: audioMergeResult, onResult: setAudioMergeResult, onUseInMontage: sendAudioToMontage } : null}
+          audioMergeProps={user?.isAdmin ? { onUseInMontage: sendAudioToMontage } : null}
           resultUrl={resultUrl}
           shortsResults={shortsResults}
           selectedShortId={selectedShortId}
