@@ -19,6 +19,9 @@
 .audiomerge-job audio{width:100%}
 .audiomerge-bar{overflow:hidden;height:6px;border-radius:999px;background:var(--panel-surface-4)}
 .audiomerge-bar span{display:block;height:100%;border-radius:inherit;background:var(--accent-purple-strong);transition:width .2s}
+.audiomerge-format{display:flex;align-items:center;justify-content:space-between;gap:10px}
+.audiomerge-format>span{color:var(--panel-text-2);font-size:11px}
+.audiomerge-format button:disabled{opacity:.45;cursor:not-allowed}
 .audiomerge-downloads{display:grid;grid-template-columns:1fr 1fr;gap:8px}
 .audiomerge-downloads a{text-align:center;text-decoration:none}
 .audiomerge-downloads button:disabled{opacity:.45;cursor:not-allowed}

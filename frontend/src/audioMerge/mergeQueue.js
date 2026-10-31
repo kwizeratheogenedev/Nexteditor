@@ -49,7 +49,7 @@ function start(job) {
 
   worker.onmessage = ({ data }) => {
     if (data.type === 'progress') setPercent('progress', data.progress);
-    else if (data.type === 'wav') update(job.id, { status: 'encoding', progress: 100, mp3Progress: 0, wavUrl: URL.createObjectURL(data.wav) });
+    else if (data.type === 'wav') update(job.id, { status: 'encoding', progress: 100, mp3Progress: 0, wav: data.wav, wavUrl: URL.createObjectURL(data.wav) });
     else if (data.type === 'mp3-progress') setPercent('mp3Progress', data.progress);
     else if (data.type === 'done') finish(job.id, { status: 'done', mp3: data.mp3, mp3Url: URL.createObjectURL(data.mp3) });
     else fail(job.id, data.message);

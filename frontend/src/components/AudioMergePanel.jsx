@@ -53,7 +53,9 @@ function mergeButtonLabel(job) {
 }
 
 function MergeRow({ job, onUseInMontage, onMergeAnother }) {
-  const useFile = () => onUseInMontage({ file: new File([job.mp3], `${job.name}.mp3`, { type: 'audio/mpeg' }), duration: TARGET_SECONDS });
+  const [format, setFormat] = useState('wav');
+  const blob = format === 'wav' ? job.wav : job.mp3;
+  const useFile = () => onUseInMontage({ file: new File([blob], `${job.name}.${format}`, { type: blob.type }), duration: TARGET_SECONDS });
   const mergeAnotherButton = onMergeAnother && <button type="button" className="longmix-build-button" onClick={onMergeAnother}>Merge another</button>;
 
   if (job.wavUrl) {
@@ -67,12 +69,21 @@ function MergeRow({ job, onUseInMontage, onMergeAnother }) {
         <audio controls src={job.wavUrl} />
         {encoding && (
           <>
-            <small>Audio ready. Making the MP3 for Montage... {job.mp3Progress}%</small>
+            <small>Audio ready. Making the MP3... {job.mp3Progress}%</small>
             <div className="audiomerge-bar"><span style={{ width: `${job.mp3Progress}%` }} /></div>
           </>
         )}
-        {job.mp3Failed && <p className="audiomerge-error" role="alert">The MP3 could not be made, but the WAV is ready to download.</p>}
-        {job.mp3 && <button type="button" className="longmix-build-button" onClick={useFile}>Use it in Montage</button>}
+        {job.mp3Failed && <p className="audiomerge-error" role="alert">The MP3 could not be made, but the WAV is ready to use.</p>}
+        <div className="audiomerge-format">
+          <span>Format for Montage</span>
+          <div className="longmix-choice-row" role="group" aria-label="Format for Montage">
+            <button type="button" className={format === 'wav' ? 'is-active' : ''} aria-pressed={format === 'wav'} onClick={() => setFormat('wav')}>WAV</button>
+            <button type="button" className={format === 'mp3' ? 'is-active' : ''} aria-pressed={format === 'mp3'} disabled={job.mp3Failed} onClick={() => setFormat('mp3')}>MP3</button>
+          </div>
+        </div>
+        <button type="button" className="longmix-build-button" disabled={!blob} onClick={useFile}>
+          {blob ? 'Use it in Montage' : `Making the MP3... ${job.mp3Progress}%`}
+        </button>
         <div className="audiomerge-downloads">
           {job.mp3Url
             ? <a className="longmix-secondary-button" href={job.mp3Url} download={`${job.name}.mp3`}>Download MP3</a>
