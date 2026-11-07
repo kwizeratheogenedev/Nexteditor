@@ -10,12 +10,13 @@ import {
   WavOutputFormat,
 } from 'mediabunny';
 import { registerMp3Encoder } from '@mediabunny/mp3-encoder';
-import { extendFromMiddle, planAudioMerge, planExtend, readWavData, TARGET_SECONDS, wavHeader, writeStereo } from './plan.js';
+import { extendFromMiddle, planAudioMerge, planCombine, planExtend, readWavData, TARGET_SECONDS, wavHeader, writeStereo } from './plan.js';
 
 // Makes one merged audio on the user's device. Both inputs are decoded into a
 // single 8-minute PCM buffer, which stops decoding the second audio the moment
 // it is full, so a long second audio costs no more than the part used. With no
 // second audio (Extend) a cut from the first's middle fills the buffer instead.
+// Combine sizes the buffer to both audios whole, so nothing is cut.
 // That gives the WAV within seconds; the MP3 is encoded from it afterwards, since
 // that is the slow part and shouldn't hold back a finished audio.
 // One worker runs per merge.
@@ -101,34 +102,43 @@ async function encodeMp3(wav, onProgress) {
   return new Blob([output.target.buffer], { type: 'audio/mpeg' });
 }
 
-async function merge(first, second) {
+// `mode`: 'eight' (two audios to 8:00), 'extend' or 'combine'.
+async function merge(first, second, mode) {
   const [firstAudio, secondAudio] = await Promise.all([readAudio(first), second && readAudio(second)]);
-  const plan = second ? planAudioMerge(firstAudio.duration, secondAudio.duration) : planExtend(firstAudio.duration);
+  const plan = {
+    eight: () => planAudioMerge(firstAudio.duration, secondAudio.duration),
+    extend: () => planExtend(firstAudio.duration),
+    combine: () => planCombine(firstAudio.duration, secondAudio.duration),
+  }[mode]();
   if (plan.error) throw new Error(plan.error);
 
-  // Keeps the first audio's sample rate when an MP3 can carry it.
+  // Keeps the first audio's sample rate when an MP3 can carry it. Combine
+  // leaves two seconds of room, as a file's reported length can run short.
   const rate = firstAudio.track.sampleRate;
   const sampleRate = SAMPLE_RATES.includes(rate) ? rate : 44100;
-  const pcm = new Int16Array(TARGET_SECONDS * sampleRate * 2);
-  const firstShare = second ? firstAudio.duration / TARGET_SECONDS : 1;
+  const length = mode === 'combine' ? Math.ceil(plan.totalSeconds) + 2 : TARGET_SECONDS;
+  const pcm = new Int16Array(length * sampleRate * 2);
+  const firstShare = { eight: firstAudio.duration / TARGET_SECONDS, extend: 1, combine: firstAudio.duration / plan.totalSeconds }[mode];
   const report = (progress) => self.postMessage({ type: 'progress', progress });
+  const reportSecond = (p) => report(firstShare + (p * (1 - firstShare)));
 
   const firstEnd = await decode(firstAudio, first, pcm, 0, sampleRate, firstAudio.duration, (p) => report(p * firstShare));
-  const end = second
-    ? await decode(secondAudio, second, pcm, firstEnd, sampleRate, Math.min(plan.secondSeconds + 1, secondAudio.duration), (p) => report(firstShare + (p * (1 - firstShare))))
-    : extendFromMiddle(pcm, firstEnd);
+  let end;
+  if (mode === 'extend') end = extendFromMiddle(pcm, firstEnd);
+  else if (mode === 'combine') end = await decode(secondAudio, second, pcm, firstEnd, sampleRate, secondAudio.duration, reportSecond);
+  else end = await decode(secondAudio, second, pcm, firstEnd, sampleRate, Math.min(plan.secondSeconds + 1, secondAudio.duration), reportSecond);
 
   const audio = pcm.subarray(0, end);
   const wav = new Blob([wavHeader(audio.byteLength, sampleRate), audio], { type: 'audio/wav' });
-  self.postMessage({ type: 'wav', wav });
+  self.postMessage({ type: 'wav', wav, seconds: end / 2 / sampleRate });
 
   const mp3 = await encodeMp3(wav, (progress) => self.postMessage({ type: 'mp3-progress', progress }));
   self.postMessage({ type: 'done', mp3 });
 }
 
-self.onmessage = async ({ data: { first, second } }) => {
+self.onmessage = async ({ data: { first, second, mode } }) => {
   try {
-    await merge(first, second);
+    await merge(first, second, mode);
   } catch (err) {
     self.postMessage({ type: 'error', message: err?.message || 'These audios could not be merged.' });
   }

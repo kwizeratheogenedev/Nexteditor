@@ -18,9 +18,11 @@ function publish(next) {
 
 const update = (id, patch) => publish(jobs.map((job) => (job.id === id ? { ...job, ...patch } : job)));
 
-function outputName(file, extended) {
+const NAME_ENDINGS = { eight: 'merge-8min', extend: 'extended-8min', combine: 'combined' };
+
+function outputName(file, mode) {
   const base = file.name.replace(/\.[^.]+$/, '').replace(/[^\p{L}\p{N} _.-]/gu, '').trim() || 'audio';
-  return `${base}-${extended ? 'extended' : 'merge'}-8min`;
+  return `${base}-${NAME_ENDINGS[mode]}`;
 }
 
 function finish(id, patch) {
@@ -49,13 +51,13 @@ function start(job) {
 
   worker.onmessage = ({ data }) => {
     if (data.type === 'progress') setPercent('progress', data.progress);
-    else if (data.type === 'wav') update(job.id, { status: 'encoding', progress: 100, mp3Progress: 0, wav: data.wav, wavUrl: URL.createObjectURL(data.wav) });
+    else if (data.type === 'wav') update(job.id, { status: 'encoding', progress: 100, mp3Progress: 0, seconds: data.seconds, wav: data.wav, wavUrl: URL.createObjectURL(data.wav) });
     else if (data.type === 'mp3-progress') setPercent('mp3Progress', data.progress);
     else if (data.type === 'done') finish(job.id, { status: 'done', mp3: data.mp3, mp3Url: URL.createObjectURL(data.mp3) });
     else fail(job.id, data.message);
   };
   worker.onerror = () => fail(job.id, 'These audios could not be merged. Please try again.');
-  worker.postMessage({ first: job.first, second: job.second });
+  worker.postMessage({ first: job.first, second: job.second, mode: job.mode });
 }
 
 function startWaiting() {
@@ -63,10 +65,10 @@ function startWaiting() {
   jobs.filter((job) => job.status === 'waiting').slice(0, MAX_RUNNING - running).forEach(start);
 }
 
-// With no second audio, the first is extended to 8 minutes instead.
-export function addMerge(first, second = null) {
+// `mode`: 'eight' (two audios to 8:00), 'extend' (no second audio) or 'combine'.
+export function addMerge(first, second, mode) {
   const id = nextId++;
-  publish([{ id, name: outputName(first, !second), extended: !second, first, second, status: 'waiting', progress: 0 }, ...jobs]);
+  publish([{ id, name: outputName(first, mode), mode, first, second, status: 'waiting', progress: 0 }, ...jobs]);
   startWaiting();
   return id;
 }

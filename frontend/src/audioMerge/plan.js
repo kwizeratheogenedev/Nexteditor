@@ -4,11 +4,27 @@
 // audios are decoded to on the user's device (see mergeWorker.js).
 
 export const TARGET_SECONDS = 8 * 60;
+// Combine keeps the whole result in the browser's memory (about 10 MB a
+// minute while it's made), so it stops at an hour.
+export const MAX_COMBINED_SECONDS = 60 * 60;
 const BYTES_PER_FRAME = 4;
 
 export function formatTime(seconds) {
   const whole = Math.round(seconds);
-  return `${Math.floor(whole / 60)}:${String(whole % 60).padStart(2, '0')}`;
+  const hours = Math.floor(whole / 3600);
+  const minutes = Math.floor((whole % 3600) / 60);
+  const secs = String(whole % 60).padStart(2, '0');
+  return hours ? `${hours}:${String(minutes).padStart(2, '0')}:${secs}` : `${minutes}:${secs}`;
+}
+
+// Combine: both audios play in full, one after the other, at whatever length
+// that makes. Returns { totalSeconds } or { error }.
+export function planCombine(firstDuration, secondDuration, max = MAX_COMBINED_SECONDS) {
+  const totalSeconds = firstDuration + secondDuration;
+  if (totalSeconds > max) {
+    return { error: `Together these audios are ${formatTime(totalSeconds)}. A combined audio can be up to ${formatTime(max)}.` };
+  }
+  return { totalSeconds };
 }
 
 // Returns { secondSeconds } - how much of the second audio to keep - or

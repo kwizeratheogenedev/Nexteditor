@@ -1,6 +1,22 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
-import { extendFromMiddle, planAudioMerge, planExtend, readWavData, TARGET_SECONDS, wavHeader, writeStereo } from '../../frontend/src/audioMerge/plan.js';
+import { extendFromMiddle, formatTime, MAX_COMBINED_SECONDS, planAudioMerge, planCombine, planExtend, readWavData, TARGET_SECONDS, wavHeader, writeStereo } from '../../frontend/src/audioMerge/plan.js';
+
+test('combine keeps both audios whole, at whatever length that makes', () => {
+  assert.deepEqual(planCombine(180, 200), { totalSeconds: 380 });
+  assert.deepEqual(planCombine(400, 500), { totalSeconds: 900 });
+  assert.deepEqual(planCombine(1800, 1800), { totalSeconds: MAX_COMBINED_SECONDS });
+});
+
+test('combine refuses a result longer than an hour', () => {
+  assert.match(planCombine(1800, 1801).error, /are 1:00:01\. A combined audio can be up to 1:00:00/);
+});
+
+test('times show hours only once there is a whole hour', () => {
+  assert.equal(formatTime(480), '8:00');
+  assert.equal(formatTime(59.4), '0:59');
+  assert.equal(formatTime(3725), '1:02:05');
+});
 
 test('the second audio is cut to exactly the time the first leaves', () => {
   assert.deepEqual(planAudioMerge(180, 400), { secondSeconds: 300 });

@@ -1,7 +1,7 @@
 import { useState, useSyncExternalStore } from 'react';
 import './LongMixPanel.css';
 import './AudioMergePanel.css';
-import { formatTime, planAudioMerge, planExtend, TARGET_SECONDS } from '../audioMerge/plan';
+import { formatTime, planAudioMerge, planCombine, planExtend } from '../audioMerge/plan';
 import { addMerge, clearMerges, getMerges, hasRunningMerge, removeMerge, subscribeToMerges } from '../audioMerge/mergeQueue';
 
 // Resolves 0 on a file the <audio> element can't read; the merge itself still
@@ -44,12 +44,47 @@ function AudioSlot({ number, title, hint, value, onPick }) {
   );
 }
 
-function mergeButtonLabel(job, extend) {
-  if (!job) return extend ? 'Extend audio' : 'Merge audio';
+// Everything the screen says that depends on the chosen way of making the audio.
+// `second` is the second slot's title and hint; Extend has none.
+const MODES = {
+  eight: {
+    label: 'Two audios (8:00)',
+    heading: 'Make an 8-minute audio',
+    about: 'The first audio plays in full. The second is cut to fill the time left, up to exactly 8:00.',
+    first: ['First audio', 'Kept whole, shorter than 8:00'],
+    second: ['Second audio', 'Cut from its start to fill the rest'],
+    action: 'Merge audio',
+    doing: 'Merging',
+    done: 'Merged',
+  },
+  extend: {
+    label: 'Extend one audio',
+    heading: 'Make an 8-minute audio',
+    about: 'Your audio plays in full, with a cut from its middle added to reach exactly 8:00.',
+    first: ['Your audio', 'Its middle part fills the time to 8:00'],
+    second: null,
+    action: 'Extend audio',
+    doing: 'Extending',
+    done: 'Extended',
+  },
+  combine: {
+    label: 'Combine two audios',
+    heading: 'Combine two audios',
+    about: 'Both audios play in full, one after the other. The new audio is as long as both together.',
+    first: ['First audio', 'Plays first, in full'],
+    second: ['Second audio', 'Plays right after, in full'],
+    action: 'Combine audios',
+    doing: 'Combining',
+    done: 'Combined',
+  },
+};
+
+function mergeButtonLabel(job, mode) {
+  if (!job) return MODES[mode].action;
   if (job.status === 'waiting') return 'Waiting for another merge...';
-  if (job.status === 'merging') return `${job.extended ? 'Extending' : 'Merging'}... ${job.progress}%`;
+  if (job.status === 'merging') return `${MODES[job.mode].doing}... ${job.progress}%`;
   if (job.status === 'encoding') return `Making the MP3... ${job.mp3Progress}%`;
-  return job.extended ? 'Extended' : 'Merged';
+  return MODES[job.mode].done;
 }
 
 function MergeRow({ job, onUseInMontage, onMergeAnother }) {
@@ -58,7 +93,7 @@ function MergeRow({ job, onUseInMontage, onMergeAnother }) {
   const blob = format === 'wav' ? job.wav : job.mp3;
   const downloadUrl = format === 'wav' ? job.wavUrl : job.mp3Url;
   const downloadLabel = `Download ${format.toUpperCase()}`;
-  const useFile = () => onUseInMontage({ file: new File([blob], `${job.name}.${format}`, { type: blob.type }), duration: TARGET_SECONDS });
+  const useFile = () => onUseInMontage({ file: new File([blob], `${job.name}.${format}`, { type: blob.type }), duration: job.seconds });
   const mergeAnotherButton = onMergeAnother && <button type="button" className="longmix-build-button" onClick={onMergeAnother}>Merge another</button>;
 
   if (job.wavUrl) {
@@ -105,7 +140,7 @@ function MergeRow({ job, onUseInMontage, onMergeAnother }) {
         <p className="audiomerge-error" role="alert">{job.error}</p>
       ) : (
         <>
-          <small>{job.status === 'waiting' ? 'Waiting for another merge to finish...' : `${job.extended ? 'Extending' : 'Merging'} on this device... ${job.progress}%`}</small>
+          <small>{job.status === 'waiting' ? 'Waiting for another merge to finish...' : `${MODES[job.mode].doing} on this device... ${job.progress}%`}</small>
           <div className="audiomerge-bar"><span style={{ width: `${job.progress}%` }} /></div>
         </>
       )}
@@ -116,7 +151,8 @@ function MergeRow({ job, onUseInMontage, onMergeAnother }) {
 
 export default function AudioMergePanel({ onUseInMontage }) {
   const merges = useSyncExternalStore(subscribeToMerges, getMerges);
-  const [extend, setExtend] = useState(false);
+  const [mode, setMode] = useState('eight');
+  const screen = MODES[mode];
   const [first, setFirst] = useState(null);
   const [second, setSecond] = useState(null);
   const [submittedId, setSubmittedId] = useState(null);
@@ -131,15 +167,19 @@ export default function AudioMergePanel({ onUseInMontage }) {
     setSlot((current) => (current?.file === file ? { file, duration } : current));
   };
 
+  // Both two-audio modes keep the second audio when switching between them.
   const chooseMode = (next) => {
-    setExtend(next);
-    setSecond(null);
+    setMode(next);
+    if (!MODES[next].second) setSecond(null);
     setSubmittedId(null);
   };
 
-  const twoAudiosPlan = first?.duration && second?.duration ? planAudioMerge(first.duration, second.duration) : null;
-  const extendPlan = first?.duration ? planExtend(first.duration) : null;
-  const plan = extend ? extendPlan : twoAudiosPlan;
+  const bothReady = first?.duration && second?.duration;
+  const plan = {
+    eight: bothReady ? planAudioMerge(first.duration, second.duration) : null,
+    extend: first?.duration ? planExtend(first.duration) : null,
+    combine: bothReady ? planCombine(first.duration, second.duration) : null,
+  }[mode];
 
   // Starts over on a clean screen, finished merges included. If one is still
   // being made, a new browser tab starts over instead, so it isn't disturbed:
@@ -162,10 +202,8 @@ export default function AudioMergePanel({ onUseInMontage }) {
       <header className="longmix-heading">
         <div>
           <span className="longmix-kicker">AUDIO MERGE</span>
-          <h1>Make an 8-minute audio</h1>
-          <p>{extend
-            ? 'Your audio plays in full, with a cut from its middle added to reach exactly 8:00.'
-            : 'The first audio plays in full. The second is cut to fill the time left, up to exactly 8:00.'}</p>
+          <h1>{screen.heading}</h1>
+          <p>{screen.about}</p>
         </div>
       </header>
 
@@ -173,19 +211,22 @@ export default function AudioMergePanel({ onUseInMontage }) {
         <div className="audiomerge-format">
           <span>Use</span>
           <div className="longmix-choice-row" role="group" aria-label="Use">
-            <button type="button" className={extend ? '' : 'is-active'} aria-pressed={!extend} onClick={() => chooseMode(false)}>Two audios</button>
-            <button type="button" className={extend ? 'is-active' : ''} aria-pressed={extend} onClick={() => chooseMode(true)}>Extend one audio</button>
+            {Object.entries(MODES).map(([id, { label }]) => (
+              <button key={id} type="button" className={mode === id ? 'is-active' : ''} aria-pressed={mode === id} onClick={() => chooseMode(id)}>{label}</button>
+            ))}
           </div>
         </div>
 
-        <AudioSlot
-          number={1}
-          title={extend ? 'Your audio' : 'First audio'}
-          hint={extend ? 'Its middle part fills the time to 8:00' : 'Kept whole, shorter than 8:00'}
-          value={first}
-          onPick={(file) => pick(file, setFirst)}
-        />
-        {!extend && <AudioSlot number={2} title="Second audio" hint="Cut from its start to fill the rest" value={second} onPick={(file) => pick(file, setSecond)} />}
+        <AudioSlot number={1} title={screen.first[0]} hint={screen.first[1]} value={first} onPick={(file) => pick(file, setFirst)} />
+        {screen.second && <AudioSlot number={2} title={screen.second[0]} hint={screen.second[1]} value={second} onPick={(file) => pick(file, setSecond)} />}
+
+        {plan?.totalSeconds > 0 && (
+          <ul className="longmix-summary audiomerge-summary">
+            <li><span>First audio</span><b>{formatTime(first.duration)}</b></li>
+            <li><span>Second audio</span><b>{formatTime(second.duration)}</b></li>
+            <li><span>Final length</span><b>{formatTime(plan.totalSeconds)}</b></li>
+          </ul>
+        )}
 
         {plan?.addedSeconds > 0 && (
           <ul className="longmix-summary audiomerge-summary">
@@ -208,10 +249,10 @@ export default function AudioMergePanel({ onUseInMontage }) {
         <button
           type="button"
           className="longmix-build-button"
-          disabled={!first || (!extend && !second) || Boolean(plan?.error) || Boolean(submitted)}
-          onClick={() => setSubmittedId(addMerge(first.file, extend ? null : second.file))}
+          disabled={!first || (screen.second && !second) || Boolean(plan?.error) || Boolean(submitted)}
+          onClick={() => setSubmittedId(addMerge(first.file, screen.second ? second.file : null, mode))}
         >
-          {mergeButtonLabel(submitted, extend)}
+          {mergeButtonLabel(submitted, mode)}
         </button>
 
         {merges.length > 0 && (
