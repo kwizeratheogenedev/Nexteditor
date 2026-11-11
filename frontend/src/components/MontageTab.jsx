@@ -5,6 +5,7 @@ import API_BASE, { API_ENDPOINTS } from '../config';
 import { useAutoDismiss } from '../hooks/useAutoDismiss.js';
 import { friendlyError } from '../utils/friendlyError.js';
 import { setLeaveGuard } from '../utils/leaveGuard.js';
+import { fetchLinkToDevice } from '../utils/fetchLink.js';
 
 // A failed slot goes back to empty after a few seconds, ready to try again.
 const clearSlotError = (prev) => (prev.status === 'error' ? { ...prev, status:'idle', error:'', progress:0 } : prev);
@@ -244,17 +245,6 @@ function MediaCard({ label, item, setItem, accept, type, onError, isOptional = f
   const { socket, socketId } = useSocket();
 
   useEffect(() => {
-    if (!socket) return;
-    const progressEvent = isAudio ? 'audio-fetch-progress' : 'url-fetch-progress';
-    const errorEvent   = isAudio ? 'audio-fetch-error'    : 'url-fetch-error';
-    const onProgress = (p) => setItem(prev => prev.status === 'loading' ? { ...prev, progress: p?.percent || 0 } : prev);
-    const onErr      = (p) => setItem(prev => prev.status === 'loading' ? { ...prev, status:'error', progress:0, error: p?.error || `Failed to fetch ${type}` } : prev);
-    socket.on(progressEvent, onProgress);
-    socket.on(errorEvent, onErr);
-    return () => { socket.off(progressEvent, onProgress); socket.off(errorEvent, onErr); };
-  }, [isAudio, setItem, type, socket]);
-
-  useEffect(() => {
     if (item.status === 'ready' && item.file && !isAudio && videoRef.current) {
       const v = videoRef.current;
       const src = URL.createObjectURL(item.file);
@@ -283,20 +273,37 @@ function MediaCard({ label, item, setItem, accept, type, onError, isOptional = f
     el.onerror = () => { setItem(prev => ({ ...prev, status:'error', error:`Failed to load ${type}`, progress:0 })); };
   };
 
+  // A link becomes a real file on this device, like an upload: it shows its
+  // real name, previews and plays, and works on Server 2. The server's copy
+  // (filePath) is kept too, so a Server 1 render needn't upload it again.
+  // Progress covers both stages - the server downloading the link, then the
+  // file coming here - and only this card's own fetch moves it.
   const handleUrl = async () => {
     const url = item.url?.trim();
     if (!url) return;
-    setItem(prev => ({ ...prev, status:'loading', progress:0, error:'' }));
+    setItem(prev => ({ ...prev, status:'loading', progress:0, progressText:'Starting the download…', error:'' }));
     try {
-      const res = await fetch(API_ENDPOINTS.fetchUrlVideo, {
-        method:'POST',
-        credentials:'include',
-        headers:{'Content-Type':'application/json'},
-        body: JSON.stringify({ url, type: isAudio ? 'audio' : 'video', socketId }),
+      const result = await fetchLinkToDevice({
+        url,
+        kind: isAudio ? 'audio' : 'video',
+        socket,
+        socketId,
+        slotId: `montage-${item.id ?? 'audio'}-${Date.now()}`,
+        onProgress: ({ overall, message }) => setItem(prev => (prev.status === 'loading' ? { ...prev, progress: overall, progressText: message } : prev)),
       });
-      if (!res.ok) { const d = await res.json(); throw new Error(d.error || 'Failed to fetch URL'); }
-      const d = await res.json();
-      setItem(prev => ({ ...prev, filePath:d.filePath, fileName:d.fileName, duration:d.duration, status:'ready', progress:100, error:'' }));
+      setItem(prev => ({
+        ...prev,
+        file: result.file,
+        filePath: result.filePath,
+        fileName: result.file.name,
+        serverFileName: result.fileName,
+        fetchedAt: Date.now(),
+        duration: result.duration,
+        status: 'ready',
+        progress: 100,
+        progressText: '',
+        error: '',
+      }));
     } catch (err) {
       const msg = err.message || 'Failed to fetch URL';
       setItem(prev => ({ ...prev, status:'error', error:msg, progress:0 }));
@@ -435,10 +442,10 @@ function MediaCard({ label, item, setItem, accept, type, onError, isOptional = f
             <div style={{ width:36, height:36, borderRadius:10, background:`${accentClr}20`, display:'flex', alignItems:'center', justifyContent:'center', color:accentClr }}>
               <div style={{ width:18, height:18 }}><Icon.Spin /></div>
             </div>
-            <div style={{ width:100, height:2, background:'var(--panel-surface-2)', borderRadius:99, overflow:'hidden' }}>
-              <div className="mt-progress-bar" style={{ width:`${item.progress}%`, height:'100%', borderRadius:99, transition:'width .3s' }} />
+            <div style={{ width:'60%', maxWidth:180, height:4, background:'var(--panel-surface-2)', borderRadius:99, overflow:'hidden' }}>
+              <div className="mt-progress-bar" style={{ width:`${Math.max(2, item.progress)}%`, height:'100%', borderRadius:99, transition:'width .3s' }} />
             </div>
-            <span style={{ fontSize:12, color:'var(--text-muted)' }}>{Math.round(item.progress)}%</span>
+            <span style={{ fontSize:12, color:'var(--text-muted)', textAlign:'center', padding:'0 12px' }}>{item.progressText || `${Math.round(item.progress)}%`}</span>
           </div>
         )}
 
@@ -1009,9 +1016,66 @@ function YouTubePublishPanel({ outputFile, onClose }) {
   );
 }
 
+// Saves a file the page already holds (a blob: URL) to the user's computer.
+function saveToDevice(url, fileName) {
+  const link = document.createElement('a');
+  link.href = url;
+  link.download = fileName || 'montage.mp4';
+  document.body.appendChild(link);
+  link.click();
+  document.body.removeChild(link);
+}
+
+// The nearest ancestor that scrolls - the area the result has to fit in.
+function scrollingAncestor(el) {
+  for (let node = el?.parentElement; node; node = node.parentElement) {
+    if (['auto', 'scroll'].includes(getComputedStyle(node).overflowY)) return node;
+  }
+  return document.scrollingElement;
+}
+
+const MIN_PLAYER_HEIGHT = 90;
+
 function SuccessPreview({ outputFile, loadVideoInEditor, onShurfer, onReset }) {
   const videoRef = useRef(null);
   const containerRef = useRef(null);
+  // The player is sized to the screen it's on: on a small or zoomed-in
+  // screen a full-width 16:9 video filled the whole area and pushed the
+  // Download button out of sight, so its width is capped to what leaves
+  // room for the details and buttons underneath. Re-fitted whenever the
+  // window, the zoom or the area changes size.
+  const actionsRef = useRef(null);
+  const [playerMaxWidth, setPlayerMaxWidth] = useState(null);
+  useEffect(() => {
+    const player = containerRef.current;
+    const actions = actionsRef.current;
+    if (!player || !actions) return undefined;
+    // Looked up on every fit: on narrow screens the layout stacks and a
+    // different panel becomes the one that scrolls.
+    const fit = () => {
+      const area = scrollingAncestor(player);
+      const style = getComputedStyle(area);
+      let padding = (parseFloat(style.paddingTop) || 0) + (parseFloat(style.paddingBottom) || 0);
+      // ...and the padding of the panels between it and the result.
+      for (let node = player.parentElement; node && node !== area; node = node.parentElement) {
+        const nodeStyle = getComputedStyle(node);
+        padding += (parseFloat(nodeStyle.paddingTop) || 0) + (parseFloat(nodeStyle.paddingBottom) || 0);
+      }
+      const visible = area.clientHeight - padding;
+      const forPlayer = Math.max(MIN_PLAYER_HEIGHT, visible - actions.offsetHeight - 12 - 8);
+      setPlayerMaxWidth(Math.floor((forPlayer * 16) / 9));
+    };
+    fit();
+    const observer = new ResizeObserver(fit);
+    observer.observe(scrollingAncestor(player));
+    observer.observe(actions);
+    observer.observe(document.documentElement);
+    window.addEventListener('resize', fit);
+    return () => {
+      observer.disconnect();
+      window.removeEventListener('resize', fit);
+    };
+  }, []);
   const [playing, setPlaying] = useState(false);
   const [currentTime, setCurrentTime] = useState(0);
   const [dur, setDur] = useState(0);
@@ -1099,12 +1163,7 @@ function SuccessPreview({ outputFile, loadVideoInEditor, onShurfer, onReset }) {
     if (!src) return;
     if (isLocal) {
       // Already on this device - save the in-memory file directly.
-      const link = document.createElement('a');
-      link.href = src;
-      link.download = outputFile.downloadName || outputFile.fileName || 'montage.mp4';
-      document.body.appendChild(link);
-      link.click();
-      document.body.removeChild(link);
+      saveToDevice(src, outputFile.downloadName || outputFile.fileName);
       return;
     }
     setIsDownloading(true);
@@ -1199,7 +1258,7 @@ function SuccessPreview({ outputFile, loadVideoInEditor, onShurfer, onReset }) {
       <div
         ref={containerRef}
         className="mt-video-container"
-        style={{ position:'relative', borderRadius:14, overflow:'hidden', background:'#000', aspectRatio:'16/9', border:'1px solid var(--panel-surface-2)', cursor:'pointer' }}
+        style={{ position:'relative', borderRadius:14, overflow:'hidden', background:'#000', aspectRatio:'16/9', border:'1px solid var(--panel-surface-2)', cursor:'pointer', width:'100%', maxWidth: playerMaxWidth || undefined, alignSelf:'center' }}
         onMouseMove={resetHideTimer}
         onMouseLeave={() => playing && setShowControls(false)}
         onClick={toggle}
@@ -1297,10 +1356,15 @@ function SuccessPreview({ outputFile, loadVideoInEditor, onShurfer, onReset }) {
       </div>
 
       {/* info + actions */}
-      <div style={{ display:'flex', gap:10 }}>
+      <div ref={actionsRef} style={{ display:'flex', gap:10 }}>
         <div style={{ flex:1, padding:'10px 12px', background:'var(--panel-surface-0)', borderRadius:10, border:'1px solid var(--panel-surface-2)' }}>
           <div style={{ fontSize:12, fontWeight:600, color:'var(--panel-text-2)', whiteSpace:'nowrap', overflow:'hidden', textOverflow:'ellipsis', marginBottom:4 }}>{outputFile.downloadName || outputFile.fileName}</div>
           <div style={{ fontSize:12, color:'var(--panel-border-strong)' }}>{formatDuration(outputFile.duration)} · {formatFileSize(outputFile.size)}</div>
+          {isLocal && outputFile.autoDownloaded && (
+            <div style={{ fontSize:12, color:'var(--success)', marginTop:6, lineHeight:1.4 }}>
+              Saved to your computer (your Downloads folder). Use Download if you need another copy.
+            </div>
+          )}
           {isLocal && (
             <div style={{ fontSize:12, color:'var(--panel-text-3)', marginTop:6, lineHeight:1.4 }}>
               Made on Server 2 - it isn't stored on the server, so download it to keep it. Editing, YouTube and Shorts need a Server 1 render for now.
@@ -1371,6 +1435,18 @@ export default function MontageTab({ loadVideoInEditor, onError, onShurfer, onRe
   const chooseRenderMode = (mode) => {
     setRenderMode(mode);
     try { localStorage.setItem('nex.montage.renderMode', mode); } catch { /* preference only */ }
+  };
+  // A Server 2 montage exists only in this tab until it's downloaded, so by
+  // default it's saved to the computer as soon as it's ready; the setting
+  // in the side panel switches that off (the Download button stays either way).
+  const [autoDownload, setAutoDownload] = useState(() => {
+    try { return localStorage.getItem('nex.montage.autoDownload') !== 'off'; } catch { return true; }
+  });
+  const autoDownloadRef = useRef(autoDownload);
+  const chooseAutoDownload = (on) => {
+    setAutoDownload(on);
+    autoDownloadRef.current = on;
+    try { localStorage.setItem('nex.montage.autoDownload', on ? 'on' : 'off'); } catch { /* preference only */ }
   };
   const [deviceFailed, setDeviceFailed] = useState(false);
   const deviceAbortRef = useRef(null);
@@ -1722,7 +1798,7 @@ export default function MontageTab({ loadVideoInEditor, onError, onShurfer, onRe
   // Everything happens in this tab: files are read from the device, rendered
   // with its video hardware (see montage/local/) and the result stays here.
   const handleMergeOnDevice = async () => {
-    const chosen = videos.filter((v) => v.status === 'ready');
+    let chosen = videos.filter((v) => v.status === 'ready');
     const fail = (message) => {
       setMergeError(message);
       setMergeStatus('error');
@@ -1743,8 +1819,28 @@ export default function MontageTab({ loadVideoInEditor, onError, onShurfer, onRe
     setConnectionNote('Keep this tab open and visible until it finishes.');
     maxProgressRef.current = 0;
 
-    if (chosen.some((v) => !v.file) || !audio.file) {
-      fail('Server 2 needs files added directly from your computer. Videos or songs added from a link only work with Server 1 - switch to Server 1 instead.');
+    // Videos from a link are kept on this device as files. One added before
+    // that (or whose file didn't survive a reload) is brought down from the
+    // server's copy, which lasts about an hour after it was fetched.
+    if (chosen.some((v) => !v.file)) {
+      setMergeStageText('Bringing your link videos to this device...');
+      try {
+        chosen = await Promise.all(chosen.map(async (v) => {
+          if (v.file) return v;
+          const serverName = v.serverFileName || (v.filePath || '').split(/[\\/]/).pop();
+          if (!/^[a-f0-9]{32}$/.test(serverName || '')) throw new Error('missing');
+          const res = await fetch(API_ENDPOINTS.fetchUrlFile(serverName, 'video'), { credentials: 'include' });
+          if (!res.ok) throw new Error('missing');
+          const blob = await res.blob();
+          return { ...v, file: new File([blob], v.fileName || 'video.mp4', { type: blob.type || 'video/mp4' }) };
+        }));
+      } catch {
+        fail('A video added from a link is no longer on the server. Add the link again, then start the montage.');
+        return;
+      }
+    }
+    if (!audio.file) {
+      fail('Server 2 needs the song as a file on this device. Add it from your computer (or from Audio Merge), then try again.');
       return;
     }
     const startedAt = Date.now();
@@ -1772,13 +1868,17 @@ export default function MontageTab({ loadVideoInEditor, onError, onShurfer, onRe
       const url = URL.createObjectURL(result.blob);
       localUrlRef.current = url;
       const baseName = (audio.file.name || 'montage').replace(/\.[^.]+$/, '');
+      const downloadName = `${baseName} montage.mp4`;
+      const autoDownloaded = autoDownloadRef.current;
+      if (autoDownloaded) saveToDevice(url, downloadName);
       montage.setOutputFile({
         filePath: '',
         fileName: `montage-${Date.now()}.mp4`,
-        downloadName: `${baseName} montage.mp4`,
+        downloadName,
         duration: result.duration,
         size: result.size,
         localUrl: url,
+        autoDownloaded,
       });
       setConnectionNote('');
       setMergeProgress(100);
@@ -1811,8 +1911,12 @@ export default function MontageTab({ loadVideoInEditor, onError, onShurfer, onRe
     maxProgressRef.current = 0;
 
     const fd = new FormData();
+    // A video from a link is already on the server (for about an hour after
+    // it was fetched): reuse that copy rather than uploading it again.
+    const serverCopyFresh = (v) => v.filePath && (!v.file || (v.fetchedAt && Date.now() - v.fetchedAt < 50 * 60 * 1000));
     videos.forEach((v, i) => {
-      if (v.file) fd.append(`video${i + 1}`, v.file);
+      if (serverCopyFresh(v)) fd.append(`video${i + 1}Path`, v.filePath);
+      else if (v.file) fd.append(`video${i + 1}`, v.file);
       else if (v.filePath) fd.append(`video${i + 1}Path`, v.filePath);
     });
     if (audio.file) fd.append('audio', audio.file);
@@ -2003,8 +2107,11 @@ export default function MontageTab({ loadVideoInEditor, onError, onShurfer, onRe
               </div>
             </div>
           ) : (
-            <div style={{ width:'100%', height:'100%', minHeight:360, display:'flex', alignItems:'center', justifyContent:'center' }}>
-              <div style={{ width:'100%', maxWidth:840, minHeight:280, display:'flex', alignItems:'center', justifyContent:'center' }}>
+            // "safe center": centred when it fits, otherwise from the top, so
+            // nothing is pushed out of reach. The finished result sizes itself
+            // to the screen (SuccessPreview), so it gets no minimum height.
+            <div style={{ width:'100%', height:'100%', minHeight: mergeStatus === 'success' ? 0 : 360, display:'flex', alignItems:'safe center', justifyContent:'center' }}>
+              <div style={{ width:'100%', maxWidth:840, minHeight: mergeStatus === 'success' ? 0 : 280, display:'flex', alignItems:'safe center', justifyContent:'center' }}>
                 {mergeStatus === 'processing' && (
                   <div style={{ display:'flex', flexDirection:'column', alignItems:'center', gap:18 }}>
                     <ProcessingPreview progress={mergeProgress} status={mergeStageText} totalEstimatedTime={mergeTotalEstimatedTime} timeSpent={mergeTimeSpent} timeLeft={mergeTimeLeft} uploading={uploading} note={connectionNote} onDevice={onDevice && !mergeJobId} onCancel={handleCancelMerge} />
@@ -2090,6 +2197,23 @@ export default function MontageTab({ loadVideoInEditor, onError, onShurfer, onRe
                 Clips are never pulled from the first N seconds of each source video (skips intros/setup footage). Default is 40s.
               </div>
             </div>
+
+            {canRenderOnDevice && (
+              <div className="mt-config-group">
+                <div className="mt-config-label">When a Server 2 montage is ready</div>
+                <div className="mt-pill-track" role="group" aria-label="When a Server 2 montage is ready">
+                  <button type="button" className={`mt-pill-opt ${autoDownload ? 'active' : ''}`} aria-pressed={autoDownload} onClick={() => chooseAutoDownload(true)}>
+                    Download automatically
+                  </button>
+                  <button type="button" className={`mt-pill-opt ${!autoDownload ? 'active' : ''}`} aria-pressed={!autoDownload} onClick={() => chooseAutoDownload(false)}>
+                    I'll download it
+                  </button>
+                </div>
+                <div style={{ fontSize:12, color:'var(--panel-text-3)', lineHeight:1.5 }}>
+                  A Server 2 montage is only kept in this tab, so saving it straight away means it can't get lost. The Download button is always there too.
+                </div>
+              </div>
+            )}
 
             <div className="mt-config-group">
               <div className="mt-config-label">Beauty style</div>

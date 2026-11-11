@@ -386,7 +386,7 @@ function clipLabel(clip) {
   return clip.label;
 }
 
-function ClipBlock({ clip, laneIndex, rowHeight, pxPerSecond, isSelected, isMultiSelected, locked, onSelect, onDragStart, onTrimStart, onTrimEnd }) {
+function ClipBlock({ clip, laneIndex, rowHeight, pxPerSecond, isSelected, isMultiSelected, locked, onSelect, onDragStart, onTrimStart, onTrimEnd, onContextMenu }) {
   const left = clip.startTime * pxPerSecond;
   const width = Math.max(40, clip.duration * pxPerSecond);
   const blockRef = useRef(null);
@@ -402,7 +402,13 @@ function ClipBlock({ clip, laneIndex, rowHeight, pxPerSecond, isSelected, isMult
       title={[clip.label, clip.enabled === false && '(disabled)', clip.reversed && '(reversed)', clip.frozen && '(frozen)'].filter(Boolean).join(' ')}
       onClick={(e) => { e.stopPropagation(); onSelect?.(clip.id, e); }}
       onMouseDown={(e) => { if (!locked) onDragStart?.(e, clip.id); }}
-      onContextMenu={(e) => e.stopPropagation()}
+      onContextMenu={(e) => {
+        e.stopPropagation();
+        if (!onContextMenu) return;
+        e.preventDefault();
+        const rect = e.currentTarget.getBoundingClientRect();
+        onContextMenu(e, clip.id, clip.startTime + (e.clientX - rect.left) / pxPerSecond);
+      }}
     >
       {inView && clip.type === 'audio' && <ClipWaveform clip={clip} width={width} height={stripHeight} />}
       {inView && (clip.type === 'video') && <ClipFilmstrip clip={clip} width={width} height={stripHeight} />}
@@ -447,7 +453,7 @@ function denseSegments(clips, pxPerSecond) {
 
 function TrackRow({
   clips, placeholder, pxPerSecond, totalWidth, selectedClipId, selectedClipIds, onSelectClip, onClipDragStart,
-  onTrimStart, onTrimEnd, expanded, onPlaceholderClick, trackType, laneIndex, locked, hidden, onGapContextMenu, view,
+  onTrimStart, onTrimEnd, expanded, onPlaceholderClick, trackType, laneIndex, locked, hidden, onGapContextMenu, onClipContextMenu, view,
 }) {
   const rowHeight = laneHeight(expanded);
   // Only the clips in (or near) the visible window become elements. A long
@@ -506,6 +512,7 @@ function TrackRow({
           onDragStart={onClipDragStart}
           onTrimStart={onTrimStart}
           onTrimEnd={onTrimEnd}
+          onContextMenu={onClipContextMenu}
         />
       ))}
       {!clips.length && placeholder && (
@@ -556,7 +563,7 @@ function LaneLabels({
 
 function LaneRows({
   type, lanes, pxPerSecond, totalWidth, selectedClipId, selectedClipIds, onSelectClip, onClipDragStart,
-  onTrimStart, onTrimEnd, expanded, placeholder, activeTab, trackState, onPlaceholderClick, onGapContextMenu, view,
+  onTrimStart, onTrimEnd, expanded, placeholder, activeTab, trackState, onPlaceholderClick, onGapContextMenu, onClipContextMenu, view,
 }) {
   return displayOrder(type, lanes.length).map((laneIndex) => (
     <TrackRow
@@ -579,6 +586,7 @@ function LaneRows({
       locked={Boolean(trackState?.[laneIndex]?.locked)}
       hidden={Boolean(trackState?.[laneIndex]?.hidden)}
       onGapContextMenu={activeTab === 'editor' ? onGapContextMenu : undefined}
+      onClipContextMenu={activeTab === 'editor' ? onClipContextMenu : undefined}
     />
   ));
 }
@@ -625,9 +633,12 @@ function Ruler({ surfaceRef, pxPerSecond, fps, totalWidth, currentTime, onSeek, 
       className="st-ruler-track"
       ref={trackRef}
       style={{ width: `${totalWidth}px`, transform: `translateX(${-view.left}px)` }}
-      onClick={(e) => {
+      // Press anywhere on the ruler to jump there, keep holding to scrub.
+      onMouseDown={(e) => {
+        if (e.button !== 0) return;
         const rect = e.currentTarget.getBoundingClientRect();
         onSeek(Math.max(0, (e.clientX - rect.left) / pxPerSecond));
+        onPlayheadDragStart?.(e);
       }}
     >
       {minor.map((t) => <i key={`m${t}`} className="st-tick-minor" style={{ left: `${t * pxPerSecond}px` }} />)}
@@ -636,7 +647,11 @@ function Ruler({ surfaceRef, pxPerSecond, fps, totalWidth, currentTime, onSeek, 
           {tick.label}
         </span>
       ))}
-      <span className="st-playhead-pin" style={{ left: `${currentTime * pxPerSecond}px` }} onMouseDown={(e) => { e.stopPropagation(); onPlayheadDragStart?.(e); }} />
+      <span className="st-playhead-pin" style={{ left: `${currentTime * pxPerSecond}px` }} onMouseDown={(e) => { e.stopPropagation(); onPlayheadDragStart?.(e); }}>
+        <svg viewBox="0 0 14 19" aria-hidden="true">
+          <path d="M3.5 1h7A2.5 2.5 0 0 1 13 3.5v8.3a2 2 0 0 1-.6 1.4L7 18l-5.4-4.8a2 2 0 0 1-.6-1.4V3.5A2.5 2.5 0 0 1 3.5 1z" />
+        </svg>
+      </span>
     </div>
   );
 }
@@ -691,7 +706,7 @@ function BottomTimeline({
   onTrimStart, onTrimEnd, timelineHeight, onTimelineHeightChange, laneLabels, fps = 30, contentDuration,
   selectedClipId, selectedClipIds, onSelectClip, onClipDragStart, snapEnabled, onSnapToggle, expandedTracks, onTrackExpand, autoFollowPlayhead, onAutoFollowToggle, onPlayheadDragStart, onUndo, onRedo, onAddTextClip, onAddAudioClip, onAddTrack, trackState, onToggleLock, onToggleHidden, onRemoveTrack, onRenameTrack, onReorderTrack,
   onRippleDelete, insertMode, onInsertModeToggle, onGapContextMenu, onGroupSelected, onUngroupSelected, onFreezeFrame, onAddAdjustmentLayer, onAutoCaptions, onDownloadCaptions, captionsStatus,
-  markers, onAddMarker, onRemoveMarker, onRenameMarker, onJumpToMarker, onDropMedia,
+  markers, onAddMarker, onRemoveMarker, onRenameMarker, onJumpToMarker, onDropMedia, onClipContextMenu,
 }) {
   const pxPerSecond = pxPerSecondFor(zoom);
   const duration = Math.max(0, Number(totalDuration) || 0);
@@ -727,7 +742,7 @@ function BottomTimeline({
   };
 
   const laneCount = tracks.video.length + tracks.audio.length + tracks.text.length;
-  const laneListProps = { pxPerSecond, totalWidth, selectedClipId, selectedClipIds, onSelectClip, onClipDragStart, onTrimStart, onTrimEnd, activeTab };
+  const laneListProps = { pxPerSecond, totalWidth, selectedClipId, selectedClipIds, onSelectClip, onClipDragStart, onTrimStart, onTrimEnd, onClipContextMenu, activeTab };
 
   // The label column and the track-surface column scroll independently but
   // must stay vertically aligned, so scrollTop is mirrored from the surface

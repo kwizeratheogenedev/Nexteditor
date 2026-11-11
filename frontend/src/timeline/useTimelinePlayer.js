@@ -31,6 +31,19 @@ const FALLBACK_CANVAS_SIZE = { width: 1920, height: 1080 };
 // stack in z-order for real picture-in-picture/overlays, audio lanes all
 // mix together, text lanes all draw. Only lane 0's video defines the
 // program's overall length (matches the backend export).
+// Online media (a Montage result sent to the editor, served by the
+// backend - another origin in dev and in production) must be requested
+// with CORS. Without it the browser marks it "tainted": its frames make
+// the preview canvas unreadable (breaking effects that read pixels, like
+// chroma key) and Web Audio plays it as silence. The backend already
+// sends the CORS headers. Local files (blob:) are same-origin and stay as
+// they were. crossOrigin must be set before src to take effect.
+function setMediaSource(el, url) {
+  if (/^(blob|data):/.test(url)) el.removeAttribute('crossorigin');
+  else el.crossOrigin = 'anonymous';
+  el.src = url;
+}
+
 export function useTimelinePlayer({ timeline, currentTime, isPlaying, onTimeUpdate, onEnded, onClipDurationUpdate, canvasRef, trackMeta, canvasSize }) {
   const activeCanvasSize = canvasSize || FALLBACK_CANVAS_SIZE;
   const videoPoolRef = useRef(new Map());
@@ -162,9 +175,7 @@ export function useTimelinePlayer({ timeline, currentTime, isPlaying, onTimeUpda
       pool.set(clip.sourceId, el);
       connectToAudioGraph(el, clip.sourceId, videoGainNodesRef.current);
     }
-    if (clip.url && el.src !== clip.url) {
-      el.src = clip.url;
-    }
+    if (clip.url && el.src !== clip.url) setMediaSource(el, clip.url);
     return el;
   }, [connectToAudioGraph]);
 
@@ -184,9 +195,7 @@ export function useTimelinePlayer({ timeline, currentTime, isPlaying, onTimeUpda
       });
       pool.set(clip.sourceId, el);
     }
-    if (clip.url && el.src !== clip.url) {
-      el.src = clip.url;
-    }
+    if (clip.url && el.src !== clip.url) setMediaSource(el, clip.url);
     return el;
   }, []);
 
@@ -200,9 +209,7 @@ export function useTimelinePlayer({ timeline, currentTime, isPlaying, onTimeUpda
       pool.set(clip.sourceId, el);
       connectToAudioGraph(el, clip.sourceId, audioGainNodesRef.current);
     }
-    if (clip.url && el.src !== clip.url) {
-      el.src = clip.url;
-    }
+    if (clip.url && el.src !== clip.url) setMediaSource(el, clip.url);
     return el;
   }, [connectToAudioGraph]);
 

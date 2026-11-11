@@ -1,4 +1,4 @@
-import { useEffect, useMemo, useRef, useState } from 'react';
+import { useEffect, useRef, useState } from 'react';
 import './EditorWorkspace.css';
 import { isVideoLikeClip, isImageClip } from '../timeline/clipKinds';
 import { getWaveformForClip, sliceWaveform } from '../timeline/waveform';
@@ -20,6 +20,8 @@ const ICON = {
   pause: 'M7 4h4v16H7z M13 4h4v16h-4z',
   fullscreen: 'M4 9V4h5 M20 9V4h-5 M4 15v5h5 M20 15v5h-5',
   upload: 'M12 16V4 M7 9l5-5 5 5 M5 20h14',
+  plus: 'M12 5v14 M5 12h14',
+  close: 'M6 6l12 12 M18 6L6 18',
 };
 
 // Maps a client (mouse) position to the canvas's on-screen content box,
@@ -41,7 +43,7 @@ function getCanvasContentRect(canvasEl) {
 }
 
 function clipName(clip, fallback) {
-  return clip.file?.name || clip.label || (clip.url || clip.remoteUrl || '').split('/').pop()?.split('?')[0] || fallback;
+  return clip.name || clip.file?.name || clip.label || (clip.url || clip.remoteUrl || '').split('/').pop()?.split('?')[0] || fallback;
 }
 
 // A green waveform tile for audio in the media bin, drawn from the same
@@ -80,9 +82,9 @@ function AudioThumb({ clip }) {
 }
 
 function EditorPanel({
-  timeline, audioClips = [], selectedClipId, selectedClip, onSelectClip, onImportClick, onUpload, onImportFiles, onImportUrl, fileInputRef,
+  timeline, mediaItems = [], onAddMediaToTimeline, onRemoveMediaItem, selectedClipId, selectedClip, onImportClick, onUpload, onImportFiles, onImportUrl, fileInputRef,
   canvasRef, isPlaying, currentTime, videoDuration, onTogglePlayback, onMoveOverlay, onMoveOverlayEnd,
-  canvasSize, onFullscreen, mediaFocus,
+  canvasSize, onFullscreen, mediaFocus, revealMedia,
 }) {
   // 'player' shows the editable view (drag handles on a selected overlay
   // clip); 'preview' is the clean composited frame with no edit chrome.
@@ -96,27 +98,26 @@ function EditorPanel({
   const mediaRef = useRef(null);
   const fps = canvasSize?.fps || 30;
 
-  // One card per imported SOURCE, not one per timeline clip - split,
-  // duplicate and freeze-frame add clips that reference the same file.
-  const mediaItems = useMemo(() => {
-    const bySource = new Map();
-    [...timeline.filter((clip) => isVideoLikeClip(clip)), ...audioClips].forEach((clip) => {
-      const key = clip.sourceId || clip.id;
-      if (!bySource.has(key)) bySource.set(key, clip);
-    });
-    return [...bySource.values()];
-  }, [timeline, audioClips]);
+  // The bin is its own list (see MEDIA_KEY in usePersistedEditorState):
+  // importing only adds here, and what happens on the timeline - splitting,
+  // trimming, deleting - never changes it.
+  const [activeMediaId, setActiveMediaId] = useState(null);
   const hasContent = timeline.length > 0;
   const overlayDragRef = useRef(null);
 
-  // Full length of a source, not of whichever (possibly trimmed) clip stands
-  // for it in the bin: video clips carry it as `duration`; for audio the
-  // longest trim window seen for that source is the best known length.
-  const sourceLength = (clip) => {
-    if (clip.duration) return clip.duration;
-    const sameSource = [...timeline, ...audioClips].filter((c) => (c.sourceId || c.id) === (clip.sourceId || clip.id));
-    return Math.max(0, ...sameSource.map((c) => c.trimmedEnd || 0));
-  };
+  // "Show in Media" from a clip's right-click menu: highlight its source.
+  useEffect(() => {
+    if (!revealMedia?.sourceId) return;
+    const item = mediaItems.find((entry) => entry.sourceId === revealMedia.sourceId);
+    if (!item) return;
+    setActiveMediaId(item.id);
+    requestAnimationFrame(() => {
+      const card = mediaRef.current?.querySelector(`[data-media-id="${CSS.escape(item.id)}"]`);
+      card?.scrollIntoView({ block: 'nearest', behavior: 'smooth' });
+      card?.focus({ preventScroll: true });
+    });
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [revealMedia?.tick, mediaItems.length]);
 
   // Pressing "Media" in the sidebar brings the bin into focus.
   useEffect(() => {
@@ -162,9 +163,9 @@ function EditorPanel({
     event.preventDefault();
     const url = link.trim();
     if (!url || linkState.status === 'loading') return;
-    setLinkState({ status: 'loading', message: 'Fetching…' });
+    setLinkState({ status: 'loading', message: 'Starting the download…', percent: 0 });
     try {
-      await onImportUrl?.(url, (message) => setLinkState({ status: 'loading', message }));
+      await onImportUrl?.(url, (message, percent) => setLinkState({ status: 'loading', message, percent }));
       setLink('');
       setLinkState({ status: 'idle', message: '' });
     } catch (err) {
@@ -214,38 +215,71 @@ function EditorPanel({
           </button>
         </form>
         {linkState.message && <p className={`st-link-status ${linkState.status === 'error' ? 'is-error' : ''}`} role="status">{linkState.message}</p>}
+        {linkState.status === 'loading' && typeof linkState.percent === 'number' && (
+          <div className="st-link-progress" role="progressbar" aria-label="Link download" aria-valuemin={0} aria-valuemax={100} aria-valuenow={linkState.percent}>
+            <span style={{ width: `${Math.max(2, linkState.percent)}%` }} />
+          </div>
+        )}
 
         {mediaItems.length ? (
           <div className="st-media-grid">
-            {mediaItems.map((clip, index) => {
-              const audio = clip.type === 'audio';
-              const length = sourceLength(clip);
-              const name = clipName(clip, `Clip ${index + 1}`);
+            {mediaItems.map((item, index) => {
+              const audio = item.type === 'audio';
+              const image = isImageClip(item);
+              const length = item.duration || 0;
+              const name = clipName(item, `Media ${index + 1}`);
               return (
-                <button
-                  type="button"
-                  key={clip.id}
-                  className={`st-media-card ${selectedClipId === clip.id ? 'is-active' : ''}`}
-                  onClick={() => onSelectClip?.(clip.id)}
-                  title={`${name} - drag onto the timeline to add it`}
+                <div
+                  key={item.id}
+                  data-media-id={item.id}
+                  role="button"
+                  tabIndex={0}
+                  className={`st-media-card ${activeMediaId === item.id ? 'is-active' : ''}`}
+                  onClick={() => setActiveMediaId(item.id)}
+                  onDoubleClick={() => onAddMediaToTimeline?.(item.id)}
+                  onKeyDown={(event) => {
+                    if (event.key === 'Enter') onAddMediaToTimeline?.(item.id);
+                    if (event.key === 'Delete' || event.key === 'Backspace') { event.stopPropagation(); onRemoveMediaItem?.(item.id); }
+                  }}
+                  title={`${name} - drag onto the timeline, or press + to add it`}
                   draggable
                   onDragStart={(event) => {
                     event.dataTransfer.effectAllowed = 'copy';
-                    event.dataTransfer.setData(MEDIA_DRAG_TYPE, clip.id);
+                    event.dataTransfer.setData(MEDIA_DRAG_TYPE, item.id);
                     event.dataTransfer.setData('text/plain', name);
-                    setMediaDrag({ id: clip.id, kind: audio ? 'audio' : 'video', duration: isImageClip(clip) ? 5 : length, name });
+                    setMediaDrag({ id: item.id, kind: audio ? 'audio' : 'video', duration: image ? 5 : length, name });
                   }}
                   onDragEnd={() => setMediaDrag(null)}
                 >
                   <span className={`st-media-thumb ${audio ? 'is-audio' : ''}`}>
-                    {audio ? <AudioThumb clip={clip} />
-                      : isImageClip(clip) ? <img src={clip.url || clip.remoteUrl} alt="" />
-                        : <video src={clip.url || clip.remoteUrl} muted preload="metadata" />}
-                    {clip.file?.nexFromLink ? <em className="st-badge-link">From link</em>
-                      : !isImageClip(clip) && length > 0 && <em className="st-badge-time">{formatShortDuration(length)}</em>}
+                    {audio ? <AudioThumb clip={item} />
+                      : image ? <img src={item.url} alt="" />
+                        : <video src={item.url} muted preload="metadata" />}
+                    {item.fromLink ? <em className="st-badge-link">From link</em>
+                      : !image && length > 0 && <em className="st-badge-time">{formatShortDuration(length)}</em>}
+                    <span className="st-media-actions">
+                      <button
+                        type="button"
+                        className="st-media-act is-add"
+                        aria-label={`Add ${name} to the timeline`}
+                        title="Add to timeline"
+                        onClick={(event) => { event.stopPropagation(); onAddMediaToTimeline?.(item.id); }}
+                      >
+                        <Icon d={ICON.plus} size={14} strokeWidth={2.4} />
+                      </button>
+                      <button
+                        type="button"
+                        className="st-media-act"
+                        aria-label={`Remove ${name} from media`}
+                        title="Remove from media (clips on the timeline stay)"
+                        onClick={(event) => { event.stopPropagation(); onRemoveMediaItem?.(item.id); }}
+                      >
+                        <Icon d={ICON.close} size={13} strokeWidth={2.4} />
+                      </button>
+                    </span>
                   </span>
                   <span className="st-media-name">{name}</span>
-                </button>
+                </div>
               );
             })}
           </div>

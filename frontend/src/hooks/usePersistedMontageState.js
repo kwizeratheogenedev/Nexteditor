@@ -26,7 +26,9 @@ async function restoreSlot(storageKey, fileKey, initialValue) {
     if (!parsed.fileName && !parsed.filePath) return initialValue;
 
     let file = null;
-    if (parsed.sourceMode === 'device' && parsed.fileName) {
+    // Videos fetched from a link are kept as files too (see MontageTab's
+    // handleUrl), so they come back with their preview after a reload.
+    if (parsed.fileName) {
       file = await getPersistedFile(fileKey);
     }
 

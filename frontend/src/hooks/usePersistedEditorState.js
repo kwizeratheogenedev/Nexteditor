@@ -12,6 +12,44 @@ const PROJECT_ID_KEY = `${STORAGE_PREFIX}projectId`;
 // lost the project. localStorage keeps only the small view state plus a
 // marker saying the clips live in IndexedDB.
 const CLIPS_KEY = `${STORAGE_PREFIX}clips`;
+// The Media bin is its own list, not derived from the timeline: importing
+// a file only adds it here, a timeline clip made from it is a separate
+// thing (splitting, trimming or deleting clips never touches the bin), and
+// removing an item from the bin never touches the timeline. Both sides
+// share source files by sourceId, so a file stays stored while either
+// still uses it.
+const MEDIA_KEY = `${STORAGE_PREFIX}media`;
+
+function serializeMediaItem({ file, url, ...rest }) {
+  return { ...rest, ...(url && !url.startsWith('blob:') ? { remoteUrl: url } : {}) };
+}
+
+// One-time seed for a project saved before the bin had its own list: one
+// item per source the timeline uses, so nobody's bin comes up empty.
+function mediaItemsFromTimeline(clips) {
+  const bySource = new Map();
+  clips.forEach((clip) => {
+    const type = clip.type || 'video';
+    if (!['video', 'image', 'audio'].includes(type) || !clip.sourceId) return;
+    const existing = bySource.get(clip.sourceId);
+    const length = clip.duration || clip.trimmedEnd || 0;
+    if (existing) {
+      existing.duration = Math.max(existing.duration || 0, length);
+      return;
+    }
+    bySource.set(clip.sourceId, {
+      id: clip.sourceId,
+      sourceId: clip.sourceId,
+      type,
+      name: clip.file?.name || clip.label || (clip.url || clip.remoteUrl || '').split('/').pop()?.split('?')[0] || 'Media',
+      duration: type === 'image' ? null : length,
+      file: clip.file || null,
+      url: clip.file instanceof Blob ? URL.createObjectURL(clip.file) : (clip.remoteUrl || clip.url || ''),
+      ...(clip.remoteUrl ? { remoteUrl: clip.remoteUrl } : {}),
+    });
+  });
+  return [...bySource.values()];
+}
 
 function createEmptyTimeline() {
   return [];
@@ -299,7 +337,9 @@ export function usePersistedEditorState() {
   // the UI, same "null means use a generic fallback" convention trackMeta's
   // lane names already use.
   const [markers, setMarkers] = useState([]);
+  const [mediaItems, setMediaItems] = useState([]);
   const [restored, setRestored] = useState(false);
+  const [mediaRestored, setMediaRestored] = useState(false);
   // Autosave bookkeeping (see the two save effects below): whether the
   // clips have been written to IndexedDB, and which media files already are.
   const clipsInIdbRef = useRef(false);
@@ -420,16 +460,52 @@ export function usePersistedEditorState() {
     };
   }, []);
 
+  // The bin restores after the timeline (it seeds from the timeline once,
+  // for projects saved before the bin had its own list). Each item gets its
+  // own blob URL, never one shared with a timeline clip, so freeing one side
+  // can't break the other.
+  useEffect(() => {
+    if (!restored || mediaRestored) return;
+    let cancelled = false;
+    (async () => {
+      let items = null;
+      try {
+        const stored = await getPersistedFile(MEDIA_KEY);
+        if (typeof stored === 'string') {
+          const parsed = JSON.parse(stored);
+          items = [];
+          for (const item of Array.isArray(parsed) ? parsed : []) {
+            const file = item.sourceId ? await getPersistedFile(`${STORAGE_PREFIX}source_${item.sourceId}`) : null;
+            if (file) persistedSourcesRef.current.add(item.sourceId);
+            const url = file ? URL.createObjectURL(file) : item.remoteUrl || '';
+            if (!url) continue;
+            items.push({ ...item, file: file || null, url });
+          }
+        }
+      } catch (error) {
+        console.warn('Error restoring media bin:', error);
+      }
+      if (cancelled) return;
+      setMediaItems(items || mediaItemsFromTimeline(timeline));
+      setMediaRestored(true);
+    })();
+    return () => { cancelled = true; };
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [restored]);
+
   // Autosave, in two parts so a playhead move or a selection change never
   // re-saves thousands of clips:
   //  1. the clips and their media files -> IndexedDB, only when the timeline
   //     itself changes;
   //  2. the small view state -> localStorage, whenever any of it changes.
   useEffect(() => {
-    if (!restored) return;
+    // Waits for the bin too: the sweep below would otherwise delete the
+    // files of media that's in the bin but not on the timeline.
+    if (!restored || !mediaRestored) return;
 
     const timer = setTimeout(async () => {
       try {
+        await persistFile(MEDIA_KEY, JSON.stringify(mediaItems.map(serializeMediaItem)));
         const clips = timeline.map(({ file, url, ...rest }) => ({
           ...rest,
           // Blob URLs die with the browser session and must be regenerated
@@ -446,7 +522,7 @@ export function usePersistedEditorState() {
         // Each source file is stored once, not on every edit - re-writing a
         // multi-GB video to IndexedDB on each change was pure waste.
         const seenSourceIds = new Set();
-        for (const clip of timeline) {
+        for (const clip of [...mediaItems, ...timeline]) {
           if (!clip.sourceId || seenSourceIds.has(clip.sourceId)) continue;
           seenSourceIds.add(clip.sourceId);
           if (clip.file instanceof File && !persistedSourcesRef.current.has(clip.sourceId)) {
@@ -475,7 +551,7 @@ export function usePersistedEditorState() {
     }, 300);
 
     return () => clearTimeout(timer);
-  }, [restored, timeline]);
+  }, [restored, mediaRestored, timeline, mediaItems]);
 
   useEffect(() => {
     // Until the clips have reached IndexedDB once, the previous save (which
@@ -663,12 +739,13 @@ export function usePersistedEditorState() {
   }, []);
 
   const clearAll = useCallback(() => {
-    timeline.forEach((clip) => {
+    [...timeline, ...mediaItems].forEach((clip) => {
       if (clip.url && clip.url.startsWith('blob:')) {
         URL.revokeObjectURL(clip.url);
       }
     });
     setTimeline(createEmptyTimeline());
+    setMediaItems([]);
     setPlayhead(0);
     setActiveClipIndex(0);
     setIsPlaying(false);
@@ -693,7 +770,7 @@ export function usePersistedEditorState() {
     localStorage.removeItem(`${STORAGE_PREFIX}known_sources`);
     persistedSourcesRef.current.clear();
     clearAllPersistedFiles();
-  }, [timeline]);
+  }, [timeline, mediaItems]);
 
   const pushHistory = useCallback((nextTimeline) => {
     setTimelineHistory((prev) => {
@@ -803,6 +880,8 @@ export function usePersistedEditorState() {
     setTrackMeta,
     markers,
     setMarkers,
+    mediaItems,
+    setMediaItems,
     clearAll,
     restored,
     timelineHistory,

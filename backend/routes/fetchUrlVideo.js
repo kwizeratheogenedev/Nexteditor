@@ -3,8 +3,8 @@ import fs from 'fs';
 import path from 'path';
 import { createWriteStream } from 'fs';
 import crypto from 'crypto';
-import ytdl from '@distube/ytdl-core';
-import { probeDuration } from '../services/ffmpeg.js';
+import { Ytdl, parseVideoId } from '@distube/ytdl-core';
+import { probeDuration, runFFmpeg } from '../services/ffmpeg.js';
 import { MAX_DOWNLOAD_BYTES, downloadErrorMessage, downloadToFile } from '../services/safeDownload.js';
 import { getIo } from '../socket.js';
 import { UPLOADS_DIR } from '../storagePaths.js';
@@ -82,51 +82,164 @@ function getEventNames(mediaType) {
 }
 
 /**
- * Download video from YouTube using @distube/ytdl-core - a pure-JS
- * extractor (no external binary). The original implementation shelled out
- * to the `yt-dlp` CLI, which needs installing system-wide and, like
- * whisper.cpp's local binary, is exactly the kind of unsigned executable
- * Windows Smart App Control blocks with no reliable per-app exception -
- * running entirely inside the already-trusted Node process sidesteps that
- * whole problem.
+ * Download from YouTube with @distube/ytdl-core v5 - a pure-JS extractor
+ * (no external binary). The original implementation shelled out to the
+ * `yt-dlp` CLI, which needs installing system-wide and, like whisper.cpp's
+ * local binary, is exactly the kind of unsigned executable Windows Smart App
+ * Control blocks with no reliable per-app exception - running entirely
+ * inside the already-trusted Node process sidesteps that whole problem.
+ *
+ * YouTube no longer serves picture and sound together in one format (only
+ * separate streams), so a video is fetched as two downloads - the best
+ * picture up to 720p and the best sound - and joined with ffmpeg without
+ * re-encoding. An audio fetch is just the sound, saved as is.
  */
+const youtube = new Ytdl();
+// 720p, not 1080p: YouTube sends video slowly (often slower than real
+// time), and 720p is about half the size, so a long video arrives about
+// twice as fast. Measured on the shorter side so vertical Shorts
+// (720x1280) still come in at 720p.
+const YOUTUBE_MAX_RESOLUTION = 720;
+const YOUTUBE_ERROR = 'The YouTube video could not be downloaded. It may be private, age-restricted or unavailable.';
+
+const isPlainStream = (f) => !f.isLive && !f.isHLS && !f.isDrm && !f.isOtf;
+
+// H.264 in MP4 first: it plays in every browser and in the editor's own
+// decoders. Then the tallest picture, then the higher bitrate.
+function pickYouTubeVideoFormat(formats) {
+  const shortSide = (f) => Math.min(f.width || f.height || 0, f.height || f.width || 0);
+  const options = formats.filter((f) => f.hasVideo && !f.hasAudio && isPlainStream(f) && shortSide(f) <= YOUTUBE_MAX_RESOLUTION);
+  const isH264 = (f) => /avc1/i.test(f.codecs || f.videoCodec || '') && f.container === 'mp4';
+  return options.sort((a, b) => (
+    (isH264(b) - isH264(a))
+    || (shortSide(b) - shortSide(a))
+    || ((b.bitrate || 0) - (a.bitrate || 0))
+  ))[0] || null;
+}
+
+// AAC in MP4 (m4a) first - it goes into an MP4 next to any picture and
+// plays everywhere - then the higher bitrate; the volume-normalised (DRC)
+// variants only as a last resort.
+function pickYouTubeAudioFormat(formats) {
+  const options = formats.filter((f) => f.hasAudio && !f.hasVideo && isPlainStream(f));
+  const isAac = (f) => f.container === 'mp4' && /mp4a/i.test(f.codecs || f.audioCodec || '');
+  return options.sort((a, b) => (
+    (Number(a.isDrc) - Number(b.isDrc))
+    || (isAac(b) - isAac(a))
+    || ((b.audioBitrate || b.bitrate || 0) - (a.audioBitrate || a.bitrate || 0))
+  ))[0] || null;
+}
+
+// Streams one format to a file. `onBytes(downloaded)` reports this stream's
+// running total so the caller can show combined progress and enforce the
+// size cap across both streams.
+function downloadYouTubeFormat(info, format, filePath, onBytes) {
+  return new Promise((resolve, reject) => {
+    let settled = false;
+    let stream = null;
+    let writeStream = null;
+    const fail = (err) => {
+      if (settled) return;
+      settled = true;
+      stream?.destroy();
+      writeStream?.destroy();
+      reject(err);
+    };
+    stream = youtube.download(info, {
+      format,
+      onProgress: ({ downloaded }) => {
+        try {
+          onBytes(downloaded);
+        } catch (err) {
+          fail(err);
+        }
+      },
+    });
+    writeStream = createWriteStream(filePath);
+    stream.on('error', (err) => {
+      console.warn('YouTube download failed:', err?.code || '', err?.message || err);
+      fail(new Error(YOUTUBE_ERROR));
+    });
+    writeStream.on('error', fail);
+    writeStream.on('finish', () => { if (!settled) { settled = true; resolve(); } });
+    stream.pipe(writeStream);
+  });
+}
+
 async function downloadYouTubeVideo(url, outputPath, socketId, progressEvent, slotId, mediaType) {
-  if (!ytdl.validateURL(url)) {
+  if (!parseVideoId(url)) {
     throw new Error('That doesn\'t look like a valid YouTube video URL.');
   }
 
-  const requestOptions = {
-    headers: {
-      'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/124.0.0.0 Safari/537.36',
-    },
-  };
-  const info = await ytdl.getInfo(url, { requestOptions });
-  const format = mediaType === 'audio'
-    ? ytdl.chooseFormat(info.formats, { filter: 'audioonly', quality: 'highestaudio' })
-    : ytdl.chooseFormat(info.formats, { filter: 'videoandaudio', quality: 'highest' });
-  if (!format) {
-    throw new Error(`This YouTube video has no downloadable ${mediaType === 'audio' ? 'audio-only' : 'combined video+audio'} format available.`);
+  let info;
+  try {
+    info = await youtube.getInfo(url);
+  } catch (err) {
+    console.warn('YouTube lookup failed:', err?.code || '', err?.message || err);
+    throw new Error(YOUTUBE_ERROR);
   }
 
-  await new Promise((resolve, reject) => {
-    const stream = ytdl.downloadFromInfo(info, { format, requestOptions });
-    const writeStream = createWriteStream(outputPath);
+  const audioFormat = pickYouTubeAudioFormat(info.formats);
+  const videoFormat = mediaType === 'audio' ? null : pickYouTubeVideoFormat(info.formats);
+  if (!audioFormat && mediaType === 'audio') {
+    throw new Error('This YouTube video has no downloadable audio.');
+  }
+  if (mediaType !== 'audio' && !videoFormat) {
+    throw new Error('This YouTube video has no downloadable video.');
+  }
 
-    stream.on('progress', (_chunkLength, downloaded, total) => {
-      if (downloaded > MAX_DOWNLOAD_BYTES) {
-        stream.destroy();
-        writeStream.destroy();
-        reject(new Error(`That video is larger than the ${Math.round(MAX_DOWNLOAD_BYTES / 1024 ** 3)} GB limit for links.`));
-        return;
-      }
-      if (total > 0) emitProgress(socketId, progressEvent, { percent: Math.round((downloaded / total) * 100), slotId });
-    });
-    stream.on('error', (err) => { console.warn('YouTube download failed:', err?.message || err); reject(new Error('The YouTube video could not be downloaded. It may be private, age-restricted or unavailable.')); });
-    writeStream.on('error', reject);
-    writeStream.on('finish', resolve);
+  // Progress over both downloads together (5-88%), leaving room for the
+  // join and the duration probe after it.
+  const parts = [videoFormat, audioFormat].filter(Boolean);
+  const expected = parts.reduce((sum, f) => sum + (f.contentLength || 0), 0);
+  const done = new Map();
+  let lastPercent = -1;
+  const report = (format) => (downloaded) => {
+    done.set(format.itag, downloaded);
+    const total = [...done.values()].reduce((sum, n) => sum + n, 0);
+    if (total > MAX_DOWNLOAD_BYTES) {
+      throw new Error(`That video is larger than the ${Math.round(MAX_DOWNLOAD_BYTES / 1024 ** 3)} GB limit for links.`);
+    }
+    if (!expected) return;
+    const percent = 5 + Math.round(Math.min(1, total / expected) * 83);
+    if (percent !== lastPercent) {
+      lastPercent = percent;
+      emitProgress(socketId, progressEvent, { percent, slotId });
+    }
+  };
 
-    stream.pipe(writeStream);
-  });
+  const title = info.videoDetails?.title || '';
+  if (mediaType === 'audio') {
+    await downloadYouTubeFormat(info, audioFormat, outputPath, report(audioFormat));
+    return { title };
+  }
+
+  // Picture-only fallback if a video somehow has no separate sound.
+  if (!audioFormat) {
+    await downloadYouTubeFormat(info, videoFormat, outputPath, report(videoFormat));
+    return { title };
+  }
+
+  const videoPath = `${outputPath}.v`;
+  const audioPath = `${outputPath}.a`;
+  try {
+    await Promise.all([
+      downloadYouTubeFormat(info, videoFormat, videoPath, report(videoFormat)),
+      downloadYouTubeFormat(info, audioFormat, audioPath, report(audioFormat)),
+    ]);
+    emitProgress(socketId, progressEvent, { percent: 89, status: 'Joining picture and sound...', slotId });
+    // Stream copy - no re-encode, so this takes seconds even for long videos.
+    await runFFmpeg([
+      '-y', '-hide_banner', '-loglevel', 'error',
+      '-i', videoPath, '-i', audioPath,
+      '-map', '0:v:0', '-map', '1:a:0',
+      '-c', 'copy', '-movflags', '+faststart',
+      '-f', 'mp4', outputPath,
+    ], { timeout: 15 * 60 * 1000 });
+  } finally {
+    [videoPath, audioPath].forEach((file) => fs.promises.unlink(file).catch(() => {}));
+  }
+  return { title };
 }
 
 /**
@@ -136,7 +249,7 @@ async function downloadYouTubeVideo(url, outputPath, socketId, progressEvent, sl
 async function downloadHttpVideo(url, outputPath, socketId, progressEvent, slotId) {
   let lastPercent = -1;
   try {
-    await downloadToFile(url, outputPath, {
+    const { name } = await downloadToFile(url, outputPath, {
       headers: { 'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36' },
       onProgress: (received, total) => {
         if (!total) return;
@@ -147,10 +260,21 @@ async function downloadHttpVideo(url, outputPath, socketId, progressEvent, slotI
         }
       },
     });
+    return { title: name };
   } catch (err) {
     if (!err?.userFacing) console.warn('Link download failed:', err?.message || err);
     throw new Error(downloadErrorMessage(err));
   }
+}
+
+// Drops characters that aren't allowed in file names (and control
+// characters), and squeezes the spaces.
+function cleanTitle(title) {
+  return String(title || '')
+    .replace(/[\\/:*?"<>|\u0000-\u001f]+/g, ' ')
+    .replace(/\s+/g, ' ')
+    .trim()
+    .slice(0, 150);
 }
 
 /**
@@ -187,11 +311,12 @@ router.post('/', optionalAuth, trackOperation('link-fetch'), async (req, res) =>
     }
 
     // Execute appropriate download method
+    let downloaded;
     if (sourceType === 'youtube') {
-      await downloadYouTubeVideo(downloadUrl, outputPath, socketId, events.progress, slotId, mediaType);
+      downloaded = await downloadYouTubeVideo(downloadUrl, outputPath, socketId, events.progress, slotId, mediaType);
     } else {
       // Google Drive, Dropbox, or direct URLs
-      await downloadHttpVideo(downloadUrl, outputPath, socketId, events.progress, slotId);
+      downloaded = await downloadHttpVideo(downloadUrl, outputPath, socketId, events.progress, slotId);
     }
 
     // Verify file exists and get duration
@@ -213,6 +338,9 @@ router.post('/', optionalAuth, trackOperation('link-fetch'), async (req, res) =>
       fileName: filename,
       duration,
       type: sourceType,
+      // A readable name for the file (the YouTube title, or the name the
+      // link's server gave it) - fileName stays the random id.
+      title: cleanTitle(downloaded?.title),
     });
   } catch (err) {
     // Clean up partial file if it exists

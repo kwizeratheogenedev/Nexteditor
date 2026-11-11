@@ -4,6 +4,8 @@ import { useSocket } from './context/SocketContext';
 import { useAuth } from './context/AuthContext.jsx';
 import { EditorStateProvider } from './context/EditorStateContext';
 import { useMediaState } from './hooks/useMediaState';
+import ContextMenu from './components/ContextMenu';
+import { fetchLinkToDevice } from './utils/fetchLink';
 import { createSourceId, normalizeClip, createTextClip, createAudioClip, createAdjustmentClip, createImageClip } from './hooks/usePersistedEditorState';
 import { useTimelinePlayer } from './timeline/useTimelinePlayer';
 import { clipDuration, laneTotalDuration } from './timeline/transitions';
@@ -46,6 +48,16 @@ const LONGMIX_FPS = 30;
 // starting point to drag out or trim back like any other clip.
 const DEFAULT_IMAGE_CLIP_SECONDS = 5;
 
+function remoteFileName(clip) {
+  const url = clip.remoteUrl || (clip.url && !/^(blob|data):/.test(clip.url) ? clip.url : '');
+  if (!url) return '';
+  try {
+    return decodeURIComponent(new URL(url, window.location.href).pathname.split('/').pop() || '');
+  } catch {
+    return '';
+  }
+}
+
 function revokeObjectUrlIfNeeded(url) {
   if (typeof url === 'string' && url.startsWith('blob:')) {
     URL.revokeObjectURL(url);
@@ -70,23 +82,6 @@ const LONG_EXPORT_SECONDS = 600;
 function slugify(text) {
   return String(text || '').toLowerCase().normalize('NFKD').replace(/[\u0300-\u036f]/g, '')
     .replace(/[^a-z0-9]+/g, '-').replace(/^-+|-+$/g, '').slice(0, 60);
-}
-
-// A readable file name for media pulled in from a link: the link's own file
-// name when it has one, youtube-<id> for YouTube, otherwise the site name.
-function fileNameForLink(url, kind) {
-  const ext = kind === 'audio' ? 'mp3' : 'mp4';
-  try {
-    const parsed = new URL(url);
-    const host = parsed.hostname.replace(/^www\./, '');
-    const youtubeId = parsed.searchParams.get('v') || (host === 'youtu.be' ? parsed.pathname.slice(1) : '');
-    if (/youtube\.com|youtu\.be/.test(host) && youtubeId) return `youtube-${youtubeId.slice(0, 20)}.${ext}`;
-    const last = decodeURIComponent(parsed.pathname.split('/').filter(Boolean).pop() || '');
-    if (/\.[a-z0-9]{2,4}$/i.test(last)) return last.slice(0, 80);
-    return `${slugify(host) || 'link'}-${Date.now().toString(36)}.${ext}`;
-  } catch {
-    return `link-${Date.now().toString(36)}.${ext}`;
-  }
 }
 
 function App() {
@@ -193,6 +188,8 @@ function App() {
     setTrackMeta,
     markers,
     setMarkers,
+    editorMediaItems,
+    setEditorMediaItems,
     previewCurrentTime,
     setPreviewCurrentTime,
     previewDuration,
@@ -338,10 +335,7 @@ function App() {
           return;
         }
         const idx = clip.trackIndex || 0;
-        if (idx === laneIndex) {
-          revokeObjectUrlIfNeeded(clip.url);
-          return;
-        }
+        if (idx === laneIndex) return; // URL kept - other clips/Undo may still use it
         survivors.push(idx > laneIndex ? { ...clip, trackIndex: idx - 1 } : clip);
       });
       return survivors;
@@ -435,7 +429,9 @@ function App() {
           ? (clip.text?.content || `${prefix} ${index + 1}`)
           : clip.type === 'adjustment'
             ? 'Adjustment'
-            : (clip.file?.name || `${prefix} ${index + 1}`),
+            // Online media (e.g. a Montage result) has no local file after a
+            // reload - its link still carries the file name.
+            : (clip.label || clip.file?.name || remoteFileName(clip) || `${prefix} ${index + 1}`),
         startTime: clip.startTime,
         duration: clipDuration(clip),
         type: clip.type || 'video',
@@ -568,6 +564,10 @@ function App() {
   // showing, otherwise the lane/gap the user right-clicked plus the screen
   // position to render the menu at.
   const [gapMenu, setGapMenu] = useState(null);
+  // Right-click menu on a timeline clip: { x, y, clipId, time }.
+  const [clipMenu, setClipMenu] = useState(null);
+  // "Show in Media" - EditorPanel highlights the item with this sourceId.
+  const [revealMedia, setRevealMedia] = useState(null);
 
   const [timelineHeight, setTimelineHeight] = useState(() => {
     try {
@@ -663,9 +663,13 @@ function App() {
     if (!playheadDrag) return;
     window.addEventListener('mousemove', handlePlayheadDragMove);
     window.addEventListener('mouseup', handlePlayheadDragEnd);
+    // Keeps the resize cursor and the enlarged playhead head for the whole
+    // scrub, even when the pointer leaves the ruler.
+    document.body.classList.add('is-scrubbing');
     return () => {
       window.removeEventListener('mousemove', handlePlayheadDragMove);
       window.removeEventListener('mouseup', handlePlayheadDragEnd);
+      document.body.classList.remove('is-scrubbing');
     };
   }, [playheadDrag]);
 
@@ -730,12 +734,18 @@ function App() {
     const tempVideo = document.createElement('video');
 
     const handleLoadedMetadata = () => {
+      const sourceId = createSourceId();
+      // It also goes in the Media bin as its own item, so it stays there
+      // whatever happens to the clip on the timeline.
+      setEditorMediaItems((prev) => [...prev, {
+        id: sourceId, sourceId, type: 'video', name: editorVideo.fileName, duration: tempVideo.duration, file: null, url: remoteUrl, remoteUrl,
+      }]);
       commitEditorTimeline((previous) => {
         previous.forEach((clip) => revokeObjectUrlIfNeeded(clip.url));
         return [
           normalizeClip({
             id: `montage-${Date.now()}`,
-            sourceId: createSourceId(),
+            sourceId,
             file: { name: editorVideo.fileName },
             url: remoteUrl,
             duration: tempVideo.duration,
@@ -761,7 +771,7 @@ function App() {
       tempVideo.removeEventListener('loadedmetadata', handleLoadedMetadata);
       tempVideo.removeEventListener('error', handleError);
     };
-  }, [editorVideo, setEditorActiveClipIndex, setEditorIsPlaying, setEditorPlayhead, setEditorTimeline, setErrorText]);
+  }, [editorVideo, setEditorActiveClipIndex, setEditorIsPlaying, setEditorPlayhead, setEditorTimeline, setEditorMediaItems, setErrorText]);
 
   const storeFileMeta = (file, setter, metaSetter) => {
     if (!file) {
@@ -1270,120 +1280,71 @@ function App() {
     tempAudio.load();
   };
 
-  const addVideoFileToTimeline = (file) => {
+  // Import puts a file in the Media bin only - nothing lands on the
+  // timeline until the user drags it there (or presses its + button). The
+  // bin item keeps its own blob URL; timeline clips made from it get theirs
+  // (see handleDropMedia), so the two never depend on each other.
+  const importEditorFile = (file) => new Promise((resolve, reject) => {
+    const type = file.type.startsWith('audio/') ? 'audio' : file.type.startsWith('image/') ? 'image' : 'video';
     const url = URL.createObjectURL(file);
-    const tempVideo = document.createElement('video');
-    tempVideo.preload = 'metadata';
-    tempVideo.src = url;
-
-    const finalizeClip = (duration) => {
-      if (!Number.isFinite(duration) || duration <= 0) {
+    const add = (duration) => {
+      const sourceId = createSourceId();
+      setEditorMediaItems((prev) => [...prev, {
+        id: sourceId,
+        sourceId,
+        type,
+        name: file.name,
+        duration,
+        file,
+        url,
+        ...(file.nexFromLink ? { fromLink: true } : {}),
+      }]);
+      resolve();
+    };
+    if (type === 'image') {
+      add(null);
+      return;
+    }
+    // A real <audio> element for audio - a <video> element's duration read
+    // on a pure-audio file is unreliable across browsers.
+    const probe = document.createElement(type === 'audio' ? 'audio' : 'video');
+    probe.preload = 'metadata';
+    probe.onloadedmetadata = () => {
+      const { duration } = probe;
+      probe.removeAttribute('src');
+      // Some web audio/video reports no length until it's played through;
+      // a file fetched from a link carries the length the server measured.
+      const length = Number.isFinite(duration) && duration > 0 ? duration : file.nexDuration;
+      if (length > 0) {
+        add(length);
         return;
       }
-
-      commitEditorTimeline((previous) => {
-        const existingClip = previous.find((clip) => clip.url === url);
-        if (existingClip) {
-          return previous.map((clip) =>
-            clip.url === url
-              ? {
-                  ...clip,
-                  duration,
-                  trimmedStart: 0,
-                  trimmedEnd: duration,
-                }
-              : clip,
-          );
-        }
-
-        // Appends after whatever's already on lane 0 (the base/background
-        // video track) - the common "import adds to the end" flow; the
-        // clip can be freely dragged elsewhere (including onto a different
-        // lane) afterward.
-        const laneZeroEnd = previous
-          .filter((clip) => isVideoLikeClip(clip) && (clip.trackIndex || 0) === 0)
-          .reduce((max, clip) => Math.max(max, clip.startTime + (clip.trimmedEnd - clip.trimmedStart) / (clip.speed || 1)), 0);
-        return [
-          ...previous,
-          normalizeClip({
-            id: `${Date.now()}-${previous.length}`,
-            sourceId: createSourceId(),
-            file,
-            url,
-            duration,
-            trackIndex: 0,
-            startTime: laneZeroEnd,
-            trimmedStart: 0,
-            trimmedEnd: duration,
-          }),
-        ];
-      });
+      URL.revokeObjectURL(url);
+      const message = `"${file.name}" has no length this browser can read, so it can't be added.`;
+      if (file.nexFromLink) reject(new Error(message));
+      else { setErrorText(message); resolve(); }
     };
-
-    tempVideo.onloadedmetadata = () => {
-      const duration = tempVideo.duration;
-      if (Number.isFinite(duration) && duration > 0) {
-        finalizeClip(duration);
-      }
-    };
-
     // A broken file, or one this browser can't play (e.g. HEVC in some
     // browsers): say so once. (Calling load() again here re-fired the error
     // forever, hundreds of times a second.)
-    tempVideo.onerror = () => {
-      tempVideo.removeAttribute('src');
+    probe.onerror = () => {
+      probe.removeAttribute('src');
       URL.revokeObjectURL(url);
-      setErrorText(`"${file.name}" couldn't be opened - the file may be damaged, or this browser can't play its format.`);
+      const message = `"${file.name}" couldn't be opened - the file may be damaged, or this browser can't play its format.`;
+      // A link fetch shows its own error under the link box instead.
+      if (file.nexFromLink) reject(new Error(message));
+      else { setErrorText(message); resolve(); }
     };
+    probe.src = url;
+    probe.load();
+  });
 
-    tempVideo.load();
-  };
-
-  // A still image has no metadata to probe and no source duration to
-  // respect - it goes straight onto the video track at a default length the
-  // user can trim or extend like anything else. It lands with a slow camera
-  // move already keyframed on (see timeline/motionPresets.js), because an
-  // untouched still on a timeline otherwise reads as a frozen video; the
-  // move is ordinary keyframes, so "None" in the inspector's Animate row
-  // removes it.
-  const addImageFileToTimeline = (file) => {
-    const url = URL.createObjectURL(file);
-    commitEditorTimeline((previous) => {
-      const laneZeroEnd = previous
-        .filter((clip) => isVideoLikeClip(clip) && (clip.trackIndex || 0) === 0)
-        .reduce((max, clip) => Math.max(max, clip.startTime + clipDuration(clip)), 0);
-      return [
-        ...previous,
-        createImageClip({
-          sourceId: createSourceId(),
-          file,
-          url,
-          trackIndex: 0,
-          startTime: laneZeroEnd,
-          duration: DEFAULT_IMAGE_CLIP_SECONDS,
-          motionKeyframes: applyMotionPreset(
-            { x: [], y: [], rotation: [], opacity: [], volume: [], speed: [], scaleX: [], scaleY: [] },
-            DEFAULT_IMAGE_MOTION_PRESET_ID,
-            DEFAULT_IMAGE_CLIP_SECONDS,
-          ),
-        }),
-      ];
+  const handleRemoveMediaItem = (mediaId) => {
+    setEditorMediaItems((prev) => {
+      const item = prev.find((entry) => entry.id === mediaId);
+      if (item?.url?.startsWith('blob:')) URL.revokeObjectURL(item.url);
+      return prev.filter((entry) => entry.id !== mediaId);
     });
-  };
-
-  // The main Import button accepts video, audio and images now - route by
-  // the picked file's actual type instead of assuming everything is video,
-  // so an audio file lands on the audio track and an image becomes a still
-  // clip instead of being probed with a <video> element that would never
-  // report a duration for it.
-  const importEditorFile = (file) => {
-    if (file.type.startsWith('audio/')) {
-      addAudioFileToTimeline(file);
-    } else if (file.type.startsWith('image/')) {
-      addImageFileToTimeline(file);
-    } else {
-      addVideoFileToTimeline(file);
-    }
   };
 
   const handleEditorUpload = (event) => {
@@ -1396,23 +1357,17 @@ function App() {
   // the browser and imported exactly like a local file, marked "From link".
   const handleEditorImportUrl = async (url, onStatus) => {
     const isAudio = /\.(mp3|wav|m4a|aac|ogg|flac)(\?|#|$)/i.test(url);
-    const kind = isAudio ? 'audio' : 'video';
-    onStatus?.('Downloading from the link…');
-    const res = await fetch(API_ENDPOINTS.fetchUrlVideo, {
-      method: 'POST',
-      credentials: 'include',
-      headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ url, type: kind, socketId }),
+    const { file } = await fetchLinkToDevice({
+      url,
+      kind: isAudio ? 'audio' : 'video',
+      socket,
+      socketId,
+      onProgress: ({ overall, message }) => onStatus?.(message, overall),
     });
-    const data = await res.json().catch(() => ({}));
-    if (!res.ok) throw new Error(data.error || 'Could not fetch that link.');
-    onStatus?.('Adding it to your media…');
-    const fileRes = await fetch(API_ENDPOINTS.fetchUrlFile(data.fileName, kind), { credentials: 'include' });
-    if (!fileRes.ok) throw new Error('The download finished but could not be loaded - try again.');
-    const blob = await fileRes.blob();
-    const file = new File([blob], fileNameForLink(url, kind), { type: blob.type || (isAudio ? 'audio/mpeg' : 'video/mp4') });
-    file.nexFromLink = true;
-    importEditorFile(file);
+    onStatus?.('Adding it to your media…', 100);
+    // Waits until it's really in the bin (or says why it can't be), so the
+    // progress line never ends with nothing to show for it.
+    await importEditorFile(file);
   };
 
   // Splits whichever clip is under the playhead - now that every clip has
@@ -1421,16 +1376,20 @@ function App() {
   // clip when it qualifies (so splitting a specific overlay clip that
   // happens to overlap another lane's clip in time is unambiguous),
   // otherwise picks the first match.
-  const handleEditorSplit = () => {
-    const qualifies = (clip) => editorPlayhead > clip.startTime && editorPlayhead < clip.startTime + clipDuration(clip);
-    const selected = editorTimeline.find((clip) => clip.id === selectedClipId);
+  // `atTime`/`clipId` let the clip right-click menu split exactly where the
+  // user clicked; from the toolbar and K it's the playhead and selection.
+  const handleEditorSplit = (atTime, clipId) => {
+    const time = typeof atTime === 'number' ? atTime : editorPlayhead;
+    const preferId = typeof clipId === 'string' ? clipId : selectedClipId;
+    const qualifies = (clip) => time > clip.startTime + 0.01 && time < clip.startTime + clipDuration(clip) - 0.01;
+    const selected = editorTimeline.find((clip) => clip.id === preferId);
     const clipToSplit = (selected && qualifies(selected)) ? selected : editorTimeline.find(qualifies);
-    if (!clipToSplit) return;
+    if (!clipToSplit || isClipLocked(clipToSplit)) return;
 
     const targetIndex = editorTimeline.findIndex((clip) => clip.id === clipToSplit.id);
     if (targetIndex === -1) return;
 
-    const localOutputTime = editorPlayhead - clipToSplit.startTime;
+    const localOutputTime = time - clipToSplit.startTime;
     const splitPoint = clipToSplit.trimmedStart + localOutputTime * (clipToSplit.speed || 1);
 
     const leftClip = {
@@ -1468,14 +1427,16 @@ function App() {
   // than a hard cut - everything after the insertion point on the SAME lane
   // shifts forward to make room, matching insert-mode drag's scoping.
   const FREEZE_FRAME_DURATION = 2;
-  const handleFreezeFrame = () => {
+  const handleFreezeFrame = (atTime, clipId) => {
+    const time = typeof atTime === 'number' ? atTime : editorPlayhead;
+    const preferId = typeof clipId === 'string' ? clipId : selectedClipId;
     const qualifies = (clip) => (clip.type === 'video' || !clip.type)
-      && editorPlayhead > clip.startTime && editorPlayhead < clip.startTime + clipDuration(clip);
-    const selected = editorTimeline.find((clip) => clip.id === selectedClipId);
+      && time > clip.startTime && time < clip.startTime + clipDuration(clip);
+    const selected = editorTimeline.find((clip) => clip.id === preferId);
     const clipToSplit = (selected && qualifies(selected)) ? selected : editorTimeline.find(qualifies);
     if (!clipToSplit || isClipLocked(clipToSplit)) return;
 
-    const localOutputTime = editorPlayhead - clipToSplit.startTime;
+    const localOutputTime = time - clipToSplit.startTime;
     const splitPoint = clipToSplit.trimmedStart + localOutputTime * (clipToSplit.speed || 1);
     const freezeStartTime = clipToSplit.startTime + localOutputTime;
     const laneType = laneTypeForClip(clipToSplit);
@@ -1529,10 +1490,9 @@ function App() {
     });
     if (!idsToDelete.length) return;
     const nextTimeline = editorTimeline.filter((clip) => !idsToDelete.includes(clip.id));
-    idsToDelete.forEach((id) => {
-      const clip = editorTimeline.find((c) => c.id === id);
-      revokeObjectUrlIfNeeded(clip?.url);
-    });
+    // The clip's URL is deliberately NOT freed: split parts and duplicates
+    // share it, and Undo can bring this clip back. It's released when the
+    // page closes.
     commitEditorTimeline(nextTimeline);
     setSelectedClipIds([]);
     setSelectedClipId(null);
@@ -1572,7 +1532,7 @@ function App() {
       return shift > 0 ? { ...clip, startTime: Math.max(0, clip.startTime - shift) } : clip;
     });
 
-    deletedClips.forEach((clip) => revokeObjectUrlIfNeeded(clip.url));
+    // URLs kept on purpose - see handleEditorDelete.
     commitEditorTimeline(nextTimeline);
     setSelectedClipIds([]);
     setSelectedClipId(null);
@@ -1889,14 +1849,11 @@ function App() {
   // goes onto the next lane up that's free - creating a new track when none
   // is, the way CapCut stacks a drop above what's already there.
   const handleDropMedia = ({ mediaId, type, lane, newLane, time }) => {
-    const source = editorTimeline.find((clip) => clip.id === mediaId);
+    const source = editorMediaItems.find((item) => item.id === mediaId);
     if (!source) return;
     const startTime = Math.max(0, snapTime(time, null));
-    const length = source.type === 'image'
-      ? DEFAULT_IMAGE_CLIP_SECONDS
-      : source.duration || Math.max(clipDuration(source), ...editorTimeline
-        .filter((clip) => clip.sourceId && clip.sourceId === source.sourceId)
-        .map((clip) => clip.trimmedEnd || 0));
+    const length = source.type === 'image' ? DEFAULT_IMAGE_CLIP_SECONDS : source.duration || 0;
+    if (!(length > 0)) return;
     const lanes = trackMeta[type] || [];
     const taken = (laneIndex) => Boolean(lanes[laneIndex]?.locked) || editorTimeline.some((clip) => (
       laneTypeForClip(clip) === type
@@ -1907,7 +1864,12 @@ function App() {
     let target = newLane ? lanes.length : lane;
     while (target < lanes.length && taken(target)) target += 1;
 
-    const origin = { sourceId: source.sourceId, file: source.file, url: source.url };
+    // The clip gets its own URL, never the bin item's: removing the item
+    // from the bin (which frees its URL) must leave the clip playing.
+    // Clips already cut from this source can share theirs.
+    const sibling = editorTimeline.find((clip) => clip.sourceId === source.sourceId && clip.url);
+    const url = sibling?.url || (source.file instanceof Blob ? URL.createObjectURL(source.file) : source.remoteUrl || source.url);
+    const origin = { sourceId: source.sourceId, file: source.file || { name: source.name }, url };
     const remote = source.remoteUrl ? { remoteUrl: source.remoteUrl } : {};
     let clip;
     if (source.type === 'audio') {
@@ -1952,6 +1914,278 @@ function App() {
     setSelectedClipId(clip.id);
     setSelectedClipIds([clip.id]);
     setEditorPane('edit');
+  };
+
+  // The bin card's + button: same as dropping it at the end of the first
+  // lane of its kind.
+  const handleAddMediaToTimeline = (mediaId) => {
+    const source = editorMediaItems.find((item) => item.id === mediaId);
+    if (!source) return;
+    const type = source.type === 'audio' ? 'audio' : 'video';
+    const end = editorTimeline
+      .filter((clip) => laneTypeForClip(clip) === type && (clip.trackIndex || 0) === 0)
+      .reduce((max, clip) => Math.max(max, clip.startTime + clipDuration(clip)), 0);
+    handleDropMedia({ mediaId, type, lane: 0, newLane: false, time: end });
+  };
+
+  // ---- Clip right-click menu -------------------------------------------
+  // Modelled on the clip menus of Premiere Pro, DaVinci Resolve, Final Cut
+  // and CapCut: edit commands first, then clip state (enable, mute, speed,
+  // reverse), then type-specific tools, then organisation (label colour,
+  // rename, group) and where the clip came from (Media).
+
+  const CLIP_SPEEDS = [0.25, 0.5, 0.75, 1, 1.25, 1.5, 2, 3, 4];
+  const CLIP_VOLUMES = [0, 0.25, 0.5, 0.75, 1, 1.5, 2];
+  const AUDIO_FADES = [0, 0.5, 1, 2, 3];
+  const IMAGE_DURATIONS = [1, 2, 3, 5, 8, 10, 15];
+  const LABEL_COLORS = [
+    { value: null, title: 'None' },
+    { value: '#ef4444', color: '#ef4444', title: 'Red' },
+    { value: '#f59e0b', color: '#f59e0b', title: 'Orange' },
+    { value: '#eab308', color: '#eab308', title: 'Yellow' },
+    { value: '#22c55e', color: '#22c55e', title: 'Green' },
+    { value: '#06b6d4', color: '#06b6d4', title: 'Cyan' },
+    { value: '#7c3aed', color: '#7c3aed', title: 'Violet' },
+    { value: '#ec4899', color: '#ec4899', title: 'Pink' },
+  ];
+
+  // The menu acts on the whole selection when the clicked clip is part of
+  // it (as every pro editor does), otherwise on the clicked clip alone.
+  const handleClipContextMenu = (e, clipId, time) => {
+    if (!selectedClipIds.includes(clipId)) {
+      setSelectedClipIds([clipId]);
+    }
+    setSelectedClipId(clipId);
+    setGapMenu(null);
+    setClipMenu({ x: e.clientX, y: e.clientY, clipId, time });
+  };
+  const closeClipMenu = useCallback(() => setClipMenu(null), []);
+
+  const menuTargetIds = (clipId) => (selectedClipIds.includes(clipId) ? selectedClipIds : [clipId]);
+
+  // Changes that alter a clip's length (speed, still duration) ripple:
+  // whatever came after it on the same lane moves by the same amount, so
+  // nothing gets overlapped or left with a gap.
+  const updateClipsWithRipple = (ids, updater) => {
+    commitEditorTimeline((prev) => {
+      let next = prev;
+      ids.forEach((id) => {
+        const clip = next.find((c) => c.id === id);
+        if (!clip || isClipLocked(clip)) return;
+        const updated = normalizeClip(updater(clip));
+        const delta = clipDuration(updated) - clipDuration(clip);
+        const oldEnd = clip.startTime + clipDuration(clip);
+        const lane = laneTypeForClip(clip);
+        const laneIndex = clip.trackIndex || 0;
+        // Later clips on the lane move, and so do their grouped partners on
+        // other lanes (e.g. a video's detached audio), so nothing drifts
+        // out of sync.
+        const moving = new Set(next
+          .filter((c) => c.id !== id && laneTypeForClip(c) === lane && (c.trackIndex || 0) === laneIndex && c.startTime >= oldEnd - 0.001)
+          .map((c) => c.id));
+        const movingGroups = new Set(next.filter((c) => moving.has(c.id) && c.groupId).map((c) => c.groupId));
+        next.forEach((c) => { if (c.id !== id && c.groupId && movingGroups.has(c.groupId)) moving.add(c.id); });
+        next = next.map((c) => {
+          if (c.id === id) return updated;
+          if (Math.abs(delta) > 0.0001 && moving.has(c.id)) {
+            return { ...c, startTime: Math.max(0, c.startTime + delta) };
+          }
+          return c;
+        });
+      });
+      return next;
+    });
+  };
+
+  const updateClips = (ids, updater) => {
+    commitEditorTimeline((prev) => prev.map((clip) => (
+      ids.includes(clip.id) && !isClipLocked(clip) ? normalizeClip(updater(clip)) : clip
+    )));
+  };
+
+  // CapCut's "Extract audio" / Premiere's unlink: the video's sound becomes
+  // its own clip on an audio track, lined up with the picture, and the
+  // video clip is muted so it isn't heard twice.
+  const handleDetachAudio = (clipId) => {
+    const clip = editorTimeline.find((c) => c.id === clipId);
+    if (!clip || isClipLocked(clip)) return;
+    const length = clipDuration(clip);
+    const lanes = trackMeta.audio || [];
+    const taken = (laneIndex) => Boolean(lanes[laneIndex]?.locked) || editorTimeline.some((c) => (
+      c.type === 'audio' && (c.trackIndex || 0) === laneIndex
+      && c.startTime < clip.startTime + length - 0.001 && c.startTime + clipDuration(c) > clip.startTime + 0.001
+    ));
+    let target = 0;
+    while (target < lanes.length && taken(target)) target += 1;
+    const audio = {
+      ...createAudioClip({
+        sourceId: clip.sourceId,
+        file: clip.file,
+        url: clip.url,
+        trackIndex: target,
+        startTime: clip.startTime,
+        trimmedStart: clip.trimmedStart,
+        trimmedEnd: clip.trimmedEnd,
+      }),
+      speed: clip.speed || 1,
+      volume: typeof clip.volume === 'number' ? clip.volume : 1,
+      ...(clip.remoteUrl ? { remoteUrl: clip.remoteUrl } : {}),
+    };
+    // Linked like Premiere's unlinked-but-synced pair: grouped with the
+    // video so dragging or rippling moves both; "Ungroup" frees them.
+    const groupId = clip.groupId || `group-${Date.now()}-${Math.random().toString(16).slice(2, 6)}`;
+    audio.groupId = groupId;
+    if (target >= lanes.length) {
+      setTrackMeta((prev) => ({ ...prev, audio: [...(prev.audio || []), { locked: false, hidden: false, name: null }] }));
+    }
+    commitEditorTimeline((prev) => [...prev.map((c) => (c.id === clipId ? { ...c, muted: true, groupId } : c)), audio]);
+    setExpandedTracks((prev) => ({ ...prev, audio: true }));
+    setSelectedClipId(audio.id);
+    setSelectedClipIds([audio.id]);
+  };
+
+  // Media bin link: the clip and the bin item stay independent, but you can
+  // find where a clip came from, or put its source back in the bin.
+  const handleShowInMedia = (clip) => {
+    const inBin = editorMediaItems.some((item) => item.sourceId === clip.sourceId);
+    if (!inBin) {
+      const type = clip.type === 'audio' ? 'audio' : clip.type === 'image' ? 'image' : 'video';
+      const sameSource = editorTimeline.filter((c) => c.sourceId === clip.sourceId);
+      setEditorMediaItems((prev) => [...prev, {
+        id: clip.sourceId,
+        sourceId: clip.sourceId,
+        type,
+        name: clip.file?.name || clip.label || remoteFileName(clip) || 'Media',
+        duration: type === 'image' ? null : (clip.duration || Math.max(...sameSource.map((c) => c.trimmedEnd || 0))),
+        file: clip.file instanceof Blob ? clip.file : null,
+        url: clip.file instanceof Blob ? URL.createObjectURL(clip.file) : (clip.remoteUrl || clip.url),
+        ...(clip.remoteUrl ? { remoteUrl: clip.remoteUrl } : {}),
+      }]);
+    }
+    setEditorPane('media');
+    setRevealMedia({ sourceId: clip.sourceId, tick: Date.now() });
+  };
+
+  const formatSpeed = (value) => `${value}x`;
+  const formatSeconds = (value) => (value === 0 ? 'None' : `${value}s`);
+
+  const buildClipMenu = (menu) => {
+    const clip = editorTimeline.find((c) => c.id === menu.clipId);
+    if (!clip) return null;
+    const ids = menuTargetIds(clip.id);
+    const many = ids.length > 1;
+    const kind = clip.type || 'video';
+    const isVideo = kind === 'video';
+    const isAudio = kind === 'audio';
+    const isImage = kind === 'image';
+    const isText = kind === 'text';
+    const locked = isClipLocked(clip);
+    const length = clipDuration(clip);
+    const playheadInside = editorPlayhead > clip.startTime + 0.01 && editorPlayhead < clip.startTime + length - 0.01;
+    const clickInside = menu.time > clip.startTime + 0.01 && menu.time < clip.startTime + length - 0.01;
+    const speed = clip.speed || 1;
+    const hasSpeedCurve = (clip.keyframes?.speed || []).length > 0;
+    const volume = typeof clip.volume === 'number' ? clip.volume : 1;
+    const fade = clip.audioFade || { in: 0, out: 0 };
+    const flipH = (clip.transform?.scaleX ?? 1) < 0;
+    const flipV = (clip.transform?.scaleY ?? 1) < 0;
+    const hasMotion = ['x', 'y', 'scaleX', 'scaleY', 'rotation'].some((k) => (clip.keyframes?.[k] || []).length);
+    const grouped = ids.some((id) => editorTimeline.find((c) => c.id === id)?.groupId);
+    const inMedia = clip.sourceId && editorMediaItems.some((item) => item.sourceId === clip.sourceId);
+    const typeName = isText ? 'Text' : isAudio ? 'Audio' : isImage ? 'Image' : kind === 'adjustment' ? 'Adjustment layer' : 'Video';
+    const title = many ? `${ids.length} clips selected` : `${typeName} · ${clip.label || clip.file?.name || clip.text?.content || remoteFileName(clip) || typeName}`;
+
+    const flip = (axis) => updateClips(ids, (c) => {
+      const key = axis === 'h' ? 'scaleX' : 'scaleY';
+      return { ...c, transform: { ...(c.transform || {}), [key]: -(c.transform?.[key] ?? 1) } };
+    });
+    const setFade = (side, value) => updateClips(ids, (c) => ({
+      ...c,
+      audioFade: { ...(c.audioFade || { in: 0, out: 0 }), [side]: Math.min(value, clipDuration(c) / 2) },
+    }));
+
+    const items = [
+      { label: 'Cut', hint: 'Ctrl+X', disabled: locked, onClick: () => { handleCopySelected(); handleEditorDelete(); } },
+      { label: 'Copy', hint: 'Ctrl+C', onClick: handleCopySelected },
+      { label: 'Paste at playhead', hint: 'Ctrl+V', onClick: handlePasteAtPlayhead },
+      { label: 'Duplicate', hint: 'Ctrl+D', disabled: locked, onClick: handleDuplicateSelected },
+      'divider',
+      !many && { label: 'Split here', disabled: locked || !clickInside, onClick: () => handleEditorSplit(menu.time, clip.id) },
+      !many && { label: 'Split at playhead', hint: 'K', disabled: locked || !playheadInside, onClick: () => handleEditorSplit(editorPlayhead, clip.id) },
+      { label: 'Delete', hint: 'Del', danger: true, disabled: locked, onClick: handleEditorDelete },
+      { label: 'Ripple delete', hint: 'Shift+Del', danger: true, disabled: locked, title: 'Delete and close the gap it leaves', onClick: handleEditorRippleDelete },
+      'divider',
+      { label: 'Enable clip', checked: clip.enabled !== false, disabled: locked, onClick: () => updateClips(ids, (c) => ({ ...c, enabled: clip.enabled === false })) },
+      (isVideo || isAudio) && { label: 'Mute', checked: Boolean(clip.muted), disabled: locked, onClick: () => updateClips(ids, (c) => ({ ...c, muted: !clip.muted })) },
+      (isVideo || isAudio) && {
+        label: `Speed (${formatSpeed(speed)})`,
+        disabled: locked,
+        submenu: [
+          ...CLIP_SPEEDS.map((value) => ({
+            label: value === 1 ? '1x (normal)' : formatSpeed(value),
+            checked: !hasSpeedCurve && Math.abs(speed - value) < 0.001,
+            onClick: () => updateClipsWithRipple(ids, (c) => ({ ...c, speed: value, keyframes: { ...c.keyframes, speed: [] } })),
+          })),
+          hasSpeedCurve && 'divider',
+          hasSpeedCurve && { label: 'Picking a speed replaces the speed curve', disabled: true },
+        ],
+      },
+      isVideo && { label: 'Reverse', checked: Boolean(clip.reversed), disabled: locked || clip.frozen, onClick: () => updateClips(ids, (c) => ({ ...c, reversed: !clip.reversed })) },
+      isVideo && !many && { label: 'Freeze frame here', disabled: locked || !clickInside || clip.frozen, title: 'Hold this frame for 2 seconds', onClick: () => handleFreezeFrame(menu.time, clip.id) },
+      isVideo && !many && { label: 'Detach audio', disabled: locked || clip.muted || clip.frozen, title: 'Move the sound to its own audio clip', onClick: () => handleDetachAudio(clip.id) },
+      (isVideo || isAudio) && 'divider',
+      (isVideo || isAudio) && {
+        label: `Volume (${Math.round(volume * 100)}%)`,
+        disabled: locked,
+        submenu: CLIP_VOLUMES.map((value) => ({
+          label: value === 0 ? 'Silent (0%)' : `${Math.round(value * 100)}%`,
+          checked: Math.abs(volume - value) < 0.001,
+          onClick: () => updateClips(ids, (c) => ({ ...c, volume: value, keyframes: { ...c.keyframes, volume: [] } })),
+        })),
+      },
+      (isVideo || isAudio) && {
+        label: 'Audio fade in',
+        disabled: locked,
+        submenu: AUDIO_FADES.map((value) => ({ label: formatSeconds(value), checked: Math.abs((fade.in || 0) - value) < 0.001, onClick: () => setFade('in', value) })),
+      },
+      (isVideo || isAudio) && {
+        label: 'Audio fade out',
+        disabled: locked,
+        submenu: AUDIO_FADES.map((value) => ({ label: formatSeconds(value), checked: Math.abs((fade.out || 0) - value) < 0.001, onClick: () => setFade('out', value) })),
+      },
+      isAudio && { label: 'Auto-duck under other audio', checked: Boolean(clip.duck?.enabled), disabled: locked, onClick: () => updateClips(ids, (c) => ({ ...c, duck: { ...(c.duck || { amount: 70 }), enabled: !clip.duck?.enabled } })) },
+      isImage && {
+        label: `Duration (${formatSeconds(Math.round(length * 10) / 10)})`,
+        disabled: locked,
+        submenu: IMAGE_DURATIONS.map((value) => ({
+          label: formatSeconds(value),
+          checked: Math.abs(length - value) < 0.05,
+          onClick: () => updateClipsWithRipple(ids, (c) => (c.type === 'image' ? { ...c, trimmedStart: 0, trimmedEnd: value, speed: 1 } : c)),
+        })),
+      },
+      (isVideo || isImage) && {
+        label: 'Transform',
+        disabled: locked,
+        submenu: [
+          { label: 'Flip horizontal', checked: flipH, onClick: () => flip('h') },
+          { label: 'Flip vertical', checked: flipV, onClick: () => flip('v') },
+          'divider',
+          { label: 'Reset position & size', onClick: () => updateClips(ids, (c) => ({ ...c, transform: { ...c.transform, x: 0, y: 0, scaleX: (c.transform?.scaleX ?? 1) < 0 ? -1 : 1, scaleY: (c.transform?.scaleY ?? 1) < 0 ? -1 : 1, rotation: 0, opacity: 1 } })) },
+          hasMotion && { label: 'Remove animation', title: 'Clear position, scale and rotation keyframes', onClick: () => updateClips(ids, (c) => ({ ...c, keyframes: { ...c.keyframes, x: [], y: [], scaleX: [], scaleY: [], rotation: [] } })) },
+        ],
+      },
+      'divider',
+      !many && !isText && {
+        label: 'Rename',
+        input: { value: clip.label || clip.file?.name || remoteFileName(clip) || '', placeholder: 'Clip name', onSubmit: (value) => updateClips([clip.id], (c) => ({ ...c, label: String(value || '').trim() || undefined })) },
+      },
+      { label: 'Label colour', swatches: LABEL_COLORS, value: clip.color || null, onPick: (value) => updateClips(ids, (c) => ({ ...c, color: value })) },
+      many && { label: 'Group clips', hint: 'Alt+G', onClick: handleGroupSelected },
+      grouped && { label: 'Ungroup', hint: 'Alt+Shift+G', onClick: handleUngroupSelected },
+      !many && clip.sourceId && 'divider',
+      !many && clip.sourceId && { label: inMedia ? 'Show in Media' : 'Add back to Media', onClick: () => handleShowInMedia(clip) },
+    ];
+    return { title, items };
   };
 
   const handleTrimDragMove = (e) => {
@@ -3116,7 +3350,10 @@ function App() {
             bannerVisible: editorBannerVisible,
             onDismissBanner: () => setEditorBannerVisible(false),
             timeline: editorTimeline,
-            audioClips: editorAudioClips,
+            mediaItems: editorMediaItems,
+            onAddMediaToTimeline: handleAddMediaToTimeline,
+            onRemoveMediaItem: handleRemoveMediaItem,
+            revealMedia,
             selectedClipId,
             selectedClip: editorTimeline.find((clip) => clip.id === selectedClipId) || null,
             onSelectClip: selectClipForEditing,
@@ -3174,6 +3411,7 @@ function App() {
         autoFollowPlayhead={autoFollowPlayhead}
         onAutoFollowToggle={handleAutoFollowToggle}
         onPlayheadDragStart={handlePlayheadDragStart}
+        onClipContextMenu={handleClipContextMenu}
         onUndo={handleUndo}
         onRedo={handleRedo}
         onAddTextClip={handleAddTextClip}
@@ -3205,6 +3443,10 @@ function App() {
       />}
         </div>
       </div>
+      {clipMenu && (() => {
+        const built = buildClipMenu(clipMenu);
+        return built ? <ContextMenu x={clipMenu.x} y={clipMenu.y} title={built.title} items={built.items} onClose={closeClipMenu} /> : null;
+      })()}
       {gapMenu && (
         <div
           className="timeline-gap-menu"

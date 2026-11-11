@@ -152,7 +152,29 @@ export async function downloadToFile(rawUrl, outputPath, { headers = {}, maxByte
       await fs.promises.rm(outputPath, { force: true });
       throw err;
     }
-    return { bytes: received };
+    // The name the server gave the file (Drive and Dropbox send one), or
+    // the last part of the final address - shown to the user instead of a
+    // random id.
+    return { bytes: received, name: fileNameFrom(response.headers['content-disposition']) || fileNameFromUrl(url) };
+  }
+}
+
+function fileNameFrom(disposition) {
+  if (!disposition) return '';
+  const encoded = /filename\*\s*=\s*(?:UTF-8|utf-8)''([^;]+)/.exec(disposition);
+  if (encoded) {
+    try { return decodeURIComponent(encoded[1].trim().replace(/^"|"$/g, '')); } catch { /* fall through */ }
+  }
+  const plain = /filename\s*=\s*"?([^";]+)"?/i.exec(disposition);
+  return plain ? plain[1].trim() : '';
+}
+
+function fileNameFromUrl(url) {
+  try {
+    const last = decodeURIComponent(new URL(url).pathname.split('/').pop() || '');
+    return /\.[a-z0-9]{2,5}$/i.test(last) ? last : '';
+  } catch {
+    return '';
   }
 }
 
