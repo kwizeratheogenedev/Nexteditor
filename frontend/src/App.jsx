@@ -639,10 +639,6 @@ function App() {
     if (new URLSearchParams(window.location.search).has('montageSession')) {
       setActiveTab('media');
     }
-    // Same for Audio Merge's "Merge another" while a merge is still running.
-    if (new URLSearchParams(window.location.search).has('audioMerge')) {
-      setActiveTab('audiomerge');
-    }
   }, [setActiveTab]);
 
   useEffect(() => {

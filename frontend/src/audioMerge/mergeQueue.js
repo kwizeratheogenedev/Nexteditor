@@ -49,14 +49,24 @@ function start(job) {
     if (jobs.find(({ id }) => id === job.id)?.[field] !== percent) update(job.id, { [field]: percent });
   };
 
+  // A worker that fails before saying anything never started - usually the
+  // page lost its connection to the server it loads the worker from (a
+  // deploy, or the dev server stopping), which only a reload fixes.
+  let heardFrom = false;
   worker.onmessage = ({ data }) => {
+    heardFrom = true;
     if (data.type === 'progress') setPercent('progress', data.progress);
     else if (data.type === 'wav') update(job.id, { status: 'encoding', progress: 100, mp3Progress: 0, seconds: data.seconds, wav: data.wav, wavUrl: URL.createObjectURL(data.wav) });
     else if (data.type === 'mp3-progress') setPercent('mp3Progress', data.progress);
     else if (data.type === 'done') finish(job.id, { status: 'done', mp3: data.mp3, mp3Url: URL.createObjectURL(data.mp3) });
     else fail(job.id, data.message);
   };
-  worker.onerror = () => fail(job.id, 'These audios could not be merged. Please try again.');
+  worker.onerror = (event) => {
+    event.preventDefault?.();
+    fail(job.id, heardFrom
+      ? `These audios could not be merged${event.message ? ` (${event.message})` : ''}. Please try again.`
+      : 'Audio Merge couldn\'t start. Reload the page and try again.');
+  };
   worker.postMessage({ first: job.first, second: job.second, mode: job.mode });
 }
 
@@ -87,11 +97,6 @@ export function removeMerge(id) {
 const isRunning = (job) => job.status !== 'done' && job.status !== 'error';
 
 export const hasRunningMerge = () => jobs.some(isRunning);
-
-// Back to an empty list. Only for when nothing is running.
-export function clearMerges() {
-  jobs.forEach((job) => removeMerge(job.id));
-}
 
 export function subscribeToMerges(listener) {
   listeners.add(listener);

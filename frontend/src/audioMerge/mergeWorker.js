@@ -136,6 +136,21 @@ async function merge(first, second, mode) {
   self.postMessage({ type: 'done', mp3 });
 }
 
+// A failure inside the browser's decoder or encoder can surface outside the
+// try below (in a callback). Reported the same way, with its real reason,
+// instead of ending the worker with nothing said.
+const reportUncaught = (reason) => {
+  self.postMessage({ type: 'error', message: `These audios could not be merged (${reason?.message || reason || 'unknown error'}).` });
+};
+self.addEventListener('unhandledrejection', (event) => {
+  event.preventDefault();
+  reportUncaught(event.reason);
+});
+self.addEventListener('error', (event) => {
+  event.preventDefault();
+  reportUncaught(event.error || event.message);
+});
+
 self.onmessage = async ({ data: { first, second, mode } }) => {
   try {
     await merge(first, second, mode);

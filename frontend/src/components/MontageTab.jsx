@@ -1388,10 +1388,14 @@ export default function MontageTab({ loadVideoInEditor, onError, onShurfer, onRe
   // saved slots loading in a moment later would overwrite it. A finished or
   // failed montage's screen hides the audio slot, so that goes back to the form.
   const { restored, setAudio: setMontageAudio, setMergeStatus: setMontageStatus, mergeStatus: montageStatus } = montage;
+  // A short note under the audio card, so it's clear the audio arrived.
+  const [importNote, setImportNote] = useState('');
+  useAutoDismiss(importNote, () => setImportNote(''), 6000);
   useEffect(() => {
     if (!importedAudio || !restored) return;
     setMontageAudio({ ...createAudioSlot(), file: importedAudio.file, fileName: importedAudio.file.name, duration: importedAudio.duration, status: 'ready', progress: 100 });
     if (montageStatus !== 'processing') setMontageStatus('idle');
+    setImportNote(`Added "${importedAudio.file.name}" from Audio Merge.`);
     onAudioImported();
   }, [importedAudio, restored, setMontageAudio, setMontageStatus, montageStatus, onAudioImported]);
   const {
@@ -1992,6 +1996,9 @@ export default function MontageTab({ loadVideoInEditor, onError, onShurfer, onRe
               <div style={{ width:'100%', paddingTop:0, paddingBottom:8, display:'flex', justifyContent:'center' }}>
                 <div style={{ width:'100%', maxWidth:920, minWidth:0 }}>
                   <AudioCard item={audio} setItem={setAudio} accept="audio/*" onError={onError} />
+                  {importNote && (
+                    <p role="status" style={{ margin:'10px 4px 0', fontSize:13, color:'var(--accent-purple)', overflowWrap:'anywhere' }}>{importNote}</p>
+                  )}
                 </div>
               </div>
             </div>

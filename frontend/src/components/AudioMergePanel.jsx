@@ -1,8 +1,8 @@
-import { useState, useSyncExternalStore } from 'react';
+import { useRef, useState, useSyncExternalStore } from 'react';
 import './LongMixPanel.css';
 import './AudioMergePanel.css';
 import { formatTime, planAudioMerge, planCombine, planExtend } from '../audioMerge/plan';
-import { addMerge, clearMerges, getMerges, hasRunningMerge, removeMerge, subscribeToMerges } from '../audioMerge/mergeQueue';
+import { addMerge, getMerges, removeMerge, subscribeToMerges } from '../audioMerge/mergeQueue';
 
 // Resolves 0 on a file the <audio> element can't read; the merge itself still
 // gets the final say, since it can decode formats this element can't.
@@ -181,20 +181,15 @@ export default function AudioMergePanel({ onUseInMontage }) {
     combine: bothReady ? planCombine(first.duration, second.duration) : null,
   }[mode];
 
-  // Starts over on a clean screen, finished merges included. If one is still
-  // being made, a new browser tab starts over instead, so it isn't disturbed:
-  // each tab has its own merge list (see App.jsx's `audioMerge` URL param).
+  // Empties the slots for the next merge, in this same tab: earlier merges stay
+  // in the list below (one still being made keeps going), so every "Use it in
+  // Montage" goes to this tab's Montage. A second tab would have its own.
+  const cardRef = useRef(null);
   const mergeAnother = () => {
-    if (hasRunningMerge()) {
-      const url = new URL(window.location.href);
-      url.searchParams.set('audioMerge', 'new');
-      window.open(url.toString(), '_blank', 'noopener');
-      return;
-    }
-    clearMerges();
     setFirst(null);
     setSecond(null);
     setSubmittedId(null);
+    cardRef.current?.scrollIntoView({ behavior: 'smooth', block: 'start' });
   };
 
   return (
@@ -207,7 +202,7 @@ export default function AudioMergePanel({ onUseInMontage }) {
         </div>
       </header>
 
-      <div className="audiomerge-card longmix-card">
+      <div ref={cardRef} className="audiomerge-card longmix-card">
         <div className="audiomerge-format">
           <span>Use</span>
           <div className="longmix-choice-row" role="group" aria-label="Use">
