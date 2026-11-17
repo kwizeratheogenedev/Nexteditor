@@ -624,10 +624,10 @@ function App() {
   }, [activeTab, effectiveTimelineDuration, setTimelineZoom]);
 
   useEffect(() => {
-    if (!VALID_TABS.includes(activeTab) || (activeTab === 'audiomerge' && !user?.isAdmin)) {
+    if (!VALID_TABS.includes(activeTab)) {
       setActiveTab('editor');
     }
-  }, [activeTab, setActiveTab, user]);
+  }, [activeTab, setActiveTab]);
 
   // A `montageSession` URL param means this tab was opened via MontageTab's
   // "Create another montage" button - land on the Montage tab explicitly
@@ -3093,7 +3093,7 @@ function App() {
           captionsProps={captionsProps}
           shortsProps={shortsProps}
           longMixProps={longMixProps}
-          audioMergeProps={user?.isAdmin ? { onUseInMontage: sendAudioToMontage } : null}
+          audioMergeProps={{ onUseInMontage: sendAudioToMontage }}
           resultUrl={resultUrl}
           shortsResults={shortsResults}
           selectedShortId={selectedShortId}

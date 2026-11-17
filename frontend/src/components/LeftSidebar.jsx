@@ -31,7 +31,7 @@ const tools = [
   { id: 'captions', label: 'Captions', icon: 'captions' },
   { id: 'shorts', label: 'Shorts', icon: 'shorts' },
   { id: 'longmix', label: 'Long Mix', icon: 'mix' },
-  { id: 'audiomerge', label: 'Audio Merge', icon: 'audiomerge', adminOnly: true },
+  { id: 'audiomerge', label: 'Audio Merge', icon: 'audiomerge' },
 ];
 
 function LeftSidebar({ activeTab, editorPane = 'edit', onSelect, onOpenProjects, isAdmin = false }) {
