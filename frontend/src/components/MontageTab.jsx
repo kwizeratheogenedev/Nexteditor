@@ -1436,11 +1436,11 @@ export default function MontageTab({ loadVideoInEditor, onError, onShurfer, onRe
     setRenderMode(mode);
     try { localStorage.setItem('nex.montage.renderMode', mode); } catch { /* preference only */ }
   };
-  // A Server 2 montage exists only in this tab until it's downloaded, so by
-  // default it's saved to the computer as soon as it's ready; the setting
-  // in the side panel switches that off (the Download button stays either way).
+  // A Server 2 montage exists only in this tab until it's downloaded. By
+  // default the user downloads it with the Download button; anyone who wants
+  // it saved as soon as it's ready turns that on in the side panel.
   const [autoDownload, setAutoDownload] = useState(() => {
-    try { return localStorage.getItem('nex.montage.autoDownload') !== 'off'; } catch { return true; }
+    try { return localStorage.getItem('nex.montage.autoDownload') === 'on'; } catch { return false; }
   });
   const autoDownloadRef = useRef(autoDownload);
   const chooseAutoDownload = (on) => {
@@ -2202,15 +2202,15 @@ export default function MontageTab({ loadVideoInEditor, onError, onShurfer, onRe
               <div className="mt-config-group">
                 <div className="mt-config-label">When a Server 2 montage is ready</div>
                 <div className="mt-pill-track" role="group" aria-label="When a Server 2 montage is ready">
-                  <button type="button" className={`mt-pill-opt ${autoDownload ? 'active' : ''}`} aria-pressed={autoDownload} onClick={() => chooseAutoDownload(true)}>
-                    Download automatically
-                  </button>
                   <button type="button" className={`mt-pill-opt ${!autoDownload ? 'active' : ''}`} aria-pressed={!autoDownload} onClick={() => chooseAutoDownload(false)}>
                     I'll download it
                   </button>
+                  <button type="button" className={`mt-pill-opt ${autoDownload ? 'active' : ''}`} aria-pressed={autoDownload} onClick={() => chooseAutoDownload(true)}>
+                    Download automatically
+                  </button>
                 </div>
                 <div style={{ fontSize:12, color:'var(--panel-text-3)', lineHeight:1.5 }}>
-                  A Server 2 montage is only kept in this tab, so saving it straight away means it can't get lost. The Download button is always there too.
+                  A Server 2 montage is only kept in this tab, so download it before you close the tab. Choose Download automatically to save it as soon as it's ready.
                 </div>
               </div>
             )}
