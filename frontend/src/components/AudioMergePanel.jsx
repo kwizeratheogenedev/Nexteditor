@@ -1,8 +1,15 @@
-import { useRef, useState, useSyncExternalStore } from 'react';
+import { useEffect, useRef, useState, useSyncExternalStore } from 'react';
 import './LongMixPanel.css';
 import './AudioMergePanel.css';
 import { formatTime, planAudioMerge, planCombine, planExtend } from '../audioMerge/plan';
 import { addMerge, getMerges, removeMerge, subscribeToMerges } from '../audioMerge/mergeQueue';
+
+// The form's songs and mode, kept outside React so going to another tab and
+// back finds them still there. Like the merges, they're gone after a reload.
+let draft = { mode: 'eight', first: null, second: null, submittedId: null };
+
+// How long the slots light up after "Merge another".
+const HIGHLIGHT_MS = 1600;
 
 // Resolves 0 on a file the <audio> element can't read; the merge itself still
 // gets the final say, since it can decode formats this element can't.
@@ -21,9 +28,9 @@ function probeAudioDuration(file) {
   });
 }
 
-function AudioSlot({ number, title, hint, value, onPick }) {
+function AudioSlot({ number, title, hint, value, onPick, highlighted }) {
   return (
-    <label className="audiomerge-slot">
+    <label className={`audiomerge-slot${highlighted ? ' is-highlighted' : ''}`}>
       <input
         type="file"
         accept="audio/*"
@@ -151,17 +158,27 @@ function MergeRow({ job, onUseInMontage, onMergeAnother }) {
 
 export default function AudioMergePanel({ onUseInMontage }) {
   const merges = useSyncExternalStore(subscribeToMerges, getMerges);
-  const [mode, setMode] = useState('eight');
+  const [mode, setMode] = useState(() => draft.mode);
   const screen = MODES[mode];
-  const [first, setFirst] = useState(null);
-  const [second, setSecond] = useState(null);
-  const [submittedId, setSubmittedId] = useState(null);
+  const [first, setFirst] = useState(() => draft.first);
+  const [second, setSecond] = useState(() => draft.second);
+  const [submittedId, setSubmittedId] = useState(() => draft.submittedId);
+  useEffect(() => {
+    draft = { mode, first, second, submittedId };
+  }, [mode, first, second, submittedId]);
+  // After "Merge another": a line asking for the next audios (until one is
+  // chosen), and the slots lit up for a moment.
+  const [askingForNext, setAskingForNext] = useState(false);
+  const [highlighted, setHighlighted] = useState(false);
+  const highlightTimer = useRef(0);
+  useEffect(() => () => window.clearTimeout(highlightTimer.current), []);
   // The merge started from the audios now in the slots. A failed one doesn't
   // count, so the same audios can be tried again.
   const submitted = merges.find((job) => job.id === submittedId && job.status !== 'error');
 
   const pick = async (file, setSlot) => {
     setSubmittedId(null);
+    setAskingForNext(false);
     setSlot({ file, duration: 0 });
     const duration = await probeAudioDuration(file);
     setSlot((current) => (current?.file === file ? { file, duration } : current));
@@ -189,6 +206,10 @@ export default function AudioMergePanel({ onUseInMontage }) {
     setFirst(null);
     setSecond(null);
     setSubmittedId(null);
+    setAskingForNext(true);
+    setHighlighted(true);
+    window.clearTimeout(highlightTimer.current);
+    highlightTimer.current = window.setTimeout(() => setHighlighted(false), HIGHLIGHT_MS);
     cardRef.current?.scrollIntoView({ behavior: 'smooth', block: 'start' });
   };
 
@@ -212,8 +233,9 @@ export default function AudioMergePanel({ onUseInMontage }) {
           </div>
         </div>
 
-        <AudioSlot number={1} title={screen.first[0]} hint={screen.first[1]} value={first} onPick={(file) => pick(file, setFirst)} />
-        {screen.second && <AudioSlot number={2} title={screen.second[0]} hint={screen.second[1]} value={second} onPick={(file) => pick(file, setSecond)} />}
+        {askingForNext && <p className="audiomerge-next" role="status">Choose the audios for your next merge.</p>}
+        <AudioSlot number={1} title={screen.first[0]} hint={screen.first[1]} value={first} highlighted={highlighted} onPick={(file) => pick(file, setFirst)} />
+        {screen.second && <AudioSlot number={2} title={screen.second[0]} hint={screen.second[1]} value={second} highlighted={highlighted} onPick={(file) => pick(file, setSecond)} />}
 
         {plan?.totalSeconds > 0 && (
           <ul className="longmix-summary audiomerge-summary">
@@ -253,7 +275,7 @@ export default function AudioMergePanel({ onUseInMontage }) {
         {merges.length > 0 && (
           <ul className="audiomerge-jobs">
             {merges.map((job, index) => (
-              <MergeRow key={job.id} job={job} onUseInMontage={onUseInMontage} onMergeAnother={index === 0 ? mergeAnother : null} />
+              <MergeRow key={job.id} job={job} onUseInMontage={onUseInMontage} onMergeAnother={index === 0 && (first || second) ? mergeAnother : null} />
             ))}
           </ul>
         )}

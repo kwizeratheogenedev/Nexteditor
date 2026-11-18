@@ -2,6 +2,9 @@
 .audiomerge-card{width:min(640px,100%);min-height:0;margin:0 auto}
 .audiomerge-slot{display:flex;align-items:center;gap:10px;padding:14px;border:1px dashed var(--panel-border-strong);border-radius:12px;background:var(--panel-surface-0);cursor:pointer}
 .audiomerge-slot input{position:absolute;width:1px;height:1px;opacity:0}
+.audiomerge-slot{transition:border-color .3s,box-shadow .3s}
+.audiomerge-slot.is-highlighted{border-style:solid;border-color:var(--accent-purple-strong);box-shadow:0 0 0 3px var(--accent-purple-soft)}
+.audiomerge-next{margin:0;color:var(--accent-purple-light);font-size:13px;font-weight:600}
 .audiomerge-slot:focus-within{outline:2px solid var(--accent-purple-strong);outline-offset:2px}
 .audiomerge-slot-text{display:flex;flex:1;flex-direction:column;gap:3px;min-width:0}
 .audiomerge-slot-text strong{font-size:13px}
